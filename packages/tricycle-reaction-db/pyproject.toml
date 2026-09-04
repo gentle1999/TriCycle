@@ -1,0 +1,13 @@
+[project]
+name = "tricycle-reaction-db"
+version = "0.1.0"
+description = "Project-scoped reaction calculation-log ingestion, filtering, and dataset export boundary."
+requires-python = ">=3.11"
+dependencies = ["tricycle-core"]
+
+[tool.uv.sources]
+tricycle-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

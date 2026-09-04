@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "TriCycle Agent 当前架构",
+    "locale": "zh-CN",
+    "output": "tricycle-agent-current-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1320, 900],
+    "views": [
+      {
+        "id": "composition",
+        "label": "能力组合层",
+        "focus": ["skills", "cli", "dispatch", "core"],
+        "note": "从仓库级 Skill 入口进入 CLI，由目录和分发器绑定到领域组件。"
+      },
+      {
+        "id": "exploration-loop",
+        "label": "探索能力链",
+        "focus": ["reactionopt", "sampling", "bohr-compute", "bohr-workflow", "reaction-db", "sar", "rits"],
+        "note": "沿 ReactionOpt、采样、Bohr、反应数据库和模型能力查看一次探索闭环。"
+      },
+      {
+        "id": "side-effect-boundary",
+        "label": "副作用边界",
+        "focus": ["dispatch", "core", "bohr-compute", "bohr-workflow", "reaction-db", "sar", "rits", "adapters"],
+        "note": "只有显式注入 adapter 的 live 路径才连接外部系统；默认路径保持 dry-run。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "skills",
+      "type": "external",
+      "label": "Codex Skill 发现",
+      "sublabel": "SKILL.md · capability entry",
+      "tag": ".agents/skills",
+      "pos": [30, 360],
+      "size": [190, 78]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "tricycle-agent CLI",
+      "sublabel": "plan / run / inspect / resume",
+      "tag": "apps/tricycle-agent",
+      "pos": [250, 360],
+      "size": [210, 78]
+    },
+    {
+      "id": "dispatch",
+      "type": "backend",
+      "label": "Capability Catalog + Dispatcher",
+      "sublabel": "capability ID → component.operation",
+      "tag": "组合与执行守卫",
+      "pos": [490, 360],
+      "size": [240, 86]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "tricycle-core",
+      "sublabel": "Capability · Task · Protocol · RunStore",
+      "tag": "共享契约 / run.toml",
+      "pos": [490, 620],
+      "size": [240, 86]
+    },
+    {
+      "id": "reactionopt",
+      "type": "backend",
+      "label": "ReactionOpt component",
+      "sublabel": "reactionopt.generate / export",
+      "tag": "tricycle.reactionopt",
+      "pos": [770, 70],
+      "size": [210, 80]
+    },
+    {
+      "id": "sampling",
+      "type": "backend",
+      "label": "Sampling component",
+      "sublabel": "candidate.select · strategy.register",
+      "tag": "tricycle.sampling",
+      "pos": [770, 190],
+      "size": [210, 80]
+    },
+    {
+      "id": "bohr-compute",
+      "type": "backend",
+      "label": "Bohr compute component",
+      "sublabel": "compute · submit · status · download",
+      "tag": "tricycle.bohr.compute",
+      "pos": [770, 320],
+      "size": [210, 82]
+    },
+    {
+      "id": "bohr-workflow",
+      "type": "backend",
+      "label": "Bohr workflow component",
+      "sublabel": "batch.* · dpa-berny.*",
+      "tag": "tricycle.bohr.submit",
+      "pos": [770, 470],
+      "size": [210, 88]
+    },
+    {
+      "id": "reaction-db",
+      "type": "backend",
+      "label": "Reaction DB component",
+      "sublabel": "ingest · filter · export",
+      "tag": "tricycle.reaction-database",
+      "pos": [1020, 140],
+      "size": [220, 88]
+    },
+    {
+      "id": "sar",
+      "type": "backend",
+      "label": "RxnResid / SAR component",
+      "sublabel": "sar.train · finetune · infer",
+      "tag": "tricycle.sar",
+      "pos": [1020, 320],
+      "size": [220, 82]
+    },
+    {
+      "id": "rits",
+      "type": "backend",
+      "label": "RitS component",
+      "sublabel": "rits.train · finetune · infer",
+      "tag": "tricycle.rits",
+      "pos": [1020, 480],
+      "size": [220, 82]
+    },
+    {
+      "id": "adapters",
+      "type": "external",
+      "label": "Injected adapters / external systems",
+      "sublabel": "Bohr CLI · Reaction DB API · ReactionOpt",
+      "tag": "--live + credentials",
+      "pos": [1020, 650],
+      "size": [240, 92]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "TriCycle Python workspace · uv members",
+      "wraps": ["cli", "dispatch", "core", "reactionopt", "sampling", "bohr-compute", "bohr-workflow", "reaction-db", "sar", "rits"],
+      "pad": 28
+    },
+    {
+      "kind": "security-group",
+      "label": "副作用边界：默认 dry-run，显式注入 adapter 后才 live",
+      "wraps": ["adapters"],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {"id": "skill-to-cli", "from": "skills", "to": "cli", "label": "选择 capability", "labelDy": -33, "variant": "emphasis"},
+    {"id": "cli-to-dispatch", "from": "cli", "to": "dispatch", "label": "TOML request + capability ID", "labelDy": -34, "variant": "emphasis"},
+    {"id": "dispatch-to-core", "from": "dispatch", "to": "core", "variant": "dashed"},
+    {"id": "dispatch-to-reactionopt", "from": "dispatch", "to": "reactionopt"},
+    {"id": "dispatch-to-sampling", "from": "dispatch", "to": "sampling"},
+    {"id": "dispatch-to-bohr-compute", "from": "dispatch", "to": "bohr-compute"},
+    {"id": "dispatch-to-bohr-workflow", "from": "dispatch", "to": "bohr-workflow"},
+    {"id": "dispatch-to-reaction-db", "from": "dispatch", "to": "reaction-db"},
+    {"id": "bohr-compute-to-sar", "from": "bohr-compute", "to": "sar", "variant": "dashed"},
+    {"id": "bohr-compute-to-rits", "from": "bohr-compute", "to": "rits", "variant": "dashed"},
+    {"id": "dispatch-to-adapters", "from": "dispatch", "to": "adapters", "variant": "security"}
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "组合与分发",
+      "items": [
+        "apps/tricycle-agent 在 bootstrap.py 显式注册 7 个实现组件",
+        "CapabilityCatalog 把 public capability 绑定到 component.operation",
+        "PluginRegistry 保留旧 plugin ID 调用路径"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "探索能力链",
+      "items": [
+        "ReactionOpt 生成配置，Sampling 选择下一批候选",
+        "Bohr compute / workflow 负责单任务、批量与 DPA-Berny 生命周期",
+        "Reaction DB 导出数据，RxnResid 与 RitS 复用 Bohr 模型任务基础层"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "状态与安全",
+      "items": [
+        "run.toml 持久化状态、next_action、远程 ID 和产物位置，支持 resume",
+        "dry-run 使用内存 fallback；live 路径必须显式注入 adapter 和凭据",
+        "破坏性 batch.terminate 还需要 confirm"
+      ]
+    }
+  ]
+}

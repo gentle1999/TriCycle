@@ -1,0 +1,32 @@
+[project]
+name = "tricycle-agent"
+version = "0.1.0"
+description = "Composition CLI for the TriCycle Agent plugin monorepo."
+requires-python = ">=3.11"
+dependencies = [
+    "tricycle-core",
+    "tricycle-bohr",
+    "tricycle-bohrsubmit",
+    "tricycle-reaction-db",
+    "tricycle-sar",
+    "tricycle-rits",
+    "tricycle-sampling",
+    "tricycle-reactionopt",
+]
+
+[tool.uv.sources]
+tricycle-core = { workspace = true }
+tricycle-bohr = { workspace = true }
+tricycle-bohrsubmit = { workspace = true }
+tricycle-reaction-db = { workspace = true }
+tricycle-sar = { workspace = true }
+tricycle-rits = { workspace = true }
+tricycle-sampling = { workspace = true }
+tricycle-reactionopt = { workspace = true }
+
+[project.scripts]
+tricycle-agent = "tricycle_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

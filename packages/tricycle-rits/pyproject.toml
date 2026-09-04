@@ -1,0 +1,14 @@
+[project]
+name = "tricycle-rits"
+version = "0.1.0"
+description = "RitS training, fine-tuning, and inference task plugin with Bohr submission planning."
+requires-python = ">=3.11"
+dependencies = ["tricycle-core", "tricycle-bohr"]
+
+[tool.uv.sources]
+tricycle-core = { workspace = true }
+tricycle-bohr = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

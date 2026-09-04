@@ -1,0 +1,15 @@
+run_id = "demo-cycloaddition-001"
+mode = "dry-run"
+
+[reaction]
+reaction_id = "rxn-demo-001"
+reaction_smiles = "[C:1]=[C:2].[C:3]=[C:4]>>[C:1]1[C:2][C:3][C:4]1"
+
+[sampling]
+strategy = "random"
+budget = 4
+seed = 42
+
+[bohr]
+image = "registry.dp.tech/dptech/dp/native/prod-23278/gaussian-orca-dp-client:260824"
+operation = "reaction.single-point"

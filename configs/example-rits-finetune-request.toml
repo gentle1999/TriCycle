@@ -1,0 +1,25 @@
+# RitS fine-tuning loads weights only and starts a fresh optimizer/scheduler.
+# The task directory must be a checkout of the pinned gentle1999/RitS commit.
+model_name = "rits-finetune-smoke"
+image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
+input_directory = "/path/to/RitS"
+code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
+dataset = { artifact_id = "rits-dataset", location = "/path/to/RitS/data/rits_dataset", kind = "directory" }
+checkpoint = { artifact_id = "rits-checkpoint", location = "/path/to/RitS/data/rits.ckpt" }
+
+# run.sh is uploaded inside input_directory and performs editable installation
+# from pyproject.toml before running the official fine-tuning command.
+command = ["bash", "run.sh"]
+
+output_artifacts = [
+  { artifact_id = "rits-finetuning-output", location = "outputs", kind = "directory" },
+]
+
+[parameters]
+task = "finetune"
+upstream_protocol = "finetune_from"
+source_repository = "https://github.com/gentle1999/RitS"
+source_revision = "6d8aa0704c21d2798326a7e070491abf438ca292"
+model_manifest = "packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml"
+checkpoint_path = "data/rits.ckpt"
+dataset_root = "data/rits_dataset"

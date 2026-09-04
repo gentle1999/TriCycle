@@ -1,0 +1,24 @@
+strategy = "random"
+budget = 2
+seed = 42
+
+[[candidates]]
+candidate_id = "ene-001+diene-001"
+
+[candidates.payload]
+ene_id = "ene-001"
+diene_id = "diene-001"
+
+[[candidates]]
+candidate_id = "ene-001+diene-002"
+
+[candidates.payload]
+ene_id = "ene-001"
+diene_id = "diene-002"
+
+[[candidates]]
+candidate_id = "ene-002+diene-001"
+
+[candidates.payload]
+ene_id = "ene-002"
+diene_id = "diene-001"

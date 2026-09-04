@@ -1,0 +1,18 @@
+# Declarative adapter policy. Credentials are injected separately through the
+# process environment used by the Bohr CLI.
+
+[bohr]
+executable = "bohr"
+
+[retry]
+max_attempts = 5
+delay = 5.0
+backoff = 2.0
+max_delay = 120.0
+jitter = 1.0
+submit_mode = "transient"
+download_mode = "all"
+submit_dedup = true
+submit_lookback = 50
+require_submit_name = false
+job_group_lookback = 50

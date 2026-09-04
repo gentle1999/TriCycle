@@ -1,0 +1,13 @@
+[project]
+name = "tricycle-bohr"
+version = "0.1.0"
+description = "Shared Bohr job planning, model-task execution, and gateway boundaries for TriCycle Agent."
+requires-python = ">=3.11"
+dependencies = ["tricycle-core"]
+
+[tool.uv.sources]
+tricycle-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,11 @@
+[project]
+name = "tricycle-core"
+version = "0.1.0"
+description = "Stable contracts and runtime primitives for TriCycle Agent plugins."
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

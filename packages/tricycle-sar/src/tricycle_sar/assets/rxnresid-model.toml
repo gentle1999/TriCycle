@@ -1,0 +1,15 @@
+# Component metadata, not an RxnResid task configuration.
+# The task's YAML, data manifest, and checkpoint remain native RxnResid artifacts.
+
+schema = "tricycle.rxnresid-model/v1"
+
+[model]
+model_name = "rxnresid"
+repository = "https://github.com/gentle1999/RxnResid"
+revision = "ac2a0c59b80d430564309c77d26f0a0d69139009"
+revision_kind = "git-commit"
+config_path = "configs/rxnresid.yaml"
+training_entrypoint = "train.py"
+inference_entrypoint = "predict.py"
+default_data_path = "data/new_full_df_exact_balanced_40ene_40diene.csv"
+finetune_protocol = "refit"

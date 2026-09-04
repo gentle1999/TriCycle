@@ -1,0 +1,24 @@
+# Component metadata, not a RitS task configuration.
+# The task's Hydra YAML and uploaded repository remain task-native artifacts.
+
+schema = "tricycle.rits-model/v1"
+
+[model]
+model_name = "rits-rgd1-chembl-extended"
+repository = "https://github.com/gentle1999/RitS"
+revision = "6d8aa0704c21d2798326a7e070491abf438ca292"
+revision_kind = "git-commit"
+
+# This is the broad/default RitS checkpoint described by the upstream README.
+checkpoint_name = "rits.ckpt"
+# Put the downloaded file here, relative to the TriCycle repository root.
+checkpoint_path = "artifacts/rits/rits.ckpt"
+# The Bohr task bundle should contain the same file at this task-relative path.
+task_checkpoint_path = "data/rits.ckpt"
+checkpoint_dataset = "RGD1-ChEMBL-extended"
+checkpoint_source = "https://drive.google.com/uc?id=1tmCmIuzgDsZYg3DeMeA0fcKDqvbCyqye"
+checkpoint_sha256 = "2c6fdacc13a304cb8bb4030881ff4198de647d8f8f7fdaa878414e2514be0668"
+training_entrypoint = "scripts/train.py"
+inference_entrypoint = "scripts/sample_transition_state.py"
+finetune_protocol = "finetune_from"
+resume_protocol = "resume"

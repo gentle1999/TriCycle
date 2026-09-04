@@ -1,0 +1,10 @@
+reaction_id = "rxn-demo-001"
+reaction_smiles = "[C:1]=[C:2].[C:3]=[C:4]>>[C:1]1[C:2][C:3][C:4]1"
+method = "4+2"
+
+[parameters]
+target_conformers = 10
+force_field = "gfnff"
+
+[metadata]
+source = "example"

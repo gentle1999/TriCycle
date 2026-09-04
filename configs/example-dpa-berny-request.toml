@@ -1,0 +1,9 @@
+xyz = ["examples/xyz/*.xyz"]
+workers = 4
+engine = "dpa"
+model = "model.ckpt.pt"
+# BOHR_IMAGE, BOHR_PROJECT_ID and BOHR_MACHINE_TYPE are read from the
+# environment when these request fields are omitted.
+task_type = "ts"
+multi_stage_chk = false
+allow_task_failures = true

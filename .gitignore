@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local configuration and credentials
+.env
+.env.local
+
+# Agent run state and generated artifacts
+.tricycle/
+runs/
+outputs/
+artifacts/
+*.sqlite3
+*.db
+
+# Editors / notebooks
+.idea/
+.vscode/
+*.ipynb_checkpoints/
+
+.tmp

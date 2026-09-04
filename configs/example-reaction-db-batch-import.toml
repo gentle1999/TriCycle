@@ -1,0 +1,27 @@
+# One request creates one internal database project for one calculation batch.
+# The adapter returns the database project_id; use that ID for later queries/exports.
+
+source = "bohr.dpa-finetuned-rits.ts-optimization"
+
+[project]
+slug = "dpa-finetuned-rits-ts-optimization-batch-1"
+name = "DPA-finetuned RitS TS optimization batch 1"
+
+[batch]
+batch_id = "bohr-batch-20260820-balanced"
+root = "/path/to/TriCycle-BohrSubmit/.bohr-batch/dpa-berny/<batch-directory>"
+logs_dir = "downloads"
+
+[batch.metadata]
+bohr_job_group_id = "replace-with-bohr-job-group-id"
+bohr_project_id = "replace-with-bohr-project-id"
+
+[provenance]
+workflow = "DPA-finetuned RitS initial guess -> Gaussian TS optimization"
+initial_guess_source = "DPA-finetuned RitS"
+calculation_engine = "Gaussian"
+functional = "B3LYP"
+basis = "def2SVP"
+task_type = "TS optimization"
+
+# idempotency_key = "optional-stable-key"
