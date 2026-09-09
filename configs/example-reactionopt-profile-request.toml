@@ -1,0 +1,50 @@
+# Mapped ReactionOpt profile: sample reactant/product conformers independently,
+# then use the RitS candidate-generation, clustering, and g-xTB TS pipeline.
+reaction_id = "reactionopt-profile-demo"
+reaction_smiles = "[C:1]([H:5])([H:6])=[C:2]([H:7])[H:8].[C:3]([H:9])([H:10])=[C:4]([H:11])[H:12]>>[C:1]1([H:5])([H:6])[C:2]([H:7])([H:8])[C:3]([H:9])([H:10])[C:4]1([H:11])[H:12]"
+output_dir = "runs/reactionopt-profile-demo/profile"
+
+[sampling]
+target_conformers = 4
+force_field = "uff"
+max_iterations = 200
+fmax = 0.01
+num_threads = 1
+rms_threshold = 0.5
+add_hs = false
+
+[rits]
+model_name = "reactionopt-rits-ts"
+image = "registry.dp.tech/dptech/dp/native/prod-23278/ubuntu2404-py312-pt212-cu130-dl:260831"
+# project_id = "replace-with-bohr-project"
+# machine_type = "replace-with-gpu-machine"
+input_directory = "/path/to/RitS"
+# This directory must be the RitS fork that contains scripts/run_ts_pipeline.py;
+# the official upstream checkout does not provide this profile pipeline entrypoint.
+code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
+checkpoint = { artifact_id = "rits-checkpoint", location = "/path/to/RitS/data/rits.ckpt" }
+checkpoint_path = "data/rits.ckpt"
+config = "scripts/conf/rits.yaml"
+n_samples = 2
+batch_size = 32
+num_steps = 16
+device = "cuda:0"
+# These two fields identify the default model/checkpoint source. Record the
+# fork repository and commit separately when executing the custom pipeline.
+source_repository = "https://github.com/gentle1999/RitS"
+source_revision = "6d8aa0704c21d2798326a7e070491abf438ca292"
+
+[rits.pipeline]
+script = "scripts/run_ts_pipeline.py"
+generate = true
+generation_strategy = "hybrid"
+max_atoms_per_batch = 18000
+cluster_threshold = 0.5
+cluster_atoms = "heavy"
+stereo_filter = true
+energy_scope = "staged"
+energy_window_hartree = 0.01
+energy_workers = 1
+omp_threads = 1
+energy_timeout = 300.0
+# gxtb_binary = "/path/to/gxtb-enabled/xtb"

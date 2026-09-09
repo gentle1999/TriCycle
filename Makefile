@@ -21,6 +21,7 @@ test:
 	$(PYTHON) -m unittest discover -s packages/tricycle-bohrsubmit/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s packages/tricycle-sar/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s packages/tricycle-rits/tests -p 'test_*.py' -v
+	$(PYTHON) -m unittest discover -s packages/tricycle-reactionopt/tests -p 'test_*.py' -v
 
 lint:
 	@if command -v ruff >/dev/null 2>&1; then ruff check .; else echo 'ruff is not installed; skipped'; fi

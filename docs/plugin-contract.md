@@ -42,6 +42,13 @@
   `ReactionDatabaseAdapter`，负责按一个批次创建内部 project、提交计算日志、调用数据库
   rxn-SMARTS 筛选，以及导出 RitS/RxnResid 数据集；
 - ReactionOpt：实现 `ReactionOptAdapter`，把中间配置转换成真实 ReactionOpt 调用；
+- ReactionOpt profile：通过 `RitsTransitionStateSampler` 注入 reaction-level RitS fork pipeline，分成
+  reactant 构象、product 构象和 RitS TS 三个独立分支，只在最终 profile 汇总时组合；TS 分支必须
+  使用 `run_ts_pipeline.py` 的 candidate 生成、stereo 过滤、Kabsch RMSD 聚类和 g-xTB 筛选，不能把
+  原始 `sample_transition_state.py` 输出直接当作最终 TS 集合。RitS 分支直接消费 mapped reaction
+  connectivity，也不得回退到旧的 product-backward 初猜策略。输入
+  reaction SMILES 必须为显式氢完整格式：每个氢是独立的带映射 `[H:...]` 原子，且所有原子
+  均有唯一正映射，反应物/产物两侧映射集合和元素一致；
 - 模型训练/微调/推理：RxnResid（兼容 `sar.*` 命名）和 RitS 复用 `tricycle-bohr` 提供的 `BohrModelJobRequest`、
   `BohrModelPlugin` 和 `BohrJobExecutor`，分别生成 `train`、`finetune` 与 `infer` operation；
   领域组件只保留自己的 manifest、请求别名和任务命令构造。

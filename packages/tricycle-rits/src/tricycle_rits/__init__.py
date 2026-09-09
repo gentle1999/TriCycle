@@ -10,6 +10,7 @@ from .commands import (
     build_inference_command,
     build_resume_command,
     build_training_command,
+    build_ts_pipeline_command,
 )
 from .models import RitsJobRequest
 from .plugin import RitsPlugin
@@ -20,6 +21,7 @@ __all__ = [
     "RitsJobRequest",
     "RitsPlugin",
     "build_inference_command",
+    "build_ts_pipeline_command",
     "build_fine_tuning_command",
     "build_finetune_command",
     "build_resume_command",

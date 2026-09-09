@@ -14,12 +14,14 @@ description: "Create RitS training, fine-tuning, or inference jobs and submit th
 - `model_name`、`image`、`code_artifact`、`input_directory` 和可选 Bohr 资源；
 - 训练必须提供数据集 artifact；推理必须提供 checkpoint artifact；
 - 模式为 `train`、`finetune` 或 `infer`；
-- 必须提供实际任务 `command`；RitS 官方训练/推理入口分别是 `scripts/train.py` 和
-  `scripts/sample_transition_state.py`，可使用 `tricycle_rits` 的命令构造器生成 worker command；
+- 必须提供实际任务 `command`；RitS 官方训练入口是 `scripts/train.py`。ReactionOpt profile 使用
+  RitS fork 中新增的 `scripts/run_ts_pipeline.py`（其内部调用 `scripts/sample_transition_state.py`
+  生成 candidate），可使用 `tricycle_rits` 的命令构造器生成 worker command；
 - TriCycle 请求使用 TOML；RitS 模型专属配置作为任务输入 artifact，格式由 RitS 决定；`parameters` 只记录版本、路径、hash 和编排元数据。
-- 当前上游仓库为 `https://github.com/gentle1999/RitS`，默认代码提交为
-  `6d8aa0704c21d2798326a7e070491abf438ca292`，默认权重为官方
-  `rits.ckpt`；组件级清单见 `packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml`。
+- 默认模型/checkpoint 来源为 `https://github.com/gentle1999/RitS` 的
+  `6d8aa0704c21d2798326a7e070491abf438ca292` 和官方 `rits.ckpt`；profile 使用的
+  `run_ts_pipeline.py` 需要来自包含该脚本的 RitS fork，组件级模型清单见
+  `packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml`。
 - 本地缓存路径为 `artifacts/rits/rits.ckpt`；上传到 RitS 任务目录后必须位于
   `data/rits.ckpt`。
 - `finetune` 使用 `finetune_from=<checkpoint>`，只加载权重并创建新的 optimizer/scheduler；

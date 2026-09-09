@@ -18,5 +18,6 @@
 | `rits-model` | `tricycle-rits` | RitS 训练/微调/推理并提交 Bohr |
 | `sampling-strategy` | `tricycle-sampling` | 从候选空间选择下一批反应 |
 | `reactionopt-config` | `tricycle-reactionopt` | 生成 ReactionOpt 配置 |
+| `reactionopt-profile` | `tricycle-reactionopt` | 从 mapped reaction 生成独立端点与 RitS TS profile |
 
 Skill 的调用顺序通常是：`reactionopt-config → sampling-strategy → bohr-submit/bohr-compute → reaction-db-batch-import → reaction-db-filter → reaction-db-export-* → sar-model/rits-model`。

@@ -142,7 +142,7 @@ rits.infer
 
 | Component | 提供的能力 | 当前实现 |
 | --- | --- | --- |
-| ReactionOpt component | `reactionopt.generate`、`reactionopt.export` | `tricycle-reactionopt` |
+| ReactionOpt component | `reactionopt.generate`、`reactionopt.export`、`reactionopt.profile` | `tricycle-reactionopt` |
 | Sampling component | `candidate.select` | `tricycle-sampling` |
 | Bohr compute component | 通用 Bohr job 规划、提交、状态和下载；单任务模型 job 基础层 | `tricycle-bohr` |
 | Bohr workflow component | `bohr.batch.*`、`dpa-berny.*` | `tricycle-bohrsubmit` |
@@ -160,6 +160,11 @@ Adapter 是外部副作用的唯一边界：
 - `BohrWorkflowGateway`：job group、terminate 等批量生命周期操作；
 - `ReactionRepository`：反应记录 upsert；
 - `ReactionOptAdapter`：调用实际 ReactionOpt 项目并导出文件。
+- `RitsTransitionStateSampler`：为一个 mapped reaction 调用一次配置指定的 RitS fork pipeline，并返回
+  `run_ts_pipeline.py` 经过 stereo 过滤、Kabsch RMSD 聚类和 g-xTB ranking 后的 TS 结构集合；
+  RitS 使用 reactant/product connectivity。
+  ReactionOpt profile 将 reactant 构象、product 构象和该 RitS TS 作为三个独立分支，
+  只在 profile 汇总处组合；组件不会自行读取凭据或发起网络请求。
 
 `BohrCliGateway` 负责当前 `bohr` CLI 的命令拼接、输出解析、重试和认证环境继承。它
 只把 `bohrId`/`BOHR_ID` 作为公开 job ID；旧批次若保存平台内部 `id`，会在已知任务组

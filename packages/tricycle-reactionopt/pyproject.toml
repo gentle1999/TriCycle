@@ -1,14 +1,25 @@
 [project]
 name = "tricycle-reactionopt"
 version = "0.1.0"
-description = "ReactionOpt reaction configuration generation plugin."
+description = "Mapped ReactionOpt profiles with independent reactant/product pools and reaction-level RitS TS sampling."
 requires-python = ">=3.11"
-dependencies = ["tricycle-core"]
+dependencies = [
+    "numpy>=2.0",
+    "rdkit>=2024.3.1",
+    "tricycle-core",
+    "tricycle-rits",
+]
+
+[project.optional-dependencies]
+gfnff = [
+    "ase>=3.28.0",
+    "gfnff>=0.1.1; python_version < '3.14'",
+]
 
 [tool.uv.sources]
 tricycle-core = { workspace = true }
+tricycle-rits = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-

@@ -8,6 +8,7 @@ capability ID；Skill 只描述适用场景、TOML 请求和安全边界，实�
 | --- | --- |
 | `reactionopt-generate` | `reactionopt.generate` |
 | `reactionopt-export` | `reactionopt.export` |
+| `reactionopt-profile` | `reactionopt.profile` |
 | `candidate-select` | `candidate.select` |
 | `bohr-compute-plan` | `bohr.compute.plan` |
 | `bohr-compute-submit` | `bohr.compute.submit` |

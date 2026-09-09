@@ -232,5 +232,128 @@ def build_inference_command(
     )
 
 
+def build_ts_pipeline_command(
+    *,
+    project_dir: str = "/workspace/job",
+    python_executable: str = "python3.12",
+    script: str = "scripts/run_ts_pipeline.py",
+    reactions: str = "inputs/reaction.smiles",
+    config: str = "scripts/conf/rits.yaml",
+    checkpoint: str = "data/rits.ckpt",
+    candidates: str = "outputs/rits-candidates",
+    output: str = "outputs/rits-pipeline",
+    generate: bool = True,
+    generation_strategy: str = "hybrid",
+    n_samples: int = 100,
+    num_steps: int = 16,
+    device: str = "cuda:0",
+    batch_size: int = 100,
+    max_atoms_per_batch: int | None = 18000,
+    cluster_threshold: float = 0.5,
+    cluster_atoms: str = "heavy",
+    stereo_filter: bool = True,
+    energy_scope: str = "staged",
+    energy_window_hartree: float = 0.01,
+    gxtb_binary: str | None = None,
+    energy_workers: int = 1,
+    omp_threads: int = 1,
+    energy_timeout: float = 300.0,
+    charge: int | None = None,
+    uhf: int | None = None,
+    extra_args: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Build the RitS candidate-generation, clustering, and g-xTB command.
+
+    This mirrors the configured fork's ``scripts/run_ts_pipeline.py``.  The
+    reaction input is a file because the pipeline's ``--reactions``
+    interface accepts a newline-delimited reaction file or CSV, not an inline
+    SMILES argument.  A caller that owns the worker staging area must create
+    that file before executing the command.
+    """
+
+    if device == "auto":
+        raise InvalidRequestError(
+            "run_ts_pipeline.py generation does not support device=auto; use cuda:0 or cpu"
+        )
+    if generation_strategy not in {"hybrid", "global"}:
+        raise InvalidRequestError("generation_strategy must be hybrid or global")
+    if cluster_atoms not in {"heavy", "all"}:
+        raise InvalidRequestError("cluster_atoms must be heavy or all")
+    if energy_scope not in {"staged", "medoids", "all"}:
+        raise InvalidRequestError("energy_scope must be staged, medoids, or all")
+    if n_samples < 1 or num_steps < 1 or batch_size < 1:
+        raise InvalidRequestError("pipeline n_samples, num_steps, and batch_size must be positive")
+    if max_atoms_per_batch is not None and max_atoms_per_batch < 1:
+        raise InvalidRequestError("max_atoms_per_batch must be positive when provided")
+    if cluster_threshold < 0.0 or energy_window_hartree < 0.0:
+        raise InvalidRequestError("pipeline thresholds must be non-negative")
+    if energy_workers < 1 or omp_threads < 1 or energy_timeout <= 0.0:
+        raise InvalidRequestError("pipeline energy settings must be positive")
+
+    command = [
+        *_worker_prefix(project_dir),
+        _non_empty(python_executable, name="python_executable"),
+        _non_empty(script, name="script"),
+        "--reactions",
+        _non_empty(reactions, name="reactions"),
+        "--config",
+        _non_empty(config, name="config"),
+        "--ckpt",
+        _non_empty(checkpoint, name="checkpoint"),
+        "--candidates",
+        _non_empty(candidates, name="candidates"),
+        "--output",
+        _non_empty(output, name="output"),
+    ]
+    if generate:
+        command.append("--generate")
+    command.extend(
+        (
+            "--generation-strategy",
+            generation_strategy,
+            "--n-samples",
+            str(n_samples),
+            "--num-steps",
+            str(num_steps),
+            "--device",
+            _non_empty(device, name="device"),
+        )
+    )
+    if max_atoms_per_batch is not None:
+        command.extend(("--max-atoms-per-batch", str(max_atoms_per_batch)))
+    else:
+        command.extend(("--batch-size", str(batch_size)))
+    command.extend(
+        (
+            "--cluster-threshold",
+            str(cluster_threshold),
+            "--cluster-atoms",
+            cluster_atoms,
+            "--energy-scope",
+            energy_scope,
+            "--energy-window-hartree",
+            str(energy_window_hartree),
+            "--energy-workers",
+            str(energy_workers),
+            "--omp-threads",
+            str(omp_threads),
+            "--energy-timeout",
+            str(energy_timeout),
+        )
+    )
+    if stereo_filter:
+        command.append("--stereo-filter")
+    else:
+        command.append("--no-stereo-filter")
+    if gxtb_binary is not None:
+        command.extend(("--gxtb-binary", _non_empty(gxtb_binary, name="gxtb_binary")))
+    if charge is not None:
+        command.extend(("--charge", str(charge)))
+    if uhf is not None:
+        command.extend(("--uhf", str(uhf)))
+    command.extend(_extra_args(extra_args))
+    return tuple(command)
+
+
 # Keep both spellings available to callers that use a prose-derived name.
 build_fine_tuning_command = build_finetune_command

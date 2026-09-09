@@ -77,6 +77,24 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
         side_effect=SideEffectLevel.LOCAL_WRITE,
     ),
     _definition(
+        "reactionopt.profile",
+        "Build a mapped ReactionOpt profile",
+        (
+            "Fan out into independent explicit-hydrogen, fully mapped reactant and product "
+            "conformer branches plus a reaction-level RitS pipeline that consumes mapped "
+            "connectivity, filters/clusters candidates, and ranks them with g-xTB; aggregate "
+            "the three pools only at profile assembly."
+        ),
+        component_id="tricycle.reactionopt",
+        operation="profile",
+        input_kind="reactionopt.profile.request",
+        outputs=("reactant-conformers", "product-conformers", "rits-ts-conformers"),
+        side_effect=SideEffectLevel.REMOTE_MUTATE,
+        requires_auth=True,
+        resumable=True,
+        dependencies=("rits.infer",),
+    ),
+    _definition(
         "candidate.select",
         "Select reaction candidates",
         "Select the next reaction candidates with a registered deterministic sampling strategy.",

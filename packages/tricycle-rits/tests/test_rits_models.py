@@ -13,6 +13,7 @@ from tricycle_rits import (
     build_inference_command,
     build_resume_command,
     build_training_command,
+    build_ts_pipeline_command,
     load_default_model_asset,
 )
 
@@ -137,6 +138,21 @@ class RitsModelTests(unittest.TestCase):
         self.assertIn("scripts/sample_transition_state.py", infer)
         self.assertIn("--reactant_smi", infer)
         self.assertIn("--product_smi", infer)
+
+        pipeline = build_ts_pipeline_command(
+            reactions="inputs/reaction.smiles",
+            candidates="outputs/candidates",
+            output="outputs/pipeline",
+            gxtb_binary="/opt/gxtb/xtb",
+        )
+        self.assertIn("scripts/run_ts_pipeline.py", pipeline)
+        self.assertIn("--generate", pipeline)
+        self.assertIn("--stereo-filter", pipeline)
+        self.assertIn("--cluster-threshold", pipeline)
+        self.assertIn("--gxtb-binary", pipeline)
+        self.assertNotIn("--reactant_smi", pipeline)
+        with self.assertRaisesRegex(InvalidRequestError, "device=auto"):
+            build_ts_pipeline_command(device="auto")
 
         finetune = build_finetune_command(
             checkpoint="data/rits.ckpt",

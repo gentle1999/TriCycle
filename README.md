@@ -28,6 +28,74 @@ flowchart LR
 - adapter 是唯一接触外部系统的边界。默认 `ExecutionContext.dry_run=True`，规划和测试不会读取凭据、访问网络或提交真实任务。
 - `tricycle-bohrsubmit` 负责本地任务目录、输入文件、worker 分片和 Bohr 生命周期；`BohrCliGateway` 是生产环境中调用 `bohr` 命令的唯一 subprocess 边界。
 
+### ReactionOpt profile 三分支架构
+
+`reactionopt.profile` 接受一个显式氢完整、原子映射完整的 mapped reaction SMILES。解析和校验通过后，反应物构象、产物构象和 reaction-level RitS TS 分成三条独立数据流；只有在最后一步才组合成 `ReactionProfile`。RitS 分支不依赖另外两条分支的 3D 坐标。
+
+```mermaid
+flowchart LR
+    A["mapped reaction SMILES<br/>完整显式 H + atom map"] --> B["解析 / 严格校验<br/>按 atom map 排序"]
+
+    subgraph GEN["1. 候选生成"]
+        direction TB
+        R1["反应物<br/>RDKit ETKDGv3"]
+        P1["产物<br/>RDKit ETKDGv3"]
+        T1["TS<br/>fork 的 run_ts_pipeline.py<br/>内部调用 RitS candidate generator"]
+    end
+
+    subgraph GEO["2. 几何处理"]
+        direction TB
+        R2["反应物<br/>UFF / MMFF94 / 可选 gfnff"]
+        P2["产物<br/>UFF / MMFF94 / 可选 gfnff"]
+        T2["TS<br/>保留 RitS 坐标<br/>不走 RDKit 力场"]
+    end
+
+    subgraph STEREO["3. 立体约束"]
+        direction TB
+        R3["反应物<br/>ETKDG enforceChirality"]
+        P3["产物<br/>ETKDG enforceChirality"]
+        T3["TS<br/>mapped tetrahedral / E-Z filter"]
+    end
+
+    subgraph SELECT["4. 多样性与能量筛选"]
+        direction TB
+        R4["反应物<br/>能量窗口 + 贪心 RMSD"]
+        P4["产物<br/>能量窗口 + 贪心 RMSD"]
+        T4["TS<br/>Kabsch complete-linkage<br/>medoid + staged g-xTB"]
+    end
+
+    subgraph POOL["5. 分支输出"]
+        direction TB
+        R5["reactant conformer pool"]
+        P5["product conformer pool"]
+        T5["selected_xyz<br/>TS conformer pool"]
+    end
+
+    B --> R1
+    B --> P1
+    B --> T1
+    R1 --> R2 --> R3 --> R4 --> R5
+    P1 --> P2 --> P3 --> P4 --> P5
+    T1 --> T2 --> T3 --> T4 --> T5
+    R5 --> Z["唯一汇总点<br/>组合 ReactionProfile"]
+    P5 --> Z
+    T5 --> Z
+    Z --> O["profile.json + SDF/XYZ<br/>恢复并保留原始 atom map"]
+```
+
+构象分支由 ReactionOpt 侧基于 RDKit 生成并筛选各自的构象池；TS 分支由注入的
+`RitsTransitionStateSampler` 执行 fork 中的完整 `run_ts_pipeline.py`，包括 RitS candidate 生成、立体约束
+过滤、重原子 Kabsch RMSD 聚类、medoid 预筛选和 staged g-xTB 能量排序。该 fork pipeline 要求
+worker 输入使用连续 `1..N` atom map 时，adapter 只在临时输入中重编号，读取 selected TS 后再
+恢复用户输入的原始映射，因此最终 profile 的三个结构池共享同一套全局 atom-map 顺序。
+
+这里的 RDKit 构象筛选与 RitS 后处理只有抽象层面的“生成候选、按能量排序、保持结构多样性”相似，
+不是同一套算法：RDKit 的 `UFF/MMFF94/GFN-FF` 能量和贪心 RMSD 去重不能替代 RitS 的 stereo
+filter、complete-linkage 聚类或配置指定的 g-xTB staged ranking。两条流程的逐项边界见包 README。
+
+更详细的输入合约、调用链、pipeline 参数和输出文件说明见
+[`packages/tricycle-reactionopt/README.md`](packages/tricycle-reactionopt/README.md)。
+
 一次自动探索可以按下面的方向串联：
 
 ```text
@@ -57,7 +125,7 @@ packages/
   tricycle-sar/           RxnResid 训练/微调/推理任务及 Bohr 提交规划（保留 sar.* 命名）
   tricycle-rits/          RitS 训练/微调/推理任务、命令构造及 Bohr 提交规划
   tricycle-sampling/      候选空间和可替换采样策略
-  tricycle-reactionopt/   ReactionOpt 反应配置生成和导出边界
+  tricycle-reactionopt/   ReactionOpt 配置、mapped profile 和三分支 RitS pipeline 边界
 apps/
   tricycle-agent/         组合能力目录并提供 tricycle-agent CLI
 configs/                  TOML 请求和 adapter 策略示例
@@ -67,27 +135,31 @@ docs/                     架构、插件契约和开发说明
 tests/                    不依赖外部服务的 smoke tests
 ```
 
+组合应用的 CLI、能力分发和运行状态说明见 [`apps/tricycle-agent/README.md`](apps/tricycle-agent/README.md)。
+
 依赖方向保持为：
 
 ```text
 Codex Skill ──> CapabilityCatalog ──> 组件 ──> tricycle-core
 tricycle-sar ────> tricycle-bohr ──> tricycle-core
-tricycle-rits ───> tricycle-bohr ──> tricycle-core
+tricycle-reactionopt ─> tricycle-rits ─> tricycle-bohr ─> tricycle-core
 ```
 
 组件仍在 [`apps/tricycle-agent/src/tricycle_agent/bootstrap.py`](apps/tricycle-agent/src/tricycle_agent/bootstrap.py) 中显式组合；能力映射在 [`capabilities.py`](apps/tricycle-agent/src/tricycle_agent/capabilities.py) 中声明。这样可以审核每个能力的副作用和 adapter，而不会仅凭目录存在就自动执行代码。
 
 ## 3. 当前组件与能力
 
-| Component / legacy Plugin ID | 作用 | Codex 能力 |
-| --- | --- | --- |
-| `tricycle.bohr.compute` | 通用 Bohr 计算任务 | `bohr.compute.plan`、`bohr.compute.submit`、`bohr.job.status`、`bohr.job.download` |
-| `tricycle.bohr.submit` | Bohr 批量及化学计算工作流 | `bohr.batch.*`、`dpa-berny.prepare`、`dpa-berny.rescue` |
-| `tricycle.reaction-database` | 按批次导入计算日志、数据库筛选和训练数据导出 | `reaction-db.ingest`、`reaction-db.batch-import`、`reaction-db.filter`、`reaction-db.export-rits`、`reaction-db.export-rxnresid` |
-| `tricycle.sar` | RxnResid 训练/微调/推理任务（兼容 sar.* 命名） | `sar.train`、`sar.finetune`、`sar.infer` |
-| `tricycle.rits` | RitS 训练/微调/推理任务 | `rits.train`、`rits.finetune`、`rits.infer` |
-| `tricycle.sampling` | 候选选择 | `candidate.select`；内置 `random` 和 `first-n` 策略 |
-| `tricycle.reactionopt` | 生成版本化 ReactionOpt 配置 | `reactionopt.generate`、`reactionopt.export` |
+| Component / legacy Plugin ID | 作用 | Codex 能力 | 包 README |
+| --- | --- | --- | --- |
+| `tricycle.bohr.compute` | 通用 Bohr 计算任务 | `bohr.compute.plan`、`bohr.compute.submit`、`bohr.job.status`、`bohr.job.download` | [`tricycle-bohr`](packages/tricycle-bohr/README.md) |
+| `tricycle.bohr.submit` | Bohr 批量及化学计算工作流 | `bohr.batch.*`、`dpa-berny.prepare`、`dpa-berny.rescue` | [`tricycle-bohrsubmit`](packages/tricycle-bohrsubmit/README.md) |
+| `tricycle.reaction-database` | 按批次导入计算日志、数据库筛选和训练数据导出 | `reaction-db.ingest`、`reaction-db.batch-import`、`reaction-db.filter`、`reaction-db.export-rits`、`reaction-db.export-rxnresid` | [`tricycle-reaction-db`](packages/tricycle-reaction-db/README.md) |
+| `tricycle.sar` | RxnResid 训练/微调/推理任务（兼容 sar.* 命名） | `sar.train`、`sar.finetune`、`sar.infer` | [`tricycle-sar`](packages/tricycle-sar/README.md) |
+| `tricycle.rits` | RitS 训练/微调/推理任务 | `rits.train`、`rits.finetune`、`rits.infer` | [`tricycle-rits`](packages/tricycle-rits/README.md) |
+| `tricycle.sampling` | 候选选择 | `candidate.select`；内置 `random` 和 `first-n` 策略 | [`tricycle-sampling`](packages/tricycle-sampling/README.md) |
+| `tricycle.reactionopt` | 生成版本化配置，以及独立构象/TS 分支的 mapped reaction profile | `reactionopt.generate`、`reactionopt.export`、`reactionopt.profile` | [`tricycle-reactionopt`](packages/tricycle-reactionopt/README.md) |
+
+公共契约和运行时基础设施见 [`tricycle-core`](packages/tricycle-core/README.md)。
 
 新的 Codex 发现入口位于 [`.agents/skills/`](.agents/skills/)，每个能力一个 `SKILL.md`。旧版 [`skills/`](skills/) 只作为兼容索引；开发契约见 [`docs/plugin-contract.md`](docs/plugin-contract.md)。
 
@@ -161,6 +233,10 @@ sha256: 2c6fdacc13a304cb8bb4030881ff4198de647d8f8f7fdaa878414e2514be0668
 该提交是当前官方 `main` 的可复现快照；官方 README 将 `rits.ckpt` 对应到
 RGD1-ChEMBL-extended 训练集。组件清单位于
 [`packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml`](packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)。
+
+上面的官方 revision 只用于锁定默认模型和 checkpoint 来源；ReactionOpt profile 使用的
+`scripts/run_ts_pipeline.py` 是用户维护的 RitS fork 新增脚本，不属于该官方 revision。执行
+profile 时，`code_artifact`/`input_directory` 必须指向包含该脚本的 fork checkout。
 
 请将权重文件放在 TriCycle 根目录的：
 
@@ -269,6 +345,19 @@ target_conformers = 10
 force_field = "gfnff"
 ```
 
+Mapped reaction profile（独立采样 reactant/product 构象，并用 RitS 生成 TS 构象；输入必须是
+显式氢完整、每个原子均带唯一映射的 reaction SMILES，氢以独立 `[H:...]` 原子表示）：
+
+```bash
+uv run --package tricycle-agent tricycle-agent plan \
+  reactionopt.profile configs/example-reactionopt-profile-request.toml \
+  --run-id reactionopt-profile-demo
+```
+
+该能力的 profile 构建入口是 `Reaction.build_profile(sampler, ...)`。实际 TS 推理必须通过
+显式注入的 `RitsTransitionStateSampler` adapter 完成；默认流程不会调用上游 ReactionOpt
+的 4+2 product-stretch 初猜策略。
+
 Gaussian：
 
 ```toml
@@ -337,6 +426,11 @@ uv run --package tricycle-agent tricycle-agent plan \
   candidate.select \
   configs/example-sampling-request.toml \
   --run-id sampling-demo
+
+uv run --package tricycle-agent tricycle-agent plan \
+  reactionopt.profile \
+  configs/example-reactionopt-profile-request.toml \
+  --run-id reactionopt-profile-demo
 ```
 
 规划阶段不会访问 Bohr、数据库或模型服务。

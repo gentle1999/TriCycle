@@ -29,6 +29,7 @@ class CapabilityRuntimeTests(unittest.TestCase):
         catalog = create_capability_catalog()
         expected = {
             "reactionopt.generate",
+            "reactionopt.profile",
             "candidate.select",
             "bohr.batch.prepare",
             "bohr.batch.submit",

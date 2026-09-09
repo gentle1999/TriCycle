@@ -33,7 +33,11 @@ from tricycle_reaction_db import (
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
 )
-from tricycle_reactionopt import ReactionConfigRequest, ReactionOptPlugin
+from tricycle_reactionopt import (
+    ReactionConfigRequest,
+    ReactionOptPlugin,
+    ReactionProfileRequest,
+)
 from tricycle_rits import RitsPlugin
 from tricycle_sampling import SamplingPlugin, SamplingRequest
 from tricycle_sar import SarPlugin
@@ -57,12 +61,14 @@ class CapabilityDispatcher:
         reaction_repository: ReactionRepository | None = None,
         reaction_database_adapter: ReactionDatabaseAdapter | None = None,
         reactionopt_adapter: ReactionOptAdapter | None = None,
+        reactionopt_profile_adapter: Any | None = None,
     ) -> None:
         self.catalog = catalog
         self.bohr_gateway = bohr_gateway
         self.reaction_repository = reaction_repository
         self.reaction_database_adapter = reaction_database_adapter
         self.reactionopt_adapter = reactionopt_adapter
+        self.reactionopt_profile_adapter = reactionopt_profile_adapter
 
     def plan(
         self,
@@ -159,6 +165,21 @@ class CapabilityDispatcher:
                     "reactionopt.export requires an injected ReactionOptAdapter"
                 )
             return component.export(parsed, self.reactionopt_adapter, context)
+
+        if capability_id == "reactionopt.profile":
+            component = self._as(provider, ReactionOptPlugin)
+            parsed = ReactionProfileRequest.from_mapping(request)
+            if context.dry_run:
+                return component.execute(component.plan_profile(parsed, context), context)
+            if self.reactionopt_profile_adapter is None:
+                raise IntegrationNotConfiguredError(
+                    "reactionopt.profile requires an injected RitS TS pipeline sampler"
+                )
+            return component.execute_profile(
+                parsed,
+                self.reactionopt_profile_adapter,
+                context,
+            )
 
         if capability_id == "reaction-db.ingest":
             component = self._as(provider, ReactionDatabasePlugin)
@@ -330,6 +351,7 @@ class CapabilityDispatcher:
             reaction_repository=self.reaction_repository,
             reaction_database_adapter=self.reaction_database_adapter,
             reactionopt_adapter=self.reactionopt_adapter,
+            reactionopt_profile_adapter=self.reactionopt_profile_adapter,
         )
 
     def _require_bohr(self) -> BohrGateway:
