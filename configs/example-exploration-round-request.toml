@@ -1,0 +1,64 @@
+exploration_id = "cycloaddition-active-learning"
+round_index = 1
+strategy = "epistemic-uncertainty"
+budget = 2
+seed = 42
+
+[space]
+space_id = "cycloaddition-space-v1"
+version = "1.0.0"
+definition = { reaction_class = "cycloaddition", ene_set = "ene-v1", diene_set = "diene-v1" }
+
+[range_policy]
+policy_id = "fixed-space"
+version = "1.0.0"
+mode = "fixed"
+rationale = "Keep the declared reaction space until the first labeled batch is complete."
+
+[model_snapshot]
+snapshot_id = "rits-checkpoint-round-0000"
+checkpoint_hash = "sha256:replace-with-real-checkpoint-hash"
+source_run_id = "rits-bootstrap"
+
+[training_policy]
+policy_id = "rits-training-gate-v1"
+version = "1.0.0"
+mode = "every_n_or_new_labels"
+interval = 3
+min_new_labels = 100
+train_mode = "auto"
+
+[training_context]
+last_training_round = 0
+new_label_count = 0
+previous_checkpoint = "sha256:replace-with-real-checkpoint-hash"
+dataset_before_hash = "sha256:dataset-before"
+dataset_after_hash = "sha256:dataset-after"
+
+[training_spec]
+# These fields form the replay key if this round later schedules RitS training.
+seed = 17
+dataset_manifest_hash = "sha256:replace-with-dataset-manifest-hash"
+code_revision = "replace-with-rits-code-revision"
+container_digest = "sha256:replace-with-rits-container-digest"
+
+[[candidates]]
+candidate_id = "ene-001+diene-001"
+
+[candidates.payload]
+reaction_smiles = "A>>B"
+epistemic_unc = 0.10
+
+[[candidates]]
+candidate_id = "ene-001+diene-002"
+
+[candidates.payload]
+reaction_smiles = "C>>D"
+epistemic_unc = 0.80
+
+[[candidates]]
+candidate_id = "ene-002+diene-001"
+
+[candidates.payload]
+reaction_smiles = "E>>F"
+epistemic_unc = 0.60

@@ -12,6 +12,7 @@ dependencies = [
     "tricycle-rits",
     "tricycle-sampling",
     "tricycle-reactionopt",
+    "tricycle-exploration",
 ]
 
 [tool.uv.sources]
@@ -23,6 +24,7 @@ tricycle-sar = { workspace = true }
 tricycle-rits = { workspace = true }
 tricycle-sampling = { workspace = true }
 tricycle-reactionopt = { workspace = true }
+tricycle-exploration = { workspace = true }
 
 [project.scripts]
 tricycle-agent = "tricycle_agent.cli:main"

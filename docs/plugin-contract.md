@@ -12,6 +12,8 @@
 - `plan(...) -> TaskPlan`：纯规划阶段，生成任务参数、输入和目标操作。
 - `execute(...)` 或领域专用副作用方法：通过注入的 adapter 执行；骨架阶段可以只返回 `planned`。
 - 对应的能力 Skill：位于 `.agents/skills/<skill-name>/SKILL.md`，说明何时调用、输入、输出、失败处理和禁止事项。
+- 如果能力参与长流程或主动学习，执行阶段还应通过 `ExecutionContext.trace_sink` 写入结构化事件；
+  事件不能替代 artifact，完整输入和决定仍需落盘并带 hash。
 
 ## 能力契约
 
@@ -54,6 +56,19 @@
   领域组件只保留自己的 manifest、请求别名和任务命令构造。
 
 这些接口当前不绑定 HTTP、CLI 或具体数据库 ORM。拿到具体插件说明后，再在 adapter 中选择实现方式。
+
+## 运行轨迹与探索轮次
+
+`TraceStore` 将一次 run 的事件追加到 `trace/events.jsonl`，事件带连续序号、前一事件 hash 和
+自身 hash；CLI 在 run/resume、plan、capability 完成或失败时记录生命周期事件。领域插件应在
+事件中引用具体 artifact 的相对路径和 SHA-256，而不是只记录“已完成”。
+
+主动学习的 `exploration.round` 必须把完整 candidate pool、模型分数和输入模型快照写入 round
+目录，同时记录排除原因、稳定排序 tie-break、采样策略/版本/seed、范围策略和 RitS train/skip
+证据。`snapshot-transition.toml` 以 `round_decision_hash`、数据集 hash、训练配方和输入快照
+生成 replay key：skip 的后继快照必须是输入快照本身；训练尚未完成时使用确定性的 planned
+snapshot，实际 checkpoint 返回后再绑定 `next_model_snapshot`。QM 计算不属于该重放函数，但其
+候选输入和数据集 artifact hash 必须已存在。
 
 ## BohrSubmit 迁移边界
 

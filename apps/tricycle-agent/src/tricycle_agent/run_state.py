@@ -56,6 +56,7 @@ _RETRYABLE_CAPABILITIES = frozenset(
         "rits.train",
         "rits.infer",
         "rits.finetune",
+        "exploration.round",
     }
 )
 
@@ -145,6 +146,11 @@ def next_action_for(capability_id: str, result: TaskResult) -> str:
         "reaction-db.export-rxnresid",
     }:
         return ""
+    if capability_id == "exploration.round":
+        # The round itself is resumable and can be verified/reused.  A RitS
+        # follow-up needs its own typed request, so it is recorded separately
+        # instead of pretending the exploration TOML is a RitS request.
+        return capability_id
     if capability_id in {
         "bohr.compute.submit",
         "sar.train",
@@ -228,6 +234,9 @@ def record_result(
             remote["record_id"] = result.external_id
     output_locations = [artifact.location for artifact in result.outputs]
     artifacts = {"last_outputs": output_locations}
+    resume_extra: dict[str, Any] = {}
+    if capability_id == "exploration.round":
+        resume_extra["follow_up_action"] = str(result.metadata.get("next_action", ""))
     return store.update(
         status=status,
         phase=phase,
@@ -238,6 +247,7 @@ def record_result(
         action=capability_id,
         remote=remote,
         artifacts=artifacts,
+        resume=resume_extra,
     )
 
 

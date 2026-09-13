@@ -1,0 +1,14 @@
+[project]
+name = "tricycle-exploration"
+version = "0.1.0"
+description = "Auditable exploration-round and model-training decisions for TriCycle."
+requires-python = ">=3.11"
+dependencies = ["tricycle-core", "tricycle-sampling"]
+
+[tool.uv.sources]
+tricycle-core = { workspace = true }
+tricycle-sampling = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

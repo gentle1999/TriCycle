@@ -1,6 +1,6 @@
 PYTHON ?= python3.11
 
-PYTHONPATH := $(CURDIR)/packages/tricycle-core/src:$(CURDIR)/packages/tricycle-bohr/src:$(CURDIR)/packages/tricycle-bohrsubmit/src:$(CURDIR)/packages/tricycle-reaction-db/src:$(CURDIR)/packages/tricycle-sar/src:$(CURDIR)/packages/tricycle-rits/src:$(CURDIR)/packages/tricycle-sampling/src:$(CURDIR)/packages/tricycle-reactionopt/src:$(CURDIR)/apps/tricycle-agent/src
+PYTHONPATH := $(CURDIR)/packages/tricycle-core/src:$(CURDIR)/packages/tricycle-bohr/src:$(CURDIR)/packages/tricycle-bohrsubmit/src:$(CURDIR)/packages/tricycle-reaction-db/src:$(CURDIR)/packages/tricycle-sar/src:$(CURDIR)/packages/tricycle-rits/src:$(CURDIR)/packages/tricycle-sampling/src:$(CURDIR)/packages/tricycle-reactionopt/src:$(CURDIR)/packages/tricycle-exploration/src:$(CURDIR)/apps/tricycle-agent/src
 export PYTHONPATH
 
 .PHONY: help check test compile lint format list-plugins list-capabilities
@@ -21,6 +21,8 @@ test:
 	$(PYTHON) -m unittest discover -s packages/tricycle-bohrsubmit/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s packages/tricycle-sar/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s packages/tricycle-rits/tests -p 'test_*.py' -v
+	$(PYTHON) -m unittest discover -s packages/tricycle-sampling/tests -p 'test_*.py' -v
+	$(PYTHON) -m unittest discover -s packages/tricycle-exploration/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s packages/tricycle-reactionopt/tests -p 'test_*.py' -v
 
 lint:

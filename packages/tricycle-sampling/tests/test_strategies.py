@@ -1,0 +1,125 @@
+import math
+import unittest
+
+from tricycle_core import ExecutionContext, InvalidRequestError
+from tricycle_sampling import (
+    AleatoricUncertaintySamplingStrategy,
+    Candidate,
+    EpistemicUncertaintySamplingStrategy,
+    PredictiveUncertaintySamplingStrategy,
+    SamplingPlugin,
+    SamplingRequest,
+    decompose_binary_uncertainty,
+    get_uncertainty_scores,
+)
+
+
+class UncertaintySamplingTests(unittest.TestCase):
+    def test_each_baseline_selects_highest_component_and_preserves_ties(self) -> None:
+        candidates = (
+            Candidate(
+                "rxn-a",
+                {"predictive_unc": 0.2, "epistemic_unc": 0.9, "aleatoric_unc": 0.1},
+            ),
+            Candidate(
+                "rxn-b",
+                {"predictive_unc": 0.8, "epistemic_unc": 0.2, "aleatoric_unc": 0.7},
+            ),
+            Candidate(
+                "rxn-c",
+                {"predictive_unc": 0.8, "epistemic_unc": 0.3, "aleatoric_unc": 0.4},
+            ),
+        )
+
+        self.assertEqual(
+            PredictiveUncertaintySamplingStrategy().select(candidates, 2),
+            (candidates[1], candidates[2]),
+        )
+        self.assertEqual(
+            EpistemicUncertaintySamplingStrategy().select(candidates, 1),
+            (candidates[0],),
+        )
+        self.assertEqual(
+            AleatoricUncertaintySamplingStrategy().select(candidates, 1),
+            (candidates[1],),
+        )
+
+    def test_paper_aliases_are_registered(self) -> None:
+        plugin = SamplingPlugin()
+        candidates = tuple(
+            Candidate(
+                candidate_id,
+                {
+                    "predictive_unc": predictive,
+                    "epistemic_unc": epistemic,
+                    "aleatoric_unc": aleatoric,
+                },
+            )
+            for candidate_id, predictive, epistemic, aleatoric in (
+                ("rxn-a", 0.1, 0.3, 0.2),
+                ("rxn-b", 0.9, 0.8, 0.7),
+            )
+        )
+
+        for strategy in (
+            "predictive_unc_based",
+            "epistemic_unc_based",
+            "aleatoric_unc_based",
+        ):
+            result = plugin.select(
+                SamplingRequest(candidates=candidates, budget=1, strategy=strategy)
+            )
+            self.assertEqual(result.selected_ids, ("rxn-b",))
+
+    def test_posterior_probabilities_are_decomposed_without_external_dependencies(self) -> None:
+        scores = decompose_binary_uncertainty((0.01, 0.99))
+
+        self.assertAlmostEqual(scores.predictive, math.log(2.0))
+        self.assertAlmostEqual(scores.aleatoric, 0.05600153435484734)
+        self.assertAlmostEqual(scores.epistemic, scores.predictive - scores.aleatoric)
+
+        candidate = Candidate("rxn-posterior", {"posterior_probabilities": [0.01, 0.99]})
+        self.assertEqual(get_uncertainty_scores(candidate), scores)
+
+    def test_plan_contains_uncertainty_field_and_scores(self) -> None:
+        plugin = SamplingPlugin()
+        request = SamplingRequest(
+            candidates=(Candidate("rxn-a", {"predictive_unc": 0.25, "epistemic_unc": 0.1, "aleatoric_unc": 0.15}),),
+            budget=1,
+            strategy="predictive-uncertainty",
+        )
+
+        plan = plugin.plan_select(request, ExecutionContext(run_id="sampling-test"))
+
+        self.assertEqual(plan.parameters["score_field"], "predictive_unc")
+        self.assertEqual(plan.parameters["candidate_scores"], [{"candidate_id": "rxn-a", "score": 0.25}])
+        self.assertEqual(plan.metadata["selection"], "highest-score")
+        self.assertEqual(plan.metadata["strategy_version"], "1.0.0")
+
+    def test_uncertainty_scores_are_required_when_budget_is_nonzero(self) -> None:
+        plugin = SamplingPlugin()
+        request = SamplingRequest(
+            candidates=(Candidate("rxn-a"),),
+            budget=1,
+            strategy="epistemic-uncertainty",
+        )
+
+        with self.assertRaises(InvalidRequestError):
+            plugin.plan_select(request, ExecutionContext(run_id="sampling-test"))
+
+    def test_strategy_only_requires_its_selected_component(self) -> None:
+        plugin = SamplingPlugin()
+        request = SamplingRequest(
+            candidates=(
+                Candidate("rxn-low", {"epistemic_unc": 0.1}),
+                Candidate("rxn-high", {"epistemic_unc": 0.9}),
+            ),
+            budget=1,
+            strategy="epistemic-uncertainty",
+        )
+
+        self.assertEqual(plugin.select(request).selected_ids, ("rxn-high",))
+
+
+if __name__ == "__main__":
+    unittest.main()

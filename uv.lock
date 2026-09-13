@@ -14,6 +14,7 @@ members = [
     "tricycle-bohr",
     "tricycle-bohrsubmit",
     "tricycle-core",
+    "tricycle-exploration",
     "tricycle-reaction-db",
     "tricycle-reactionopt",
     "tricycle-rits",
@@ -1210,6 +1211,7 @@ dependencies = [
     { name = "tricycle-bohr" },
     { name = "tricycle-bohrsubmit" },
     { name = "tricycle-core" },
+    { name = "tricycle-exploration" },
     { name = "tricycle-reaction-db" },
     { name = "tricycle-reactionopt" },
     { name = "tricycle-rits" },
@@ -1222,6 +1224,7 @@ requires-dist = [
     { name = "tricycle-bohr", editable = "packages/tricycle-bohr" },
     { name = "tricycle-bohrsubmit", editable = "packages/tricycle-bohrsubmit" },
     { name = "tricycle-core", editable = "packages/tricycle-core" },
+    { name = "tricycle-exploration", editable = "packages/tricycle-exploration" },
     { name = "tricycle-reaction-db", editable = "packages/tricycle-reaction-db" },
     { name = "tricycle-reactionopt", editable = "packages/tricycle-reactionopt" },
     { name = "tricycle-rits", editable = "packages/tricycle-rits" },
@@ -1282,6 +1285,21 @@ version = "0.1.0"
 source = { editable = "packages/tricycle-core" }
 
 [[package]]
+name = "tricycle-exploration"
+version = "0.1.0"
+source = { editable = "packages/tricycle-exploration" }
+dependencies = [
+    { name = "tricycle-core" },
+    { name = "tricycle-sampling" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "tricycle-core", editable = "packages/tricycle-core" },
+    { name = "tricycle-sampling", editable = "packages/tricycle-sampling" },
+]
+
+[[package]]
 name = "tricycle-reaction-db"
 version = "0.1.0"
 source = { editable = "packages/tricycle-reaction-db" }
@@ -1338,7 +1356,7 @@ requires-dist = [
 
 [[package]]
 name = "tricycle-sampling"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/tricycle-sampling" }
 dependencies = [
     { name = "tricycle-core" },

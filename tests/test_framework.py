@@ -30,6 +30,7 @@ class FrameworkSmokeTests(unittest.TestCase):
                 "tricycle.rits",
                 "tricycle.sampling",
                 "tricycle.reactionopt",
+                "tricycle.exploration",
             },
         )
 

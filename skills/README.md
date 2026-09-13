@@ -17,6 +17,7 @@
 | `sar-model` | `tricycle-sar` | RxnResid（SAR 兼容命名）训练/微调/推理并提交 Bohr |
 | `rits-model` | `tricycle-rits` | RitS 训练/微调/推理并提交 Bohr |
 | `sampling-strategy` | `tricycle-sampling` | 从候选空间选择下一批反应 |
+| `exploration-round` | `tricycle-exploration` | 记录候选空间、采样决策、下一轮范围和 RitS 训练 gate |
 | `reactionopt-config` | `tricycle-reactionopt` | 生成 ReactionOpt 配置 |
 | `reactionopt-profile` | `tricycle-reactionopt` | 从 mapped reaction 生成独立端点与 RitS TS profile |
 

@@ -22,6 +22,7 @@ from tricycle_core import (
     TaskStatus,
 )
 from tricycle_core.protocols import BohrGateway, ReactionOptAdapter, ReactionRepository
+from tricycle_exploration import ExplorationPlugin
 from tricycle_reaction_db import (
     InMemoryReactionRepository,
     ReactionBatchImportRequest,
@@ -93,6 +94,7 @@ class CapabilityDispatcher:
         context: ExecutionContext,
         *,
         confirm: bool = False,
+        planned: TaskPlan | None = None,
     ) -> TaskResult:
         binding = self.catalog.get(capability_id)
         if (
@@ -103,7 +105,13 @@ class CapabilityDispatcher:
             raise InvalidRequestError(
                 f"{capability_id} requires explicit confirmation before execution"
             )
-        result = self._execute(capability_id, request, context, confirm=confirm)
+        result = self._execute(
+            capability_id,
+            request,
+            context,
+            confirm=confirm,
+            planned=planned,
+        )
         return TaskResult(
             task_id=result.task_id,
             plugin_id=result.plugin_id,
@@ -125,10 +133,15 @@ class CapabilityDispatcher:
         context: ExecutionContext,
         *,
         confirm: bool = False,
+        planned: TaskPlan | None = None,
     ) -> TaskResult:
         binding = self.catalog.get(capability_id)
         provider = binding.provider
-        planned = binding.plan(request, context)
+        planned = planned or binding.plan(request, context)
+
+        if capability_id == "exploration.round":
+            component = self._as(provider, ExplorationPlugin)
+            return component.execute_round(request, context)
 
         if capability_id == "reactionopt.generate":
             component = self._as(provider, ReactionOptPlugin)
@@ -157,7 +170,7 @@ class CapabilityDispatcher:
         if capability_id == "reactionopt.export":
             component = self._as(provider, ReactionOptPlugin)
             parsed = ReactionConfigRequest.from_mapping(request)
-            plan = component.plan_generate(parsed, context)
+            plan = planned
             if context.dry_run:
                 return component.execute(plan, context)
             if self.reactionopt_adapter is None:
@@ -170,7 +183,7 @@ class CapabilityDispatcher:
             component = self._as(provider, ReactionOptPlugin)
             parsed = ReactionProfileRequest.from_mapping(request)
             if context.dry_run:
-                return component.execute(component.plan_profile(parsed, context), context)
+                return component.execute(planned, context)
             if self.reactionopt_profile_adapter is None:
                 raise IntegrationNotConfiguredError(
                     "reactionopt.profile requires an injected RitS TS pipeline sampler"
@@ -240,17 +253,15 @@ class CapabilityDispatcher:
 
         if capability_id in {"sar.train", "sar.infer", "sar.finetune"}:
             component = self._as(provider, SarPlugin)
-            plan = binding.plan(request, context)
             if context.dry_run:
-                return component.execute(plan, context)
-            return component.submit_to_bohr(plan, self._require_bohr(), context)
+                return component.execute(planned, context)
+            return component.submit_to_bohr(planned, self._require_bohr(), context)
 
         if capability_id in {"rits.train", "rits.infer", "rits.finetune"}:
             component = self._as(provider, RitsPlugin)
-            plan = binding.plan(request, context)
             if context.dry_run:
-                return component.execute(plan, context)
-            return component.submit_to_bohr(plan, self._require_bohr(), context)
+                return component.execute(planned, context)
+            return component.submit_to_bohr(planned, self._require_bohr(), context)
 
         if capability_id == "bohr.compute.plan":
             # Planning is intrinsically dry-run even if a caller passes the

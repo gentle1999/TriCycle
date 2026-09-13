@@ -98,11 +98,82 @@ class CapabilityRuntimeTests(unittest.TestCase):
             self.assertEqual(state["schema"], "tricycle.run/v1")
             self.assertEqual(state["run"]["status"], "succeeded")
             self.assertEqual(state["resume"]["next_action"], "")
+            self.assertEqual(state["trace"]["last_seq"], 4)
 
             inspected = io.StringIO()
             with redirect_stdout(inspected):
                 self.assertEqual(main(["inspect", "--run-dir", str(run_dir)]), 0)
-            self.assertEqual(json.loads(inspected.getvalue())["run"]["id"], "rxn-1")
+            inspected_state = json.loads(inspected.getvalue())
+            self.assertEqual(inspected_state["run"]["id"], "rxn-1")
+            self.assertTrue(inspected_state["trace_verification"]["valid"])
+
+    def test_exploration_run_records_training_follow_up_without_auto_submitting(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            request = root / "exploration.toml"
+            request.write_text(
+                """
+exploration_id = "demo"
+round_index = 1
+strategy = "epistemic-uncertainty"
+budget = 1
+seed = 7
+
+[space]
+space_id = "space-1"
+version = "1.0.0"
+definition = { reaction_class = "demo" }
+
+[model_snapshot]
+snapshot_id = "snapshot-0"
+checkpoint_hash = "sha256:snapshot-0"
+
+[range_policy]
+mode = "fixed"
+
+[training_policy]
+mode = "always"
+train_mode = "train"
+
+[training_spec]
+seed = 17
+dataset_manifest_hash = "sha256:dataset"
+code_revision = "rits-revision"
+container_digest = "sha256:container"
+
+[[candidates]]
+candidate_id = "candidate-1"
+
+[candidates.payload]
+epistemic_unc = 0.9
+""".lstrip(),
+                encoding="utf-8",
+            )
+            run_dir = root / "run"
+            with redirect_stdout(io.StringIO()):
+                main(
+                    [
+                        "run",
+                        "exploration.round",
+                        str(request),
+                        "--run-id",
+                        "exploration-1",
+                        "--run-dir",
+                        str(run_dir),
+                    ]
+                )
+            state = RunStore.open(run_dir).read()
+            self.assertEqual(state["resume"]["next_action"], "exploration.round")
+            self.assertEqual(state["resume"]["follow_up_action"], "rits.train")
+
+            with redirect_stdout(io.StringIO()):
+                main(["resume", "--run-dir", str(run_dir)])
+            events = [
+                json.loads(line)
+                for line in (run_dir / "trace" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("round.reused", [event["event_type"] for event in events])
+            self.assertEqual(RunStore.open(run_dir).read()["resume"]["follow_up_action"], "rits.train")
 
     def test_prepare_creates_state_and_dry_run_resume_is_non_mutating(self) -> None:
         with TemporaryDirectory() as temp:

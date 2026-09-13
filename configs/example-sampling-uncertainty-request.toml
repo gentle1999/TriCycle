@@ -1,0 +1,41 @@
+# The uncertainty columns are produced by an injected model-inference step.
+# The sampling plugin only consumes these values and does not load a model.
+strategy = "predictive-uncertainty"
+budget = 2
+seed = 42
+
+[[candidates]]
+candidate_id = "ene-001+diene-001"
+
+[candidates.payload]
+reaction_smiles = "A>>B"
+predictive_unc = 0.12
+epistemic_unc = 0.05
+aleatoric_unc = 0.07
+
+[[candidates]]
+candidate_id = "ene-001+diene-002"
+
+[candidates.payload]
+reaction_smiles = "C>>D"
+predictive_unc = 0.63
+epistemic_unc = 0.48
+aleatoric_unc = 0.15
+
+[[candidates]]
+candidate_id = "ene-002+diene-001"
+
+[candidates.payload]
+reaction_smiles = "E>>F"
+predictive_unc = 0.41
+epistemic_unc = 0.18
+aleatoric_unc = 0.23
+
+[[candidates]]
+candidate_id = "ene-002+diene-002"
+
+[candidates.payload]
+reaction_smiles = "G>>H"
+predictive_unc = 0.52
+epistemic_unc = 0.31
+aleatoric_unc = 0.21

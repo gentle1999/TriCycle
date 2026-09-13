@@ -156,10 +156,16 @@ tricycle-reactionopt ─> tricycle-rits ─> tricycle-bohr ─> tricycle-core
 | `tricycle.reaction-database` | 按批次导入计算日志、数据库筛选和训练数据导出 | `reaction-db.ingest`、`reaction-db.batch-import`、`reaction-db.filter`、`reaction-db.export-rits`、`reaction-db.export-rxnresid` | [`tricycle-reaction-db`](packages/tricycle-reaction-db/README.md) |
 | `tricycle.sar` | RxnResid 训练/微调/推理任务（兼容 sar.* 命名） | `sar.train`、`sar.finetune`、`sar.infer` | [`tricycle-sar`](packages/tricycle-sar/README.md) |
 | `tricycle.rits` | RitS 训练/微调/推理任务 | `rits.train`、`rits.finetune`、`rits.infer` | [`tricycle-rits`](packages/tricycle-rits/README.md) |
-| `tricycle.sampling` | 候选选择 | `candidate.select`；内置 `random` 和 `first-n` 策略 | [`tricycle-sampling`](packages/tricycle-sampling/README.md) |
+| `tricycle.sampling` | 候选选择 | `candidate.select`；内置随机、first-n 和三种 uncertainty 策略 | [`tricycle-sampling`](packages/tricycle-sampling/README.md) |
+| `tricycle.exploration` | 可复现探索轮次与快照迁移记录 | `exploration.round`；记录候选空间、采样轨迹、下一范围、RitS train/skip 和下一快照 replay key | [`tricycle-exploration`](packages/tricycle-exploration/README.md) |
 | `tricycle.reactionopt` | 生成版本化配置，以及独立构象/TS 分支的 mapped reaction profile | `reactionopt.generate`、`reactionopt.export`、`reactionopt.profile` | [`tricycle-reactionopt`](packages/tricycle-reactionopt/README.md) |
 
 公共契约和运行时基础设施见 [`tricycle-core`](packages/tricycle-core/README.md)。
+
+每次通过 CLI 执行的 run 会保存原始 `request.toml`、不可变 `plan.toml`/`plans/` 和
+`trace/events.jsonl`。探索轮次额外保存完整候选池、分数、排除/选择理由、下一空间策略、RitS
+train/skip 证据及输入到下一模型快照的 replay key；具体文件布局见
+[`tricycle-exploration`](packages/tricycle-exploration/README.md)。
 
 新的 Codex 发现入口位于 [`.agents/skills/`](.agents/skills/)，每个能力一个 `SKILL.md`。旧版 [`skills/`](skills/) 只作为兼容索引；开发契约见 [`docs/plugin-contract.md`](docs/plugin-contract.md)。
 

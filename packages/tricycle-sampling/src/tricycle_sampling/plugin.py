@@ -12,24 +12,41 @@ from tricycle_core import (
 from tricycle_core.errors import InvalidRequestError
 
 from .models import SamplingRequest, SamplingResult
-from .strategies import FirstNSamplingStrategy, RandomSamplingStrategy, SamplingStrategy
+from .strategies import (
+    STRATEGY_ALIASES,
+    AleatoricUncertaintySamplingStrategy,
+    EpistemicUncertaintySamplingStrategy,
+    FirstNSamplingStrategy,
+    PredictiveUncertaintySamplingStrategy,
+    RandomSamplingStrategy,
+    SamplingStrategy,
+    UncertaintySamplingStrategy,
+)
 
 
 class SamplingPlugin(PluginBase):
     _manifest = PluginManifest(
         plugin_id="tricycle.sampling",
         display_name="Sampling strategy",
-        version="0.1.0",
+        version="0.2.0",
         kind=PluginKind.SAMPLING,
-        description="Select the next reaction candidates using pluggable deterministic strategies.",
+        description=(
+            "Select the next reaction candidates with random, first-n, or uncertainty-aware "
+            "strategies."
+        ),
         capabilities=("candidate.validate", "candidate.select", "strategy.register"),
     )
 
     def __init__(self, strategies: tuple[SamplingStrategy, ...] = ()) -> None:
-        builtins = (RandomSamplingStrategy(), FirstNSamplingStrategy())
-        self._strategies: dict[str, SamplingStrategy] = {
-            strategy.name: strategy for strategy in builtins
-        }
+        self._strategies: dict[str, SamplingStrategy] = {}
+        for strategy in (
+            RandomSamplingStrategy(),
+            FirstNSamplingStrategy(),
+            PredictiveUncertaintySamplingStrategy(),
+            EpistemicUncertaintySamplingStrategy(),
+            AleatoricUncertaintySamplingStrategy(),
+        ):
+            self._strategies[strategy.name] = strategy
         for strategy in strategies:
             self.register_strategy(strategy)
 
@@ -42,6 +59,21 @@ class SamplingPlugin(PluginBase):
             raise InvalidRequestError(f"sampling strategy already registered: {strategy.name}")
         self._strategies[strategy.name] = strategy
 
+    @property
+    def strategies(self) -> tuple[str, ...]:
+        """Return canonical strategy names in registration order."""
+
+        return tuple(self._strategies)
+
+    def _resolve_strategy(self, name: str) -> SamplingStrategy:
+        try:
+            return self._strategies[name]
+        except KeyError:
+            canonical_name = STRATEGY_ALIASES.get(name)
+            if canonical_name is not None:
+                return self._strategies[canonical_name]
+            raise InvalidRequestError(f"unknown sampling strategy: {name}") from None
+
     def plan(
         self,
         operation: str,
@@ -53,24 +85,46 @@ class SamplingPlugin(PluginBase):
         return self.plan_select(SamplingRequest.from_mapping(request), context)
 
     def plan_select(self, request: SamplingRequest, context: ExecutionContext) -> TaskPlan:
+        strategy = self._resolve_strategy(request.strategy)
+        if isinstance(strategy, UncertaintySamplingStrategy):
+            strategy.validate(request.candidates, request.budget)
+
+        parameters: dict[str, Any] = {
+            "strategy": request.strategy,
+            "budget": request.budget,
+            "seed": request.seed,
+            "candidates": [candidate.to_dict() for candidate in request.candidates],
+        }
+        metadata: dict[str, Any] = {
+            "candidate_count": len(request.candidates),
+            "dry_run": context.dry_run,
+            "strategy_version": getattr(strategy, "version", self.manifest.version),
+        }
+        if isinstance(strategy, UncertaintySamplingStrategy):
+            parameters["score_field"] = strategy.score_key
+            parameters["candidate_scores"] = [
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "score": strategy.score(candidate),
+                }
+                for candidate in request.candidates
+            ]
+            metadata.update(
+                {
+                    "strategy_version": strategy.version,
+                    "selection": "highest-score",
+                }
+            )
         return TaskPlan(
             task_id=f"{context.run_id}/sampling/{request.strategy}",
             plugin_id=self.manifest.plugin_id,
             operation="select",
-            parameters={
-                "strategy": request.strategy,
-                "budget": request.budget,
-                "seed": request.seed,
-                "candidates": [candidate.to_dict() for candidate in request.candidates],
-            },
-            metadata={"candidate_count": len(request.candidates), "dry_run": context.dry_run},
+            parameters=parameters,
+            metadata=metadata,
         )
 
     def select(self, request: SamplingRequest) -> SamplingResult:
-        try:
-            strategy = self._strategies[request.strategy]
-        except KeyError as exc:
-            raise InvalidRequestError(f"unknown sampling strategy: {request.strategy}") from exc
+        strategy = self._resolve_strategy(request.strategy)
         selected = strategy.select(request.candidates, request.budget, request.seed)
         selected_ids = {candidate.candidate_id for candidate in selected}
         remaining = tuple(

@@ -1,6 +1,6 @@
 [project]
 name = "tricycle-sampling"
-version = "0.1.0"
+version = "0.2.0"
 description = "Candidate-space and sampling-strategy plugin for exploration loops."
 requires-python = ">=3.11"
 dependencies = ["tricycle-core"]
@@ -11,4 +11,3 @@ tricycle-core = { workspace = true }
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-

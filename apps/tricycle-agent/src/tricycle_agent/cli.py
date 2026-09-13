@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -12,8 +13,13 @@ from tricycle_core import (
     InvalidRequestError,
     RunStore,
     SideEffectLevel,
+    TaskPlan,
     TaskResult,
+    TraceStore,
+    canonical_json,
+    sha256_value,
 )
+from tricycle_core.toml import dump_toml
 
 from .bootstrap import create_capability_catalog, create_registry
 from .execution import CapabilityDispatcher
@@ -107,6 +113,71 @@ def _run_directory_from_result(result: TaskResult, fallback: Path) -> Path:
     return fallback.resolve()
 
 
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _persist_plan(run_dir: Path, plan: TaskPlan) -> tuple[Path, str]:
+    """Persist the exact plan used for execution without flattening its payload."""
+
+    plan_hash = sha256_value(plan.to_dict())
+    values = {
+        "schema": "tricycle.plan/v1",
+        "task_id": plan.task_id,
+        "plugin_id": plan.plugin_id,
+        "operation": plan.operation,
+        "plan_hash": plan_hash,
+        "inputs_json": canonical_json([artifact.to_dict() for artifact in plan.inputs]),
+        "parameters_json": canonical_json(plan.parameters),
+        "metadata_json": canonical_json(plan.metadata),
+    }
+    # Use the shared deterministic TOML writer to generate the immutable bytes
+    # before deciding whether an existing snapshot can be reused.
+    primary_path = run_dir / "plan.toml"
+    temporary = run_dir / ".plan.toml.candidate"
+    dump_toml(temporary, values)
+    expected = temporary.read_text(encoding="utf-8")
+    temporary.unlink()
+    if primary_path.is_file() and primary_path.read_text(encoding="utf-8") == expected:
+        return primary_path, plan_hash
+    if not primary_path.exists():
+        dump_toml(primary_path, values)
+        return primary_path, plan_hash
+
+    # A run can legitimately contain a preparation plan followed by a
+    # submission/status plan.  Keep the historical single-plan location for
+    # the first plan, and put additional immutable plans under ``plans/``.
+    safe_task_id = "".join(
+        character if character.isalnum() or character in {".", "-", "_"} else "-"
+        for character in plan.task_id
+    ).strip("-") or "task"
+    path = run_dir / "plans" / f"{safe_task_id}-{plan_hash[:16]}.toml"
+    if path.is_file():
+        if path.read_text(encoding="utf-8") != expected:
+            raise InvalidRequestError(f"execution plan is immutable and differs: {path}")
+    else:
+        dump_toml(path, values)
+    return path, plan_hash
+
+
+def _record_trace_summary(store: RunStore | None, trace: TraceStore | None) -> None:
+    if store is None or trace is None:
+        return
+    verification = trace.verify()
+    store.update(
+        trace={
+            "schema": "tricycle.trace/v1",
+            "path": str(trace.events_path.relative_to(store.run_dir)),
+            "last_seq": verification.last_seq,
+            "last_hash": verification.last_hash,
+        }
+    )
+
+
 def _failure_state(
     store: RunStore | None,
     *,
@@ -158,12 +229,18 @@ def _execute_capability(
         key = "out_dir" if capability_id in _PREPARATION_CAPABILITIES else "run_dir"
         effective_request[key] = str(run_dir)
     target_dir = requested_run_dir(effective_request, workdir, run_id)
+    if capability_id == "exploration.round":
+        effective_request.setdefault("run_dir", str(target_dir))
+        if reuse_existing:
+            effective_request["resume"] = True
 
     manifest = catalog.get(capability_id).manifest
     if live and manifest.side_effect is SideEffectLevel.DESTRUCTIVE and not confirm:
         raise InvalidRequestError(f"{capability_id} requires --confirm before a live execution")
 
     store: RunStore | None = None
+    trace: TraceStore | None = None
+    plan: TaskPlan | None = None
     try:
         if capability_id not in _PREPARATION_CAPABILITIES:
             if not reuse_existing and (target_dir / "run.toml").is_file():
@@ -178,6 +255,18 @@ def _execute_capability(
             )
             copy_request(request_path, store.run_dir)
             store.update(execution={"dry_run": dry_run})
+            trace = TraceStore(store.run_dir, run_id=run_id)
+            trace.emit(
+                "run.resumed" if reuse_existing else "run.started",
+                capability_id=capability_id,
+                payload={
+                    "run_dir": str(store.run_dir),
+                    "request_path": "request.toml",
+                    "request_sha256": _file_hash(store.run_dir / "request.toml"),
+                    "dry_run": dry_run,
+                },
+                status="started",
+            )
 
         dispatcher = CapabilityDispatcher(catalog)
         bohr_capability = capability_id.startswith(("bohr.", "sar.", "rits."))
@@ -186,14 +275,43 @@ def _execute_capability(
         if live and bohr_capability and manifest.requires_auth:
             dispatcher = dispatcher.with_bohr_cli(bohr_config)
 
+        planning_context = ExecutionContext(
+            run_id,
+            workdir,
+            dry_run,
+            trace_sink=trace,
+        )
+        plan = dispatcher.plan(capability_id, effective_request, planning_context)
+        if store is not None:
+            plan_path, plan_hash = _persist_plan(store.run_dir, plan)
+            if trace is not None:
+                trace.emit(
+                    "plan.created",
+                    capability_id=capability_id,
+                    task_id=plan.task_id,
+                    payload={
+                        "path": str(plan_path.relative_to(store.run_dir)),
+                        "plan_hash": plan_hash,
+                    },
+                    status="succeeded",
+                )
+                trace.emit(
+                    "capability.started",
+                    capability_id=capability_id,
+                    task_id=plan.task_id,
+                    payload={"plan_hash": plan_hash, "dry_run": dry_run},
+                    status="started",
+                )
+
         if capability_id in _PREPARATION_CAPABILITIES:
             # Staging requires an empty output directory, so run.toml is created
             # immediately after the local materialization succeeds.
             result = dispatcher.execute(
                 capability_id,
                 effective_request,
-                ExecutionContext(run_id, workdir, dry_run),
+                planning_context,
                 confirm=confirm,
+                planned=plan,
             )
             target_dir = _run_directory_from_result(result, target_dir)
             store = open_or_create(
@@ -202,18 +320,72 @@ def _execute_capability(
                 capability_id=capability_id,
                 dry_run=dry_run,
             )
+            copy_request(request_path, store.run_dir)
+            trace = TraceStore(store.run_dir, run_id=run_id)
+            trace.emit(
+                "run.started",
+                capability_id=capability_id,
+                payload={
+                    "run_dir": str(store.run_dir),
+                    "request_path": "request.toml",
+                    "request_sha256": _file_hash(store.run_dir / "request.toml"),
+                    "dry_run": dry_run,
+                },
+                status="started",
+            )
+            if plan is not None:
+                plan_path, plan_hash = _persist_plan(store.run_dir, plan)
+                trace.emit(
+                    "plan.created",
+                    capability_id=capability_id,
+                    task_id=plan.task_id,
+                    payload={
+                        "path": str(plan_path.relative_to(store.run_dir)),
+                        "plan_hash": plan_hash,
+                    },
+                    status="succeeded",
+                )
+                trace.emit(
+                    "capability.started",
+                    capability_id=capability_id,
+                    task_id=plan.task_id,
+                    payload={"plan_hash": plan_hash, "dry_run": dry_run},
+                    status="started",
+                )
         else:
             result = dispatcher.execute(
                 capability_id,
                 effective_request,
-                ExecutionContext(run_id, workdir, dry_run),
+                planning_context,
                 confirm=confirm,
+                planned=plan,
             )
 
+        if trace is not None:
+            trace.emit(
+                "capability.completed",
+                capability_id=capability_id,
+                task_id=result.task_id,
+                payload={"result": result.to_dict()},
+                status=result.status.value,
+            )
         copy_request(request_path, store.run_dir)
         record_result(store, capability_id, result)
+        _record_trace_summary(store, trace)
         return result, store
     except Exception as exc:
+        if trace is not None:
+            try:
+                trace.emit(
+                    "capability.failed",
+                    capability_id=capability_id,
+                    task_id=plan.task_id if plan is not None else None,
+                    payload={"error_type": type(exc).__name__, "error": str(exc)},
+                    status="failed",
+                )
+                _record_trace_summary(store, trace)
+            except Exception:
+                pass
         _failure_state(
             store,
             capability_id=capability_id,
@@ -321,7 +493,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_command(args, create_capability_catalog())
 
     if args.command == "inspect":
-        _json(RunStore.open(args.run_dir).read(), indent=2)
+        store = RunStore.open(args.run_dir)
+        state = store.read()
+        run_section = state.get("run", {})
+        trace_path = store.run_dir / "trace" / "events.jsonl"
+        if isinstance(run_section, dict) and trace_path.is_file():
+            trace = TraceStore(store.run_dir, run_id=str(run_section.get("id", "")))
+            state["trace_verification"] = trace.verify().to_dict()
+        _json(state, indent=2)
         return 0
 
     if args.command == "resume":

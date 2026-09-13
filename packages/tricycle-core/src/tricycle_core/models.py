@@ -4,9 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .errors import InvalidRequestError
+
+if TYPE_CHECKING:
+    from .trace import TraceSink
 
 
 class PluginKind(StrEnum):
@@ -17,6 +20,7 @@ class PluginKind(StrEnum):
     RITS = "rits"
     SAMPLING = "sampling"
     REACTIONOPT = "reactionopt"
+    EXPLORATION = "exploration"
 
 
 class TaskStatus(StrEnum):
@@ -92,6 +96,7 @@ class ExecutionContext:
     workdir: Path = Path(".")
     dry_run: bool = True
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    trace_sink: TraceSink | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():

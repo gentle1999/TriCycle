@@ -14,6 +14,7 @@
 | `capabilities` | `CapabilityManifest`、`CapabilityBinding`、`CapabilityCatalog`，用于声明、校验和分发能力 |
 | `plugin` / `registry` | `PluginBase`、`PluginRegistry` 以及旧 `Plugin` 名称的兼容入口 |
 | `run_store` | 以 `run.toml` 保存可审计、可恢复的运行状态 |
+| `trace` | 以 hash-chain JSONL 保存 append-only 执行事件，并提供校验和大 payload 引用 |
 | `toml` / `env` | 受限 TOML 读写、原子文件更新和 `.env` 查找/加载辅助函数 |
 | `errors` | 输入错误、集成未配置、运行状态和 artifact 错误 |
 
@@ -34,8 +35,13 @@ flowchart LR
 - `PluginManifest` 描述组件身份、版本、类型、能力和依赖。
 - `TaskPlan` 是 JSON-safe 的执行计划，记录 task ID、输入 artifact、参数和元数据。
 - `TaskResult` 记录 `planned`、`submitted`、`running`、`succeeded`、`failed` 等结果状态以及输出 artifact。
-- `ExecutionContext` 携带 `run_id`、工作目录、`dry_run` 和运行元数据。
+- `ExecutionContext` 携带 `run_id`、工作目录、`dry_run`、运行元数据和可注入的 `TraceSink`。
 - `Artifact` 用统一格式表示文件、目录、checkpoint、结构数据和远程任务结果。
+
+`TraceStore` 将事件写入 `<run_dir>/trace/events.jsonl`，每一行包含序号、前一事件 hash 和自身
+hash，并在追加时使用进程间文件锁。`verify()` 可在审计或恢复前检查序号连续性、run ID 和
+整条 hash 链；事件 payload 只允许 JSON-safe 值，较大的内容可通过 `write_payload()` 保存为
+带 SHA-256 的引用。
 
 ## Plugin 与 capability
 

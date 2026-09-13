@@ -1,6 +1,7 @@
 from tricycle_bohr import BohrComputePlugin
 from tricycle_bohrsubmit import BohrSubmitPlugin
 from tricycle_core import CapabilityCatalog, PluginRegistry
+from tricycle_exploration import ExplorationPlugin
 from tricycle_reaction_db import ReactionDatabasePlugin
 from tricycle_reactionopt import ReactionOptPlugin
 from tricycle_rits import RitsPlugin
@@ -18,6 +19,7 @@ def create_registry() -> PluginRegistry:
         RitsPlugin(),
         SamplingPlugin(),
         ReactionOptPlugin(),
+        ExplorationPlugin(),
     ):
         registry.register(plugin)
     return registry

@@ -1,13 +1,39 @@
 from .models import Candidate, SamplingRequest, SamplingResult
 from .plugin import SamplingPlugin
-from .strategies import FirstNSamplingStrategy, RandomSamplingStrategy, SamplingStrategy
+from .strategies import (
+    STRATEGY_ALIASES,
+    UNCERTAINTY_SCORE_KEYS,
+    AleatoricUncertaintySamplingStrategy,
+    EpistemicUncertaintySamplingStrategy,
+    FirstNSamplingStrategy,
+    PredictiveUncertaintySamplingStrategy,
+    RandomSamplingStrategy,
+    SamplingStrategy,
+    UncertaintySamplingStrategy,
+    UncertaintyScores,
+    binary_entropy,
+    decompose_binary_uncertainty,
+    get_uncertainty_score,
+    get_uncertainty_scores,
+)
 
 __all__ = [
     "Candidate",
+    "AleatoricUncertaintySamplingStrategy",
+    "EpistemicUncertaintySamplingStrategy",
     "FirstNSamplingStrategy",
+    "PredictiveUncertaintySamplingStrategy",
     "RandomSamplingStrategy",
+    "STRATEGY_ALIASES",
     "SamplingPlugin",
     "SamplingRequest",
     "SamplingResult",
     "SamplingStrategy",
+    "UNCERTAINTY_SCORE_KEYS",
+    "UncertaintyScores",
+    "UncertaintySamplingStrategy",
+    "binary_entropy",
+    "decompose_binary_uncertainty",
+    "get_uncertainty_score",
+    "get_uncertainty_scores",
 ]

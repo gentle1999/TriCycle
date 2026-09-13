@@ -97,11 +97,36 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
     _definition(
         "candidate.select",
         "Select reaction candidates",
-        "Select the next reaction candidates with a registered deterministic sampling strategy.",
+        "Select the next reaction candidates with random, first-n, or uncertainty-aware strategies.",
         component_id="tricycle.sampling",
         operation="select",
         input_kind="sampling.request",
         outputs=("selected-candidates", "remaining-candidates"),
+    ),
+    _definition(
+        "exploration.round",
+        "Record an exploration round",
+        (
+            "Materialize the complete candidate pool, model scores, selection decisions, "
+            "next-space policy, and the RitS train-or-skip decision for one round."
+        ),
+        component_id="tricycle.exploration",
+        operation="round",
+        input_kind="exploration.round.request",
+        outputs=(
+            "round.toml",
+            "space.toml",
+            "candidate-pool.tsv",
+            "model-scores.tsv",
+            "selection-decisions.tsv",
+            "selected-candidates.tsv",
+            "range-decision.toml",
+            "training-decision.toml",
+            "snapshot-transition.toml",
+            "artifacts/manifest.toml",
+        ),
+        side_effect=SideEffectLevel.LOCAL_WRITE,
+        resumable=True,
     ),
     _definition(
         "bohr.compute.plan",

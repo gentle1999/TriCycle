@@ -115,6 +115,7 @@ flowchart TB
 reactionopt.generate
 reactionopt.export
 candidate.select
+exploration.round
 bohr.compute.plan
 bohr.compute.submit
 bohr.batch.prepare
@@ -144,6 +145,7 @@ rits.infer
 | --- | --- | --- |
 | ReactionOpt component | `reactionopt.generate`、`reactionopt.export`、`reactionopt.profile` | `tricycle-reactionopt` |
 | Sampling component | `candidate.select` | `tricycle-sampling` |
+| Exploration component | `exploration.round`；候选空间、严格采样轨迹、范围决策、RitS gate 和快照迁移 | `tricycle-exploration` |
 | Bohr compute component | 通用 Bohr job 规划、提交、状态和下载；单任务模型 job 基础层 | `tricycle-bohr` |
 | Bohr workflow component | `bohr.batch.*`、`dpa-berny.*` | `tricycle-bohrsubmit` |
 | Reaction DB component | `reaction-db.ingest` | `tricycle-reaction-db` |
@@ -526,6 +528,8 @@ Bohr CLI 自身使用何种语言不影响该设计，因为 `BohrCliGateway` �
 - 为 Bohr 提交、状态查询、下载和 rescue 增加 `next_action`；Bohr adapter 继续负责提交去重和公开 ID 解析；
 - 将重复提交、断点恢复和失败重试覆盖到测试；
 - 保留现有 `batch.toml` 和 TSV 文件作为领域配置/报告。
+- 为探索轮次写入全量候选池、模型分数、范围和 RitS 训练决定，并以 hash-chain trace 和
+  snapshot replay key 连接跨轮快照。
 
 ### 阶段 4：跨语言 runner
 
@@ -553,7 +557,8 @@ Bohr CLI 自身使用何种语言不影响该设计，因为 `BohrCliGateway` �
 基础重构已经完成。下一步应围绕真实平台验证和可观测性逐步增强：
 
 1. 在真实 Bohr 账号和测试项目上验证新版 CLI 的状态字段、下载目录和权限策略；
-2. 将外部 adapter 的调用历史写入可追加的审计 artifact，并补充跨进程锁；
+2. 将外部 adapter 的细粒度调用历史（请求摘要、重试、远端 ID 和响应摘要）接入现有
+   `trace/events.jsonl`，并补充 adapter 级跨进程锁；
 3. 对 `run.toml` 增加 schema 迁移器和能力 manifest 一致性检查；
 4. 只有在组件确实需要 Node 生态时，再增加 TypeScript runner，并通过稳定 adapter 接入。
 
