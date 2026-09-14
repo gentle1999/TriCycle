@@ -19,6 +19,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from http.client import IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -403,6 +404,13 @@ class _McpTransport:
                 raise ReactionDatabaseMcpError(
                     f"database MCP HTTP {exc.code}{suffix}",
                     status_code=exc.code,
+                ) from exc
+            except (IncompleteRead, RemoteDisconnected, ConnectionResetError) as exc:
+                if attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
+                raise ReactionDatabaseMcpError(
+                    f"database MCP response was interrupted: {exc}"
                 ) from exc
             except (URLError, TimeoutError, OSError) as exc:
                 raise ReactionDatabaseMcpError(f"database MCP request failed: {exc}") from exc
