@@ -563,43 +563,61 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         self._transport.ensure_tool("create_project")
         self._transport.ensure_tool("upload_calculation_log")
         idempotency_key = request.resolved_idempotency_key(manifest)
-        project = self._transport.call_tool(
-            "create_project",
-            {
-                "organization_id": organization_id,
-                "slug": request.project.slug,
-                "name": request.project.name,
-                "data_source": {
-                    "adapter": "tricycle-reaction-db.mcp",
-                    "idempotency_key": idempotency_key,
-                    "source": request.source,
-                    "batch_id": manifest.batch_id,
-                    "manifest_digest": manifest.manifest_digest,
-                    "archive_sha256": archive_sha256,
-                    "batch_metadata": dict(manifest.metadata),
-                    "request_metadata": dict(request.metadata),
-                    "file_transfer": "mcp.upload_calculation_log.base64",
-                    "file_count": len(upload_files),
-                    "total_bytes": manifest.total_bytes,
-                },
-                "calculation_protocol": {
-                    "source": request.source,
-                    "batch_id": manifest.batch_id,
-                    "provenance": dict(request.provenance),
-                    "metadata": dict(request.metadata),
-                },
+        create_arguments = {
+            "organization_id": organization_id,
+            "slug": request.project.slug,
+            "name": request.project.name,
+            "data_source": {
+                "adapter": "tricycle-reaction-db.mcp",
+                "idempotency_key": idempotency_key,
+                "source": request.source,
+                "batch_id": manifest.batch_id,
+                "manifest_digest": manifest.manifest_digest,
+                "archive_sha256": archive_sha256,
+                "batch_metadata": dict(manifest.metadata),
+                "request_metadata": dict(request.metadata),
+                "file_transfer": "mcp.upload_calculation_log.base64",
+                "file_count": len(upload_files),
+                "total_bytes": manifest.total_bytes,
             },
-        )
+            "calculation_protocol": {
+                "source": request.source,
+                "batch_id": manifest.batch_id,
+                "provenance": dict(request.provenance),
+                "metadata": dict(request.metadata),
+            },
+        }
+        reused_project = False
+        try:
+            project = self._transport.call_tool("create_project", create_arguments)
+        except ReactionDatabaseMcpError as exc:
+            if exc.code != "conflict":
+                raise
+            project = self._find_resumable_project(
+                organization_id=organization_id,
+                slug=request.project.slug,
+                idempotency_key=idempotency_key,
+            )
+            reused_project = True
         project_id = self._required_identifier(project, "project", ("project_id", "id"))
 
-        accepted_count = 0
+        existing_keys: set[tuple[str, int]] = set()
+        if reused_project:
+            existing_keys = self._list_existing_artifact_keys(project_id)
+        upload_files_to_submit = [
+            upload_file
+            for upload_file in upload_files
+            if (upload_file.file_sha256, upload_file.size_bytes) not in existing_keys
+        ]
+        existing_count = len(upload_files) - len(upload_files_to_submit)
+        accepted_count = existing_count
         failed_count = 0
         uploaded_count = 0
         queue_item_status_counts: dict[str, int] = {}
         queue_batch_status_counts: dict[str, int] = {}
         queue_submissions: list[dict[str, str]] = []
         errors: list[str] = []
-        for upload_file in upload_files:
+        for upload_file in upload_files_to_submit:
             try:
                 payload = self._read_file_payload(upload_file)
                 result = self._transport.call_tool(
@@ -686,6 +704,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             "manifest_digest": manifest.manifest_digest,
             "archive_sha256": archive_sha256,
             "total_count": len(manifest.files),
+            "existing_count": existing_count,
             "uploaded_count": uploaded_count,
             "accepted_count": accepted_count,
             "failed_count": failed_count,
@@ -694,6 +713,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             "queue_batch_status_counts": queue_batch_status_counts,
             "queue_submissions": queue_submissions,
             "parse_completion": "not_waited",
+            "project_reused": reused_project,
         }
         if errors:
             metadata["errors"] = errors[:20]
@@ -706,6 +726,81 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             cleaned_reaction_count=None,
             metadata=metadata,
         )
+
+    def _find_resumable_project(
+        self,
+        *,
+        organization_id: str,
+        slug: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        self._transport.ensure_tool("list_projects")
+        result = self._transport.call_tool(
+            "list_projects",
+            {"organization_id": organization_id, "include_archived": False},
+        )
+        raw_projects = result.get("data") if isinstance(result, Mapping) else None
+        if not isinstance(raw_projects, list):
+            raw_projects = result.get("projects") if isinstance(result, Mapping) else None
+        for project in raw_projects if isinstance(raw_projects, list) else ():
+            if not isinstance(project, Mapping) or str(project.get("slug", "")).strip() != slug:
+                continue
+            if str(project.get("organization_id", "")).strip() != organization_id:
+                continue
+            data_source = project.get("data_source")
+            existing_key = (
+                str(data_source.get("idempotency_key", "")).strip()
+                if isinstance(data_source, Mapping)
+                else ""
+            )
+            if existing_key != idempotency_key:
+                raise ReactionDatabaseMcpError(
+                    f"project slug {slug!r} already belongs to a different import",
+                    code="conflict",
+                    tool_name="list_projects",
+                )
+            return project
+        raise ReactionDatabaseMcpError(
+            f"project slug {slug!r} conflicted but could not be found for resume",
+            code="conflict",
+            tool_name="list_projects",
+        )
+
+    def _list_existing_artifact_keys(self, project_id: str) -> set[tuple[str, int]]:
+        self._transport.ensure_tool("compose_query")
+        keys: set[tuple[str, int]] = set()
+        offset = 0
+        while True:
+            query = (
+                "{ ArtifactQueryService { list_artifacts("
+                f"project_id: {json.dumps(project_id)} "
+                f"limit: {self.config.page_size} offset: {offset}"
+                ") { items { content_sha256 size_bytes } "
+                "page { total limit offset } } } }"
+            )
+            data = self._transport.compose_query(self.config.app_name, query)
+            page_result = self._service_method(
+                data,
+                "ArtifactQueryService",
+                "list_artifacts",
+            )
+            items = page_result.get("items")
+            if not isinstance(items, list):
+                raise ReactionDatabaseMcpError(
+                    "MCP ArtifactQueryService.list_artifacts returned no items"
+                )
+            for item in items:
+                if not isinstance(item, Mapping):
+                    continue
+                content_sha256 = str(item.get("content_sha256", "")).strip().casefold()
+                size_bytes = self._nonnegative_int(item.get("size_bytes"))
+                if content_sha256 and len(content_sha256) == 64:
+                    keys.add((content_sha256, size_bytes))
+            page = page_result.get("page")
+            total = self._nonnegative_int(page.get("total")) if isinstance(page, Mapping) else 0
+            offset += len(items)
+            if not items or len(items) < self.config.page_size or (total and offset >= total):
+                return keys
 
     def filter_cleaned_reactions(self, request: ReactionFilterRequest) -> ReactionFilterReceipt:
         query = self._mapped_reaction_list_query(
