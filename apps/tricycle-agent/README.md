@@ -60,10 +60,9 @@ uv run --package tricycle-agent tricycle-agent run \
 Reaction DB 的 live capability 会在执行阶段自动注入
 `McpReactionDatabaseAdapter`。配置数据库的 Streamable HTTP MCP 地址
 `TRICYCLE_REACTION_DB_MCP_URL`、MCP Token `TRICYCLE_REACTION_DB_MCP_TOKEN`、
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID`，以及数据库服务可见的暂存目录
-`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入只
-发送 manifest，数据库服务从暂存目录读取日志字节。默认启用 TLS 校验，内部 CA 使用
-`TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入通过
+`upload_calculation_log` 逐文件以 Base64 发送日志字节，并携带相对路径、SHA-256 和大小；不
+使用共享目录。默认启用 TLS 校验，内部 CA 使用 `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
 
 ### 查看和恢复
 

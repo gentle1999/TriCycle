@@ -24,11 +24,12 @@ uv run --package tricycle-agent tricycle-agent plan reaction-db.batch-import req
 `--live` 执行阶段从环境变量组合并注入它。默认路径不读数据库凭据、不访问网络、不创建
 project。两批数据应使用两份请求，分别获得两个内部 `project_id`。
 
-MCP live 配置至少需要 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID` 和数据库服务可见的
-`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`。MCP manifest 只携带暂存路径、文件哈希和大小，文件
-字节不会经过 MCP；数据库 MCP job 默认等待完成，`TRICYCLE_REACTION_DB_MCP_WAIT_TIMEOUT_SECONDS`
-到期时保留远端 `import_job_id` 和状态，后续可继续处理。TLS 校验默认开启。
+MCP live 配置至少需要 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN` 和
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`。仓库提供的 MCP adapter 先创建 project，再对每个选中
+的 `.log` 调用 `upload_calculation_log`，用标准 Base64 传输文件字节，并携带相对路径、文件
+SHA-256 和大小；同机部署也不得改用共享目录或路径 manifest。数据库返回的
+`ingestion_status` 是文件是否成功解析的依据，receipt 会保留上传/解析统计和失败样本。TLS
+校验默认开启。
 
 实现入口：`packages/tricycle-reaction-db/src/tricycle_reaction_db/models.py`、`plugin.py`、
 `mcp_adapter.py`。

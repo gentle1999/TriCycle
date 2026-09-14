@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
 import unittest
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +16,7 @@ from tricycle_reaction_db import (
     McpReactionDatabaseAdapter,
     ReactionBatchImportRequest,
     ReactionDatabaseMcpConfig,
+    ReactionDatabaseMcpError,
     ReactionDatabaseProjectSpec,
     ReactionFilterRequest,
     RitsDatasetExportRequest,
@@ -25,9 +28,9 @@ from tricycle_reaction_db import (
 class _McpState:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
-        self.status_calls = 0
         self.project_id = "project-001"
-        self.import_job_id = "import-001"
+        self.include_upload_tool = True
+        self.fail_upload_filenames: set[str] = set()
 
 
 class _McpHandler(BaseHTTPRequestHandler):
@@ -70,10 +73,9 @@ class _McpHandler(BaseHTTPRequestHandler):
             names = {
                 "compose_query",
                 "create_project",
-                "register_import_manifest",
-                "start_import_job",
-                "get_import_status",
             }
+            if self.state.include_upload_tool:
+                names.add("upload_calculation_log")
             self._respond(
                 {
                     "jsonrpc": "2.0",
@@ -111,30 +113,37 @@ class _McpHandler(BaseHTTPRequestHandler):
             return
         if name == "create_project":
             data: object = {"id": self.state.project_id}
-        elif name == "register_import_manifest":
-            manifest = arguments["manifest"]
-            assert isinstance(manifest, dict)
-            assert set(manifest) == {"archive_sha256", "entries"}
-            entries = manifest["entries"]
-            assert isinstance(entries, list) and len(entries) == 2
-            assert all("file_sha256" in entry for entry in entries)
-            assert all("staged_file_path" in entry for entry in entries)
-            data = {"import_job_id": self.state.import_job_id}
-        elif name == "start_import_job":
-            data = {"status": "processing", "import_job_id": self.state.import_job_id}
-        elif name == "get_import_status":
-            self.state.status_calls += 1
-            data = (
-                {"status": "processing"}
-                if self.state.status_calls == 1
-                else {
-                    "status": "succeeded",
-                    "total_count": 2,
-                    "succeeded_count": 2,
-                    "failed_count": 0,
-                    "inferred_reaction_count": 1,
-                }
-            )
+        elif name == "upload_calculation_log":
+            filename = arguments["filename"]
+            assert isinstance(filename, str)
+            if filename in self.state.fail_upload_filenames:
+                self._respond(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "isError": True,
+                            "content": [{"type": "text", "text": "file rejected"}],
+                        },
+                    }
+                )
+                return
+            content_base64 = arguments["content_base64"]
+            assert isinstance(content_base64, str)
+            payload = base64.b64decode(content_base64, validate=True)
+            expected_size = arguments["expected_size_bytes"]
+            expected_sha256 = arguments["expected_sha256"]
+            assert expected_size == len(payload)
+            assert expected_sha256 == sha256(payload).hexdigest()
+            assert arguments["media_type"] == "text/plain"
+            assert isinstance(arguments["relative_path"], str)
+            data = {
+                "artifact_id": f"artifact-{filename}",
+                "storage_status": "available",
+                "ingestion_status": "succeeded",
+                "inferred_reaction_count": 1 if filename == "a.log" else 0,
+                "inferences": [],
+            }
         elif name == "compose_query":
             query = str(arguments["query"])
             if "list_mapped_reactions" in query:
@@ -250,7 +259,8 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.state.requests.clear()
-        self.state.status_calls = 0
+        self.state.include_upload_tool = True
+        self.state.fail_upload_filenames.clear()
 
     def _request(self, root: Path) -> ReactionBatchImportRequest:
         return ReactionBatchImportRequest(
@@ -265,20 +275,16 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         )
 
     def _adapter(self, **kwargs: object) -> McpReactionDatabaseAdapter:
-        staging_root = kwargs.pop("staging_root", "/srv/tricycle-stage")
         return McpReactionDatabaseAdapter(
             ReactionDatabaseMcpConfig(
                 self.base_url,
                 "test-token",
                 organization_id="organization-001",
-                staging_root=staging_root,
-                poll_interval_seconds=0.001,
-                wait_timeout_seconds=2,
                 **kwargs,
             )
         )
 
-    def test_import_uses_mcp_manifest_tools_without_sending_file_bytes(self) -> None:
+    def test_import_uploads_each_file_bytes_through_mcp(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)
             logs = root / "downloads" / "worker-000"
@@ -306,24 +312,43 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             tool_calls,
             [
                 "create_project",
-                "register_import_manifest",
-                "start_import_job",
-                "get_import_status",
-                "get_import_status",
+                "upload_calculation_log",
+                "upload_calculation_log",
             ],
         )
-        self.assertFalse(any("multipart" in json.dumps(item).casefold() for item in self.state.requests))
-        register = next(
+        self.assertFalse(any("staged_file_path" in json.dumps(item) for item in self.state.requests))
+        upload_calls = [
             item
             for item in self.state.requests
             if item.get("method") == "tools/call"
-            and item["params"]["name"] == "register_import_manifest"
+            and item["params"]["name"] == "upload_calculation_log"
+        ]
+        self.assertEqual(len(upload_calls), 2)
+        first_upload = upload_calls[0]
+        arguments = first_upload["params"]["arguments"]
+        assert isinstance(arguments, dict)
+        self.assertEqual(arguments["filename"], "a.log")
+        self.assertEqual(arguments["relative_path"], "downloads/worker-000/a.log")
+        self.assertEqual(
+            base64.b64decode(arguments["content_base64"], validate=True),
+            b"Gaussian A\n",
         )
-        entries = register["params"]["arguments"]["manifest"]["entries"]
-        self.assertTrue(all(entry["staged_file_path"].startswith("/srv/tricycle-stage/") for entry in entries))
-        self.assertTrue(all(entry["is_gaussian_log"] for entry in entries))
+        self.assertEqual(receipt.metadata["file_transfer"], "base64-per-file")
+        self.assertNotIn("staging_root", receipt.metadata)
+        create = next(
+            item
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+            and item["params"]["name"] == "create_project"
+        )
+        create_arguments = create["params"]["arguments"]
+        assert isinstance(create_arguments, dict)
+        self.assertEqual(
+            create_arguments["data_source"]["file_transfer"],
+            "mcp.upload_calculation_log.base64",
+        )
 
-    def test_import_requires_staging_root_and_organization_before_network_mutation(self) -> None:
+    def test_import_requires_organization_before_network_mutation(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)
             logs = root / "downloads"
@@ -333,14 +358,54 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             manifest = request.resolve_batch()
 
             with self.assertRaises(IntegrationNotConfiguredError):
-                self._adapter(staging_root=None).ingest_calculation_logs(request, manifest)
-            self.assertEqual(self.state.requests, [])
-
-            with self.assertRaises(IntegrationNotConfiguredError):
                 McpReactionDatabaseAdapter(
-                    ReactionDatabaseMcpConfig(self.base_url, "test-token", staging_root="/stage")
+                    ReactionDatabaseMcpConfig(self.base_url, "test-token")
                 ).ingest_calculation_logs(request, manifest)
             self.assertEqual(self.state.requests, [])
+
+    def test_import_requires_upload_tool_before_project_creation(self) -> None:
+        self.state.include_upload_tool = False
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            logs = root / "downloads"
+            logs.mkdir()
+            (logs / "one.log").write_text("Gaussian\n", encoding="utf-8")
+            request = self._request(root)
+
+            with self.assertRaisesRegex(ReactionDatabaseMcpError, "upload_calculation_log"):
+                self._adapter().ingest_calculation_logs(request, request.resolve_batch())
+
+        tool_calls = [
+            item["params"]["name"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+        ]
+        self.assertEqual(tool_calls, [])
+
+    def test_import_continues_after_one_file_upload_error(self) -> None:
+        self.state.fail_upload_filenames.add("b.log")
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            logs = root / "downloads"
+            logs.mkdir()
+            (logs / "a.log").write_text("Gaussian A\n", encoding="utf-8")
+            (logs / "b.log").write_text("Gaussian B\n", encoding="utf-8")
+            request = self._request(root)
+
+            receipt = self._adapter().ingest_calculation_logs(request, request.resolve_batch())
+
+        self.assertEqual(receipt.status, "failed")
+        self.assertEqual(receipt.accepted_log_count, 1)
+        self.assertEqual(receipt.failed_log_count, 1)
+        self.assertEqual(receipt.metadata["uploaded_count"], 1)
+        self.assertEqual(receipt.metadata["error_count"], 1)
+        uploaded_names = [
+            item["params"]["arguments"]["filename"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+            and item["params"]["name"] == "upload_calculation_log"
+        ]
+        self.assertEqual(uploaded_names, ["a.log", "b.log"])
 
     def test_filter_and_exports_use_mcp_compose_query(self) -> None:
         adapter = self._adapter()

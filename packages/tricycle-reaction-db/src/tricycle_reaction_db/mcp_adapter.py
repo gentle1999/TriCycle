@@ -2,20 +2,19 @@
 
 The database exposes a Streamable HTTP MCP endpoint.  This module contains a
 small synchronous MCP client so the domain package can keep its existing
-``ReactionDatabaseAdapter`` boundary without depending on a vendor SDK.  File
-bytes intentionally never cross MCP: the import tool consumes an operator-
-staged manifest whose paths are visible to the database service.
+``ReactionDatabaseAdapter`` boundary without depending on a vendor SDK.  Every
+calculation log is uploaded through the database's file-upload MCP tool; the
+adapter never relies on a shared filesystem between the agent and database.
 """
 
 from __future__ import annotations
 
+import base64
 import csv
 import json
 import os
-import posixpath
 import ssl
 import tempfile
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -49,10 +48,7 @@ from .repository import (
 
 _MCP_PROTOCOL_VERSION = "2025-03-26"
 _DEFAULT_APP_NAME = "example-chemistry-database"
-_MANIFEST_SCHEMA_VERSION = "tricycle.calculation-log-manifest/v1"
-_TERMINAL_IMPORT_STATUSES = frozenset(
-    {"completed", "complete", "succeeded", "success", "partial", "failed", "cancelled"}
-)
+_SUCCESSFUL_INGESTION_STATUSES = frozenset({"succeeded", "success", "completed", "complete"})
 _MCP_ENV_KEYS = frozenset(
     {
         "TRICYCLE_REACTION_DB_MCP_URL",
@@ -61,20 +57,12 @@ _MCP_ENV_KEYS = frozenset(
         "TRICYCLE_REACTION_DB_TOKEN",
         "TRICYCLE_REACTION_DB_ORGANIZATION_ID",
         "TRICYCLE_REACTION_DB_MCP_APP_NAME",
-        "TRICYCLE_REACTION_DB_MCP_STAGING_ROOT",
-        "TRICYCLE_REACTION_DB_STAGING_ROOT",
         "TRICYCLE_REACTION_DB_MCP_VERIFY_TLS",
         "TRICYCLE_REACTION_DB_VERIFY_TLS",
         "TRICYCLE_REACTION_DB_MCP_CA_BUNDLE",
         "TRICYCLE_REACTION_DB_CA_BUNDLE",
         "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS",
         "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS",
-        "TRICYCLE_REACTION_DB_MCP_WAIT_FOR_COMPLETION",
-        "TRICYCLE_REACTION_DB_WAIT_FOR_COMPLETION",
-        "TRICYCLE_REACTION_DB_MCP_POLL_INTERVAL_SECONDS",
-        "TRICYCLE_REACTION_DB_POLL_INTERVAL_SECONDS",
-        "TRICYCLE_REACTION_DB_MCP_WAIT_TIMEOUT_SECONDS",
-        "TRICYCLE_REACTION_DB_WAIT_TIMEOUT_SECONDS",
         "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE",
     }
 )
@@ -135,22 +123,17 @@ def _env_int(values: Mapping[str, str], name: str, default: int) -> int:
 class ReactionDatabaseMcpConfig:
     """Runtime settings for :class:`McpReactionDatabaseAdapter`.
 
-    ``staging_root`` is a path in the database service's filesystem, not
-    necessarily a path in this process.  The operator must make the selected
-    log files available there before invoking a live import.
+    Calculation-log bytes are transferred through MCP.  No path in the
+    database service's filesystem is part of this configuration.
     """
 
     endpoint_url: str
     token: str
     organization_id: str | None = None
     app_name: str = _DEFAULT_APP_NAME
-    staging_root: str | None = None
     verify_tls: bool = True
     ca_bundle: Path | None = None
     timeout_seconds: float = 60.0
-    wait_for_completion: bool = True
-    poll_interval_seconds: float = 5.0
-    wait_timeout_seconds: float = 3600.0
     page_size: int = 200
 
     def __post_init__(self) -> None:
@@ -176,15 +159,8 @@ class ReactionDatabaseMcpConfig:
         organization_id = self.organization_id
         if organization_id is not None:
             organization_id = str(organization_id).strip() or None
-        staging_root = self.staging_root
-        if staging_root is not None:
-            staging_root = str(staging_root).strip().rstrip("/") or None
         if self.timeout_seconds <= 0:
             raise InvalidRequestError("timeout_seconds must be positive")
-        if self.poll_interval_seconds <= 0:
-            raise InvalidRequestError("poll_interval_seconds must be positive")
-        if self.wait_timeout_seconds <= 0:
-            raise InvalidRequestError("wait_timeout_seconds must be positive")
         if not 1 <= self.page_size <= 200:
             raise InvalidRequestError("page_size must be between 1 and 200")
         ca_bundle = self.ca_bundle
@@ -196,7 +172,6 @@ class ReactionDatabaseMcpConfig:
         object.__setattr__(self, "token", token)
         object.__setattr__(self, "organization_id", organization_id)
         object.__setattr__(self, "app_name", app_name)
-        object.__setattr__(self, "staging_root", staging_root)
         object.__setattr__(self, "ca_bundle", ca_bundle)
 
     @classmethod
@@ -235,10 +210,6 @@ class ReactionDatabaseMcpConfig:
             token=token,
             organization_id=values.get("TRICYCLE_REACTION_DB_ORGANIZATION_ID"),
             app_name=values.get("TRICYCLE_REACTION_DB_MCP_APP_NAME", _DEFAULT_APP_NAME),
-            staging_root=(
-                values.get("TRICYCLE_REACTION_DB_MCP_STAGING_ROOT")
-                or values.get("TRICYCLE_REACTION_DB_STAGING_ROOT")
-            ),
             verify_tls=_env_bool(
                 values,
                 "TRICYCLE_REACTION_DB_MCP_VERIFY_TLS",
@@ -249,21 +220,6 @@ class ReactionDatabaseMcpConfig:
                 values,
                 "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS",
                 _env_float(values, "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS", 60.0),
-            ),
-            wait_for_completion=_env_bool(
-                values,
-                "TRICYCLE_REACTION_DB_MCP_WAIT_FOR_COMPLETION",
-                _env_bool(values, "TRICYCLE_REACTION_DB_WAIT_FOR_COMPLETION", True),
-            ),
-            poll_interval_seconds=_env_float(
-                values,
-                "TRICYCLE_REACTION_DB_MCP_POLL_INTERVAL_SECONDS",
-                _env_float(values, "TRICYCLE_REACTION_DB_POLL_INTERVAL_SECONDS", 5.0),
-            ),
-            wait_timeout_seconds=_env_float(
-                values,
-                "TRICYCLE_REACTION_DB_MCP_WAIT_TIMEOUT_SECONDS",
-                _env_float(values, "TRICYCLE_REACTION_DB_WAIT_TIMEOUT_SECONDS", 3600.0),
             ),
             page_size=_env_int(values, "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE", 200),
         )
@@ -288,13 +244,7 @@ class _McpTransport:
         self._tool_names: frozenset[str] | None = None
 
     def call_tool(self, name: str, arguments: Mapping[str, object]) -> Mapping[str, Any]:
-        self._ensure_initialized()
-        if self._tool_names is not None and name not in self._tool_names:
-            raise ReactionDatabaseMcpError(
-                f"database MCP server does not expose required tool {name}",
-                method="tools/list",
-                tool_name=name,
-            )
+        self.ensure_tool(name)
         response = self._rpc(
             "tools/call",
             {"name": name, "arguments": dict(arguments)},
@@ -307,6 +257,17 @@ class _McpTransport:
                 tool_name=name,
             )
         return self._tool_result(result, name)
+
+    def ensure_tool(self, name: str) -> None:
+        """Initialize the session and fail before mutation if a tool is absent."""
+
+        self._ensure_initialized()
+        if self._tool_names is not None and name not in self._tool_names:
+            raise ReactionDatabaseMcpError(
+                f"database MCP server does not expose required tool {name}",
+                method="tools/list",
+                tool_name=name,
+            )
 
     def compose_query(self, app_name: str, query: str) -> Mapping[str, Any]:
         payload = self.call_tool("compose_query", {"app_name": app_name, "query": query})
@@ -515,6 +476,16 @@ class _McpTransport:
         return str(error)[:1000]
 
 
+@dataclass(frozen=True, slots=True)
+class _UploadFile:
+    """Content-addressed local file metadata prepared before remote mutation."""
+
+    path: Path
+    relative_path: str
+    size_bytes: int
+    file_sha256: str
+
+
 class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
     """Concrete adapter using the database's Streamable HTTP MCP endpoint."""
 
@@ -542,7 +513,9 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 "reaction database imports require project.organization_id or "
                 "TRICYCLE_REACTION_DB_ORGANIZATION_ID"
             )
-        staged_manifest, archive_sha256 = self._build_staged_manifest(manifest)
+        upload_files, archive_sha256 = self._build_upload_files(manifest)
+        self._transport.ensure_tool("create_project")
+        self._transport.ensure_tool("upload_calculation_log")
         idempotency_key = request.resolved_idempotency_key(manifest)
         project = self._transport.call_tool(
             "create_project",
@@ -559,6 +532,9 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                     "archive_sha256": archive_sha256,
                     "batch_metadata": dict(manifest.metadata),
                     "request_metadata": dict(request.metadata),
+                    "file_transfer": "mcp.upload_calculation_log.base64",
+                    "file_count": len(upload_files),
+                    "total_bytes": manifest.total_bytes,
                 },
                 "calculation_protocol": {
                     "source": request.source,
@@ -569,54 +545,77 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             },
         )
         project_id = self._required_identifier(project, "project", ("project_id", "id"))
-        registered = self._transport.call_tool(
-            "register_import_manifest",
-            {
-                "project_id": project_id,
-                "manifest": staged_manifest,
-                "artifact_kind": "calculation_output",
-            },
-        )
-        import_job_id = self._required_identifier(
-            registered,
-            "import job",
-            ("import_job_id", "job_id", "id"),
-        )
-        started = self._transport.call_tool("start_import_job", {"import_job_id": import_job_id})
-        final_payload = started
-        timed_out = False
-        if self.config.wait_for_completion:
-            final_payload, timed_out = self._wait_for_import(import_job_id, started)
 
-        status, accepted_count, failed_count, cleaned_count, counts = self._import_summary(
-            final_payload,
-            total_count=len(manifest.files),
-            timed_out=timed_out,
-        )
+        accepted_count = 0
+        failed_count = 0
+        uploaded_count = 0
+        cleaned_count = 0
+        ingestion_status_counts: dict[str, int] = {}
+        errors: list[str] = []
+        for upload_file in upload_files:
+            try:
+                payload = self._read_file_payload(upload_file)
+                result = self._transport.call_tool(
+                    "upload_calculation_log",
+                    {
+                        "project_id": project_id,
+                        "filename": upload_file.path.name,
+                        "content_base64": base64.b64encode(payload).decode("ascii"),
+                        "media_type": "text/plain",
+                        "relative_path": upload_file.relative_path,
+                        "expected_sha256": upload_file.file_sha256,
+                        "expected_size_bytes": upload_file.size_bytes,
+                    },
+                )
+            except (InvalidRequestError, OSError) as exc:
+                failed_count += 1
+                errors.append(f"{upload_file.relative_path}: {exc}")
+                continue
+            except ReactionDatabaseMcpError as exc:
+                if not self._is_file_upload_error(exc):
+                    raise
+                failed_count += 1
+                errors.append(f"{upload_file.relative_path}: {exc}")
+                continue
+
+            uploaded_count += 1
+            cleaned_count += self._find_optional_count(
+                result,
+                "cleaned_reaction_count",
+                "inferred_reaction_count",
+                "reaction_count",
+            ) or 0
+            ingestion_status = self._status_value(result) or "unknown"
+            ingestion_status_counts[ingestion_status] = (
+                ingestion_status_counts.get(ingestion_status, 0) + 1
+            )
+            if ingestion_status in _SUCCESSFUL_INGESTION_STATUSES:
+                accepted_count += 1
+            else:
+                failed_count += 1
+                errors.append(
+                    f"{upload_file.relative_path}: database ingestion status={ingestion_status}"
+                )
+
+        status = "succeeded" if failed_count == 0 else "failed"
         metadata: dict[str, object] = {
             "transport": "mcp",
             "mcp_endpoint": self.config.endpoint_url,
             "mcp_app_name": self.config.app_name,
-            "mcp_tools": [
-                "create_project",
-                "register_import_manifest",
-                "start_import_job",
-                "get_import_status",
-            ],
-            "import_job_id": import_job_id,
+            "mcp_tools": ["create_project", "upload_calculation_log"],
+            "file_transfer": "base64-per-file",
             "manifest_digest": manifest.manifest_digest,
             "archive_sha256": archive_sha256,
-            "manifest_schema_version": _MANIFEST_SCHEMA_VERSION,
-            "staging_root": self.config.staging_root,
             "total_count": len(manifest.files),
+            "uploaded_count": uploaded_count,
             "accepted_count": accepted_count,
             "failed_count": failed_count,
             "cleaned_reaction_count": cleaned_count,
-            "wait_for_completion": self.config.wait_for_completion,
-            "timed_out": timed_out,
-            "server_status": self._status_value(final_payload),
-            "server_counts": counts,
+            "ingestion_status_counts": ingestion_status_counts,
         }
+        if errors:
+            metadata["errors"] = errors[:20]
+            metadata["error_count"] = len(errors)
         return ReactionDatabaseImportReceipt(
             status=status,
             project_id=project_id,
@@ -851,16 +850,11 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             },
         )
 
-    def _build_staged_manifest(
+    def _build_upload_files(
         self,
         manifest: CalculationLogBatchManifest,
-    ) -> tuple[dict[str, object], str]:
-        if not self.config.staging_root:
-            raise IntegrationNotConfiguredError(
-                "TRICYCLE_REACTION_DB_MCP_STAGING_ROOT is required for MCP imports; "
-                "the database MCP server reads staged paths and does not receive file bytes"
-            )
-        entries: list[dict[str, object]] = []
+    ) -> tuple[tuple[_UploadFile, ...], str]:
+        files: list[_UploadFile] = []
         archive_digest = sha256()
         for path in manifest.files:
             relative_path = path.relative_to(manifest.root).as_posix()
@@ -872,28 +866,15 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             archive_digest.update(b"\0")
             archive_digest.update(str(size_bytes).encode("ascii"))
             archive_digest.update(b"\n")
-            entries.append(
-                {
-                    "archive_sha256": "__ARCHIVE_DIGEST__",
-                    "relative_path": relative_path,
-                    "staged_file_path": self._staged_file_path(relative_path),
-                    "file_sha256": file_sha256,
-                    "size_bytes": size_bytes,
-                    "media_type": "text/plain",
-                    "is_gaussian_log": True,
-                }
+            files.append(
+                _UploadFile(
+                    path=path,
+                    relative_path=relative_path,
+                    size_bytes=size_bytes,
+                    file_sha256=file_sha256,
+                )
             )
-        archive_sha256 = archive_digest.hexdigest()
-        for entry in entries:
-            entry["archive_sha256"] = archive_sha256
-        return {"archive_sha256": archive_sha256, "entries": entries}, archive_sha256
-
-    def _staged_file_path(self, relative_path: str) -> str:
-        assert self.config.staging_root is not None
-        staged = posixpath.join(self.config.staging_root, relative_path)
-        if not staged.startswith(f"{self.config.staging_root}/"):
-            raise InvalidRequestError("MCP staged file path escapes the configured staging root")
-        return staged
+        return tuple(files), archive_digest.hexdigest()
 
     @staticmethod
     def _file_sha256(path: Path, expected_size: int) -> str:
@@ -905,24 +886,30 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             raise InvalidRequestError(f"calculation log changed while hashing: {path}")
         return digest.hexdigest()
 
-    def _wait_for_import(
-        self,
-        import_job_id: str,
-        initial: Mapping[str, Any],
-    ) -> tuple[Mapping[str, Any], bool]:
-        current = initial
-        deadline = time.monotonic() + self.config.wait_timeout_seconds
-        while True:
-            status = self._status_value(current)
-            if status in _TERMINAL_IMPORT_STATUSES:
-                return current, False
-            if time.monotonic() >= deadline:
-                return current, True
-            time.sleep(self.config.poll_interval_seconds)
-            current = self._transport.call_tool(
-                "get_import_status",
-                {"import_job_id": import_job_id},
+    @staticmethod
+    def _read_file_payload(upload_file: _UploadFile) -> bytes:
+        with upload_file.path.open("rb") as handle:
+            initial_size = os.fstat(handle.fileno()).st_size
+            if initial_size != upload_file.size_bytes:
+                raise InvalidRequestError(
+                    f"calculation log changed while preparing upload: {upload_file.path}"
+                )
+            payload = handle.read()
+            final_size = os.fstat(handle.fileno()).st_size
+        if len(payload) != upload_file.size_bytes or final_size != upload_file.size_bytes:
+            raise InvalidRequestError(
+                f"calculation log changed while reading: {upload_file.path}"
             )
+        actual_sha256 = sha256(payload).hexdigest()
+        if actual_sha256 != upload_file.file_sha256:
+            raise InvalidRequestError(
+                f"calculation log changed after hashing: {upload_file.path}"
+            )
+        return payload
+
+    @staticmethod
+    def _is_file_upload_error(error: ReactionDatabaseMcpError) -> bool:
+        return error.tool_name == "upload_calculation_log" and error.status_code is None
 
     def _iter_mapped_reactions(
         self,
@@ -1175,75 +1162,11 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
 
     @staticmethod
     def _status_value(payload: Mapping[str, Any]) -> str:
-        for key in ("status", "state", "job_status", "import_status"):
+        for key in ("ingestion_status", "status", "state", "job_status", "import_status"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.casefold().strip().replace("-", "_")
         return ""
-
-    @classmethod
-    def _import_summary(
-        cls,
-        payload: Mapping[str, Any],
-        *,
-        total_count: int,
-        timed_out: bool,
-    ) -> tuple[str, int, int, int | None, dict[str, int]]:
-        succeeded = cls._find_count(
-            payload,
-            "succeeded_count",
-            "accepted_count",
-            "successful_count",
-            "success_count",
-        )
-        failed = cls._find_count(payload, "failed_count", "failure_count", "error_count")
-        total = cls._find_count(payload, "total_count", "item_count", "file_count") or total_count
-        items = cls._find_items(payload)
-        if items:
-            item_statuses = [
-                str(item.get("status", "")).casefold()
-                for item in items
-                if isinstance(item, Mapping)
-            ]
-            succeeded = max(succeeded, sum(status in {"succeeded", "success", "completed"} for status in item_statuses))
-            failed = max(
-                failed,
-                sum(status in {"failed", "error", "cancelled", "partial"} for status in item_statuses),
-            )
-        failed = min(total, max(0, failed))
-        status_value = cls._status_value(payload)
-        if timed_out:
-            status = "submitted"
-        elif status_value in {"failed", "cancelled", "partial", "error"} or failed:
-            status = "failed"
-        elif status_value in {"completed", "complete", "succeeded", "success"} or (
-            succeeded >= total and total
-        ):
-            status = "succeeded"
-        else:
-            status = "submitted"
-        if status == "succeeded" and succeeded == 0:
-            succeeded = total
-        if status == "failed" and failed == 0 and total:
-            failed = 1
-        accepted = max(0, min(total, succeeded or (total - failed if status == "failed" else 0)))
-        cleaned = cls._find_optional_count(
-            payload,
-            "cleaned_reaction_count",
-            "inferred_reaction_count",
-            "reaction_count",
-        )
-        counts = {
-            "total_count": total,
-            "succeeded_count": succeeded,
-            "failed_count": failed,
-        }
-        return status, accepted, failed, cleaned, counts
-
-    @classmethod
-    def _find_count(cls, payload: Mapping[str, Any], *keys: str) -> int:
-        result = cls._find_optional_count(payload, *keys)
-        return result if result is not None else 0
 
     @classmethod
     def _find_optional_count(cls, payload: Mapping[str, Any], *keys: str) -> int | None:
@@ -1260,18 +1183,6 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 if found is not None:
                     return found
         return None
-
-    @classmethod
-    def _find_items(cls, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        value = payload.get("items")
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, Mapping)]
-        for child in payload.values():
-            if isinstance(child, Mapping):
-                items = cls._find_items(child)
-                if items:
-                    return items
-        return []
 
     @staticmethod
     def _nonnegative_int(value: object) -> int:

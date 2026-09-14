@@ -38,17 +38,15 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 固定为秒，阶段固定为 `reactant`、`transition_state`、`product`。CSV 的实际序列化、数据库
 查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。仓库内置的
 `McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP endpoint：先调用
-`create_project`，再调用 `register_import_manifest`、`start_import_job` 和
-`get_import_status`；筛选和导出通过数据库 MCP 的 `compose_query` 调用 UseCase schema。
-MCP 的 `register_import_manifest` 明确规定文件字节不经过 MCP，因此每个 `.log` 必须先放在
-数据库服务可见的 `TRICYCLE_REACTION_DB_MCP_STAGING_ROOT` 下，manifest 同时记录暂存路径、
-文件 SHA-256、大小和 Gaussian 标记。MCP import job 自身支持继续执行；若等待超时，receipt
-保留 `import_job_id`，后续应按数据库 MCP job 状态继续处理。
+`create_project`，再对每个选中的 `.log` 调用 `upload_calculation_log`；筛选和导出通过数据库
+MCP 的 `compose_query` 调用 UseCase schema。上传请求使用标准 Base64 传输文件字节，同时携带
+相对路径、SHA-256 和大小，数据库统一执行 Artifact、RustFS、MolOP 和持久化校验。该路径不
+依赖数据库服务可见的共享目录，也不因同机部署而切换实现；每个文件的数据库
+`ingestion_status` 和 TS 推断数量会汇总到 receipt。
 
 live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据。运行前通过环境变量提供
 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID` 和 `TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`；服务端任务
-默认等待完成，超时会保留远端状态。如果服务使用内部 CA，应配置
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`。如果服务使用内部 CA，应配置
 `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`；不要为了绕过证书问题默认关闭 TLS 校验。
 
 ## 标准数据库导出门禁

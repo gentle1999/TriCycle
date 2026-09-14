@@ -97,12 +97,12 @@ flowchart LR
 
 `ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；仓库内置的
 `McpReactionDatabaseAdapter` 通过数据库的 Streamable HTTP MCP endpoint 调用
-`create_project`、`register_import_manifest`、`start_import_job`、`get_import_status` 和
-`compose_query`。MCP 导入只发送带哈希的 manifest，日志文件必须预先位于数据库服务可见的
-`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT` 下。`ReactionRepository` 保留单条记录兼容边界。
-dry-run 只解析请求、发现文件、生成计划和 receipt 形状，不写数据库、不发 MCP 请求、不创建
-远程 project。测试可使用 `InMemoryReactionRepository` 或内存 adapter。MCP endpoint、token、
-organization ID、暂存目录和超时策略只从 live 环境变量读取，不能保存进请求 TOML。
+`create_project`、逐文件 `upload_calculation_log` 和 `compose_query`。MCP 导入使用标准 Base64
+逐文件上传，并同时发送相对路径、SHA-256 和大小；不依赖数据库服务可见的共享目录。
+`ReactionRepository` 保留单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt
+形状，不写数据库、不发 MCP 请求、不创建远程 project。测试可使用 `InMemoryReactionRepository`
+或内存 adapter。MCP endpoint、token、organization ID 和超时策略只从 live 环境变量读取，不能
+保存进请求 TOML。
 
 ## CLI 示例
 
