@@ -54,6 +54,38 @@ def write_submit_row(run_dir: Path, job_id: str = "123") -> None:
 
 
 class BatchLifecycleTests(unittest.TestCase):
+    def test_failed_worker_is_downloaded_for_partial_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp)
+            (run_dir / "submit-results.tsv").write_text(
+                "worker\ttasks\tjob_id\tjob_name\tstatus\tinput_dir\n"
+                "worker-000\t1\t123\tworker-000\tSUBMITTED\tinput\n"
+                "worker-001\t1\t456\tworker-001\tSUBMITTED\tinput\n",
+                encoding="utf-8",
+            )
+            (run_dir / "status.tsv").write_text(
+                "worker\ttasks\tjob_id\tjob_name\tsubmit_status\tjob_status\t"
+                "terminal\tresult\tinput_dir\tchecked_at\n"
+                "worker-000\t1\t123\tworker-000\tSUBMITTED\tFailed\tyes\tFAILED\tinput\t\n"
+                "worker-001\t1\t456\tworker-001\tSUBMITTED\tFinished\tyes\tSUCCEEDED\tinput\t\n",
+                encoding="utf-8",
+            )
+            gateway = ArchiveGateway()
+
+            report, summary = download_run(
+                run_dir,
+                gateway,
+                only_succeeded=True,
+                resume=True,
+            )
+
+            self.assertEqual(summary.succeeded, 2)
+            self.assertEqual(gateway.downloads, ["123", "456"])
+            with report.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual([row["status"] for row in rows], ["DOWNLOADED", "DOWNLOADED"])
+            self.assertTrue((run_dir / "downloads" / "worker-000-job-123").is_dir())
+
     def test_legacy_internal_ids_are_resolved_for_status_and_download(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp)

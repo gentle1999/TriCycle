@@ -13,7 +13,7 @@
 | `batch.prepare` | 展开任务 glob，复制脚本/公共文件并生成 worker 分片 |
 | `batch.submit` | 提交已准备的 run 目录 |
 | `batch.status` | 查询 run 对应的 Bohr jobs |
-| `batch.download` | 下载结果并校验归档/manifest |
+| `batch.download` | 下载所有 worker 结果（含失败 worker 的部分结果）并校验归档/manifest |
 | `batch.terminate` | 终止指定 job 或 job group |
 | `batch.watch` | 按状态轮询直到完成或达到限制 |
 | `dpa-berny.prepare` | 为 DPA-Berny 或 Gaussian 生成输入和 worker 目录 |
@@ -47,6 +47,10 @@ flowchart LR
 
 任务通过稳定的 checksum 分配到 worker，避免依赖 glob 返回顺序。staging 会拒绝非空输出
 目录、越界路径、无任务输入或不明确的脚本配置。
+
+下载按 `submit-results.tsv` 中每个有 job ID 的 worker 尝试，包括 `status.tsv` 标记为
+`FAILED` 的 worker；worker 失败只表示其中至少有一个任务失败，不能据此丢弃同一 worker
+中的其它日志和结果。下载报告会逐 worker 记录成功或失败。
 
 ## 请求模型
 

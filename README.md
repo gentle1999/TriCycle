@@ -623,7 +623,7 @@ submitted = dispatcher.execute("bohr.batch.submit", {"run_dir": str(run_dir)}, l
 status = dispatcher.execute("bohr.batch.status", {"run_dir": str(run_dir)}, live)
 downloaded = dispatcher.execute(
     "bohr.batch.download",
-    {"run_dir": str(run_dir), "only_succeeded": True, "resume": True},
+    {"run_dir": str(run_dir), "resume": True},
     live,
 )
 ```

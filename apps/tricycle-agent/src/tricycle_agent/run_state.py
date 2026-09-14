@@ -271,8 +271,8 @@ def resume_request(store: RunStore) -> tuple[str, dict[str, Any]]:
 
     request = load_request(request_path)
     if capability_id in _BATCH_CAPABILITIES:
-        # Keep lifecycle options such as only_succeeded, interval, and
-        # continue_on_error when a run is resumed from its state directory.
+        # Keep lifecycle options such as resume and continue_on_error when a
+        # run is resumed from its state directory.
         request["run_dir"] = str(store.run_dir)
         return capability_id, request
     remote = data.get("remote", {})

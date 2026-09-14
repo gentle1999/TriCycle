@@ -723,9 +723,15 @@ def download_run(
     resume: bool = False,
     unzip: bool = True,
 ) -> tuple[Path, LifecycleSummary]:
-    status_rows = {
-        row["job_id"]: row for row in _read_tsv(run_dir / "status.tsv")
-    } if (run_dir / "status.tsv").is_file() else {}
+    """Download every submitted worker that has a job ID.
+
+    ``FAILED`` is a worker-level status and does not imply that every task in
+    that worker failed.  Keep ``only_succeeded`` as a compatibility argument,
+    but do not use it to discard terminal worker results: partial logs and
+    task outputs are often needed for recovery and diagnosis.
+    """
+
+    del only_succeeded
     output = run_dir / "downloads"
     output.mkdir(parents=True, exist_ok=True)
     job_group_id = _job_group_id_for_run(run_dir)
@@ -740,10 +746,10 @@ def download_run(
         if not job_id:
             status = "SKIPPED_NO_JOB_ID"
             skipped += 1
-        elif only_succeeded and status_rows.get(job_id, {}).get("result") != "SUCCEEDED":
-            status = f"SKIPPED_STATUS_{status_rows.get(job_id, {}).get('result', 'MISSING')}"
-            skipped += 1
         else:
+            # A worker-level FAILED result can still contain successful task
+            # outputs. Attempt every submitted worker and let the download
+            # report record whether the remote artifact is available.
             try:
                 existing = destination.exists()
                 complete = False

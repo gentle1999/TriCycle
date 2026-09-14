@@ -212,7 +212,7 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
     _definition(
         "bohr.batch.download",
         "Download a Bohr batch",
-        "Download completed worker artifacts from a prepared Bohr run.",
+        "Download artifacts from every submitted worker, including partial outputs from failed workers.",
         component_id="tricycle.bohr.submit",
         operation="batch.download",
         input_kind="bohr.run-reference",
