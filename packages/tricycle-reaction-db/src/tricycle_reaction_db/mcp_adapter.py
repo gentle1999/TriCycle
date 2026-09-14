@@ -400,6 +400,9 @@ class _McpTransport:
                 if exc.code == 429 and attempt < _MCP_RATE_LIMIT_RETRIES:
                     time.sleep(self._retry_after_seconds(exc.headers, detail))
                     continue
+                if exc.code in {500, 502, 503, 504} and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
                 suffix = f": {detail[:500]}" if detail else ""
                 raise ReactionDatabaseMcpError(
                     f"database MCP HTTP {exc.code}{suffix}",
