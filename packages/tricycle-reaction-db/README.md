@@ -99,6 +99,9 @@ flowchart LR
 `McpReactionDatabaseAdapter` 通过数据库的 Streamable HTTP MCP endpoint 调用
 `create_project`、逐文件 `upload_calculation_log` 和 `compose_query`。MCP 导入使用标准 Base64
 逐文件上传，并同时发送相对路径、SHA-256 和大小；不依赖数据库服务可见的共享目录。
+`upload_calculation_log` 返回 durable upload batch/item；adapter 的导入 receipt 表示文件已
+提交到持久化队列（`submitted`），保留每个队列 ID 和状态，但不等待异步 MolOP 解析或填充
+清洗反应数量。
 `ReactionRepository` 保留单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt
 形状，不写数据库、不发 MCP 请求、不创建远程 project。测试可使用 `InMemoryReactionRepository`
 或内存 adapter。MCP endpoint、token、organization ID 和超时策略只从 live 环境变量读取，不能

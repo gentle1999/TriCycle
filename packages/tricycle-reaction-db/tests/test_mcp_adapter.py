@@ -138,11 +138,8 @@ class _McpHandler(BaseHTTPRequestHandler):
             assert arguments["media_type"] == "text/plain"
             assert isinstance(arguments["relative_path"], str)
             data = {
-                "artifact_id": f"artifact-{filename}",
-                "storage_status": "available",
-                "ingestion_status": "succeeded",
-                "inferred_reaction_count": 1 if filename == "a.log" else 0,
-                "inferences": [],
+                "batch": {"id": f"batch-{filename}", "status": "active"},
+                "item": {"id": f"item-{filename}", "status": "staged"},
             }
         elif name == "compose_query":
             query = str(arguments["query"])
@@ -295,10 +292,10 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
 
             receipt = self._adapter().ingest_calculation_logs(request, request.resolve_batch())
 
-        self.assertEqual(receipt.status, "succeeded")
+        self.assertEqual(receipt.status, "submitted")
         self.assertEqual(receipt.project_id, self.state.project_id)
         self.assertEqual(receipt.accepted_log_count, 2)
-        self.assertEqual(receipt.cleaned_reaction_count, 1)
+        self.assertIsNone(receipt.cleaned_reaction_count)
         methods = [str(item.get("method")) for item in self.state.requests]
         self.assertEqual(
             methods[:4], ["initialize", "notifications/initialized", "tools/list", "tools/call"]
@@ -333,7 +330,10 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             base64.b64decode(arguments["content_base64"], validate=True),
             b"Gaussian A\n",
         )
-        self.assertEqual(receipt.metadata["file_transfer"], "base64-per-file")
+        self.assertEqual(receipt.metadata["file_transfer"], "base64-per-file-queue")
+        self.assertEqual(receipt.metadata["queue_mode"], "durable-upload-batch")
+        self.assertEqual(receipt.metadata["queue_batch_count"], 2)
+        self.assertEqual(len(receipt.metadata["queue_submissions"]), 2)
         self.assertNotIn("staging_root", receipt.metadata)
         create = next(
             item

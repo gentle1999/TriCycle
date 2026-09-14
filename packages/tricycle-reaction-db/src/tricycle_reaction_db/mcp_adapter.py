@@ -48,7 +48,19 @@ from .repository import (
 
 _MCP_PROTOCOL_VERSION = "2025-03-26"
 _DEFAULT_APP_NAME = "example-chemistry-database"
-_SUCCESSFUL_INGESTION_STATUSES = frozenset({"succeeded", "success", "completed", "complete"})
+_QUEUE_ACCEPTED_STATUSES = frozenset(
+    {
+        "queued",
+        "pending",
+        "uploading",
+        "staged",
+        "processing",
+        "succeeded",
+        "success",
+        "completed",
+    }
+)
+_QUEUE_FAILED_STATUSES = frozenset({"failed", "error", "cancelled", "canceled"})
 _MCP_ENV_KEYS = frozenset(
     {
         "TRICYCLE_REACTION_DB_MCP_URL",
@@ -549,8 +561,9 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         accepted_count = 0
         failed_count = 0
         uploaded_count = 0
-        cleaned_count = 0
-        ingestion_status_counts: dict[str, int] = {}
+        queue_item_status_counts: dict[str, int] = {}
+        queue_batch_status_counts: dict[str, int] = {}
+        queue_submissions: list[dict[str, str]] = []
         errors: list[str] = []
         for upload_file in upload_files:
             try:
@@ -579,39 +592,74 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 continue
 
             uploaded_count += 1
-            cleaned_count += self._find_optional_count(
-                result,
-                "cleaned_reaction_count",
-                "inferred_reaction_count",
-                "reaction_count",
-            ) or 0
-            ingestion_status = self._status_value(result) or "unknown"
-            ingestion_status_counts[ingestion_status] = (
-                ingestion_status_counts.get(ingestion_status, 0) + 1
+            try:
+                if not isinstance(result, Mapping):
+                    raise ReactionDatabaseMcpError(
+                        "upload_calculation_log returned no durable queue batch/item",
+                        tool_name="upload_calculation_log",
+                    )
+                batch = result.get("batch")
+                item = result.get("item")
+                if not isinstance(batch, Mapping) or not isinstance(item, Mapping):
+                    raise ReactionDatabaseMcpError(
+                        "upload_calculation_log returned no durable queue batch/item",
+                        tool_name="upload_calculation_log",
+                    )
+                batch_id = self._required_identifier(batch, "upload batch", ("id", "batch_id"))
+                item_id = self._required_identifier(
+                    item,
+                    "upload batch item",
+                    ("id", "item_id", "client_file_id"),
+                )
+            except ReactionDatabaseMcpError as exc:
+                failed_count += 1
+                errors.append(f"{upload_file.relative_path}: {exc}")
+                continue
+
+            item_status = self._status_value(item) or "unknown"
+            batch_status = self._status_value(batch) or "unknown"
+            queue_item_status_counts[item_status] = queue_item_status_counts.get(item_status, 0) + 1
+            queue_batch_status_counts[batch_status] = (
+                queue_batch_status_counts.get(batch_status, 0) + 1
             )
-            if ingestion_status in _SUCCESSFUL_INGESTION_STATUSES:
+            queue_submissions.append(
+                {
+                    "relative_path": upload_file.relative_path,
+                    "batch_id": batch_id,
+                    "item_id": item_id,
+                    "item_status": item_status,
+                    "batch_status": batch_status,
+                }
+            )
+            if item_status in _QUEUE_ACCEPTED_STATUSES:
                 accepted_count += 1
             else:
                 failed_count += 1
+                status_kind = "failed" if item_status in _QUEUE_FAILED_STATUSES else "unrecognized"
                 errors.append(
-                    f"{upload_file.relative_path}: database ingestion status={ingestion_status}"
+                    f"{upload_file.relative_path}: database queue item status={item_status}"
+                    f" ({status_kind})"
                 )
 
-        status = "succeeded" if failed_count == 0 else "failed"
+        status = "submitted" if failed_count == 0 else "failed"
         metadata: dict[str, object] = {
             "transport": "mcp",
             "mcp_endpoint": self.config.endpoint_url,
             "mcp_app_name": self.config.app_name,
             "mcp_tools": ["create_project", "upload_calculation_log"],
-            "file_transfer": "base64-per-file",
+            "file_transfer": "base64-per-file-queue",
+            "queue_mode": "durable-upload-batch",
             "manifest_digest": manifest.manifest_digest,
             "archive_sha256": archive_sha256,
             "total_count": len(manifest.files),
             "uploaded_count": uploaded_count,
             "accepted_count": accepted_count,
             "failed_count": failed_count,
-            "cleaned_reaction_count": cleaned_count,
-            "ingestion_status_counts": ingestion_status_counts,
+            "queue_batch_count": len(queue_submissions),
+            "queue_item_status_counts": queue_item_status_counts,
+            "queue_batch_status_counts": queue_batch_status_counts,
+            "queue_submissions": queue_submissions,
+            "parse_completion": "not_waited",
         }
         if errors:
             metadata["errors"] = errors[:20]
@@ -621,7 +669,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             project_id=project_id,
             accepted_log_count=accepted_count,
             failed_log_count=failed_count,
-            cleaned_reaction_count=cleaned_count,
+            cleaned_reaction_count=None,
             metadata=metadata,
         )
 

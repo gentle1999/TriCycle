@@ -62,7 +62,9 @@ Reaction DB 的 live capability 会在执行阶段自动注入
 `TRICYCLE_REACTION_DB_MCP_URL`、MCP Token `TRICYCLE_REACTION_DB_MCP_TOKEN`、
 `TRICYCLE_REACTION_DB_ORGANIZATION_ID`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入通过
 `upload_calculation_log` 逐文件以 Base64 发送日志字节，并携带相对路径、SHA-256 和大小；不
-使用共享目录。默认启用 TLS 校验，内部 CA 使用 `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
+使用共享目录。每个响应都会返回 durable upload batch/item；live 导入在所有文件进入持久化
+队列后返回 `submitted`，不等待异步 MolOP 解析。默认启用 TLS 校验，内部 CA 使用
+`TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
 
 ### 查看和恢复
 

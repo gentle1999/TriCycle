@@ -27,9 +27,11 @@ project。两批数据应使用两份请求，分别获得两个内部 `project_
 MCP live 配置至少需要 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN` 和
 `TRICYCLE_REACTION_DB_ORGANIZATION_ID`。仓库提供的 MCP adapter 先创建 project，再对每个选中
 的 `.log` 调用 `upload_calculation_log`，用标准 Base64 传输文件字节，并携带相对路径、文件
-SHA-256 和大小；同机部署也不得改用共享目录或路径 manifest。数据库返回的
-`ingestion_status` 是文件是否成功解析的依据，receipt 会保留上传/解析统计和失败样本。TLS
-校验默认开启。
+SHA-256 和大小；同机部署也不得改用共享目录或路径 manifest。每次调用返回 durable upload
+batch/item；`staged`、`queued`、`processing` 等状态表示文件已经进入数据库的持久化队列，
+receipt 状态为 `submitted`。导入操作只负责完整提交队列，不等待 MolOP 解析完成，因此不会把
+尚未产生的 `ingestion_status` 或清洗反应数量误报为结果；receipt 会保留每个 batch/item ID、
+队列状态和失败样本。TLS 校验默认开启。
 
 实现入口：`packages/tricycle-reaction-db/src/tricycle_reaction_db/models.py`、`plugin.py`、
 `mcp_adapter.py`。

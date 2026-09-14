@@ -41,8 +41,10 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 `create_project`，再对每个选中的 `.log` 调用 `upload_calculation_log`；筛选和导出通过数据库
 MCP 的 `compose_query` 调用 UseCase schema。上传请求使用标准 Base64 传输文件字节，同时携带
 相对路径、SHA-256 和大小，数据库统一执行 Artifact、RustFS、MolOP 和持久化校验。该路径不
-依赖数据库服务可见的共享目录，也不因同机部署而切换实现；每个文件的数据库
-`ingestion_status` 和 TS 推断数量会汇总到 receipt。
+依赖数据库服务可见的共享目录，也不因同机部署而切换实现。每个文件调用返回 durable upload
+batch/item；adapter 在所有文件入队后返回 `submitted`，保留队列 ID 和初始状态，不等待异步
+MolOP 解析，也不会在提交阶段填充清洗反应数量。失败文件会继续尝试其余文件并记录在 receipt
+中。
 
 live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据。运行前通过环境变量提供
 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、
