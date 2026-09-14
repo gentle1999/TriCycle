@@ -23,6 +23,7 @@ from tricycle_reaction_db import (
     RxnResidDatasetExportRequest,
     validate_export_receipt,
 )
+from tricycle_reaction_db.mcp_adapter import _McpTransport
 
 
 class _McpState:
@@ -362,6 +363,15 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
                     ReactionDatabaseMcpConfig(self.base_url, "test-token")
                 ).ingest_calculation_logs(request, manifest)
             self.assertEqual(self.state.requests, [])
+
+    def test_rate_limit_retry_after_uses_header_or_json_detail(self) -> None:
+        self.assertEqual(_McpTransport._retry_after_seconds({"Retry-After": "7"}, ""), 7.0)
+        self.assertEqual(
+            _McpTransport._retry_after_seconds(
+                {}, '{"detail":{"retry_after_seconds": 3}}'
+            ),
+            3.0,
+        )
 
     def test_import_requires_upload_tool_before_project_creation(self) -> None:
         self.state.include_upload_tool = False

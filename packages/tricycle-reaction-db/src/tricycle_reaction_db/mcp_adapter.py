@@ -15,6 +15,7 @@ import json
 import os
 import ssl
 import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -48,6 +49,8 @@ from .repository import (
 
 _MCP_PROTOCOL_VERSION = "2025-03-26"
 _DEFAULT_APP_NAME = "example-chemistry-database"
+_MCP_RATE_LIMIT_RETRIES = 8
+_MCP_MAX_RETRY_AFTER_SECONDS = 60.0
 _QUEUE_ACCEPTED_STATUSES = frozenset(
     {
         "queued",
@@ -373,32 +376,63 @@ class _McpTransport:
         if self._protocol_version:
             headers["MCP-Protocol-Version"] = self._protocol_version
         data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        request = Request(self.config.endpoint_url, data=data, headers=headers, method="POST")
+        for attempt in range(_MCP_RATE_LIMIT_RETRIES + 1):
+            request = Request(self.config.endpoint_url, data=data, headers=headers, method="POST")
+            try:
+                with urlopen(
+                    request,
+                    timeout=self.config.timeout_seconds,
+                    context=self.config.ssl_context()
+                    if urlsplit(self.config.endpoint_url).scheme == "https"
+                    else None,
+                ) as response:
+                    raw = response.read()
+                    response_headers = {
+                        str(key).casefold(): str(value) for key, value in response.headers.items()
+                    }
+                    session_id = response_headers.get("mcp-session-id")
+                    if session_id:
+                        self._session_id = session_id
+                    return raw, response_headers
+            except HTTPError as exc:
+                detail = exc.read(2048).decode("utf-8", errors="replace").strip()
+                if exc.code == 429 and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(self._retry_after_seconds(exc.headers, detail))
+                    continue
+                suffix = f": {detail[:500]}" if detail else ""
+                raise ReactionDatabaseMcpError(
+                    f"database MCP HTTP {exc.code}{suffix}",
+                    status_code=exc.code,
+                ) from exc
+            except (URLError, TimeoutError, OSError) as exc:
+                raise ReactionDatabaseMcpError(f"database MCP request failed: {exc}") from exc
+
+        raise AssertionError("MCP rate-limit retry loop exited unexpectedly")
+
+    @staticmethod
+    def _retry_after_seconds(headers: Any, detail: str) -> float:
+        """Read the server backoff without trusting an unbounded delay."""
+
+        candidates: list[object] = []
+        if headers is not None:
+            candidates.append(headers.get("Retry-After"))
         try:
-            with urlopen(
-                request,
-                timeout=self.config.timeout_seconds,
-                context=self.config.ssl_context()
-                if urlsplit(self.config.endpoint_url).scheme == "https"
-                else None,
-            ) as response:
-                raw = response.read()
-                response_headers = {
-                    str(key).casefold(): str(value) for key, value in response.headers.items()
-                }
-                session_id = response_headers.get("mcp-session-id")
-                if session_id:
-                    self._session_id = session_id
-                return raw, response_headers
-        except HTTPError as exc:
-            detail = exc.read(2048).decode("utf-8", errors="replace").strip()
-            suffix = f": {detail[:500]}" if detail else ""
-            raise ReactionDatabaseMcpError(
-                f"database MCP HTTP {exc.code}{suffix}",
-                status_code=exc.code,
-            ) from exc
-        except (URLError, TimeoutError, OSError) as exc:
-            raise ReactionDatabaseMcpError(f"database MCP request failed: {exc}") from exc
+            payload = json.loads(detail)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, Mapping):
+            nested = payload.get("detail")
+            if isinstance(nested, Mapping):
+                candidates.append(nested.get("retry_after_seconds"))
+            candidates.append(payload.get("retry_after_seconds"))
+        for candidate in candidates:
+            try:
+                value = float(str(candidate).strip())
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                return min(value, _MCP_MAX_RETRY_AFTER_SECONDS)
+        return 1.0
 
     @staticmethod
     def _decode_messages(raw: bytes, content_type: str) -> list[Mapping[str, Any]]:
