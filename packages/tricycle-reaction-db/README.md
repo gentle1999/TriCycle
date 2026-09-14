@@ -95,9 +95,12 @@ flowchart LR
     X --> O
 ```
 
-`ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；`ReactionRepository` 保留
-单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt 形状，不写数据库、不
-发 HTTP、不创建远程 project。测试可使用 `InMemoryReactionRepository` 或内存 adapter。
+`ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；仓库内置的
+`HttpReactionDatabaseAdapter` 对接数据库的 HTTP API，并使用流式 multipart 上传计算日志。
+`ReactionRepository` 保留单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt
+形状，不写数据库、不发 HTTP、不创建远程 project。测试可使用 `InMemoryReactionRepository`
+或内存 adapter。HTTP adapter 的 URL、token、organization ID 和超时策略只从 live 环境变量
+读取，不能保存进请求 TOML。
 
 ## CLI 示例
 

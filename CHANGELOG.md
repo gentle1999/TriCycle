@@ -6,6 +6,12 @@
 
 - `bohr.batch.download` 不再根据 worker 整体的 `FAILED` 状态跳过下载；失败 worker 中的部分成功任务、日志和诊断结果也会被尝试拉取，并逐 worker 记录下载结果。
 
+### 新增
+
+- 在 `tricycle-reaction-db` 中实现 `HttpReactionDatabaseAdapter`，通过数据库 HTTP API 创建
+  project、注册并流式上传计算日志批次，支持确定性幂等键、断点续传、失败文件重试和服务端解析等待。
+- live agent 自动注入该 adapter；数据库 URL、token、organization ID 和 TLS/超时策略只从环境变量读取，dry-run 不访问网络。
+
 ## 2026-09-13
 
 ### 新增

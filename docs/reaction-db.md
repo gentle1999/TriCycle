@@ -36,7 +36,18 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 `reaction_smarts` 原样传给数据库的 `reaction_smarts` 查询参数，不能转换成显式的
 `reaction_class` 条件，也不能在本地重做反应分类。RitS 的 TS 结构默认以 `xyz` 表示。RxnResid 的能量单位由数据库/adapter 明确记录；耗时单位
 固定为秒，阶段固定为 `reactant`、`transition_state`、`product`。CSV 的实际序列化、数据库
-查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。
+查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。仓库内置的
+`HttpReactionDatabaseAdapter` 对接数据库已记录的 HTTP API；它通过
+`POST /api/projects` 创建 project，通过 `POST /api/upload-batches` 注册批次，再用
+`POST /api/upload-batches/{batch_id}/files/{client_file_id}` 流式上传每个日志。项目、批次和
+client file ID 都由导入幂等键确定，失败或中断后重新执行会复用已创建记录并跳过已 staged/
+processing/succeeded 的文件。
+
+live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据。运行前通过环境变量提供
+`TRICYCLE_REACTION_DB_URL`、`TRICYCLE_REACTION_DB_TOKEN` 和
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`；上传完成后默认等待服务端解析批次，超时可安全 resume。
+如果服务使用内部 CA，应配置 `TRICYCLE_REACTION_DB_CA_BUNDLE`；不要为了绕过证书问题默认关闭
+TLS 校验。
 
 ## 标准 API 导出门禁
 

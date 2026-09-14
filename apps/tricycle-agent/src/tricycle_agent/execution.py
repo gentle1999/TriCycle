@@ -33,6 +33,7 @@ from tricycle_reaction_db import (
     ReactionSpaceExportRequest,
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
+    create_reaction_database_adapter,
 )
 from tricycle_reactionopt import (
     ReactionConfigRequest,
@@ -361,6 +362,18 @@ class CapabilityDispatcher:
             bohr_gateway=gateway,
             reaction_repository=self.reaction_repository,
             reaction_database_adapter=self.reaction_database_adapter,
+            reactionopt_adapter=self.reactionopt_adapter,
+            reactionopt_profile_adapter=self.reactionopt_profile_adapter,
+        )
+
+    def with_reaction_database(self, env_file: Path | None = None) -> CapabilityDispatcher:
+        """Return a dispatcher with the live HTTP reaction DB adapter injected."""
+
+        return CapabilityDispatcher(
+            self.catalog,
+            bohr_gateway=self.bohr_gateway,
+            reaction_repository=self.reaction_repository,
+            reaction_database_adapter=create_reaction_database_adapter(env_file),
             reactionopt_adapter=self.reactionopt_adapter,
             reactionopt_profile_adapter=self.reactionopt_profile_adapter,
         )

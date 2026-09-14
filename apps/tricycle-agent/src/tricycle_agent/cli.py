@@ -303,6 +303,15 @@ def _execute_capability(
                     status="started",
                 )
 
+        if live and capability_id in {
+            "reaction-db.batch-import",
+            "reaction-db.filter",
+            "reaction-db.export-rits",
+            "reaction-db.export-rxnresid",
+            "reaction-db.export-space",
+        }:
+            dispatcher = dispatcher.with_reaction_database()
+
         if capability_id in _PREPARATION_CAPABILITIES:
             # Staging requires an empty output directory, so run.toml is created
             # immediately after the local materialization succeeds.

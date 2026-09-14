@@ -19,7 +19,15 @@ description: "Plan one new reaction-database project from exactly one Bohr calcu
 uv run --package tricycle-agent tricycle-agent plan reaction-db.batch-import request.toml
 ```
 
-只有显式注入 `ReactionDatabaseAdapter` 后，才允许 live 导入。默认路径不读数据库凭据、不访问
-网络、不创建 project。两批数据应使用两份请求，分别获得两个内部 `project_id`。
+只有显式注入 `ReactionDatabaseAdapter` 后，才允许 live 导入。仓库提供的
+`HttpReactionDatabaseAdapter` 使用数据库的 HTTP project/upload-batch API；默认 CLI 只在
+`--live` 执行阶段从环境变量组合并注入它。默认路径不读数据库凭据、不访问网络、不创建
+project。两批数据应使用两份请求，分别获得两个内部 `project_id`。
 
-实现入口：`packages/tricycle-reaction-db/src/tricycle_reaction_db/models.py`、`plugin.py`。
+HTTP live 配置至少需要 `TRICYCLE_REACTION_DB_URL`、`TRICYCLE_REACTION_DB_TOKEN` 和
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`。上传按 client file ID 流式执行并支持 resume；默认
+等待远端解析完成，`TRICYCLE_REACTION_DB_WAIT_TIMEOUT_SECONDS` 到期时保留远端批次状态，后续
+可安全 resume。TLS 校验默认开启。
+
+实现入口：`packages/tricycle-reaction-db/src/tricycle_reaction_db/models.py`、`plugin.py`、
+`http_adapter.py`。

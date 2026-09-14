@@ -22,6 +22,7 @@ from tricycle_core import (
     TaskResult,
     TaskStatus,
 )
+from tricycle_reaction_db import ReactionDatabaseImportReceipt
 
 
 class CapabilityRuntimeTests(unittest.TestCase):
@@ -319,6 +320,114 @@ epistemic_unc = 0.9
                     ]
                 )
             self.assertNotIn("secret-value", (run_dir / "run.toml").read_text(encoding="utf-8"))
+
+    def test_dry_run_does_not_construct_reaction_database_adapter(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            logs = root / "downloads"
+            logs.mkdir()
+            (logs / "one.log").write_text("Gaussian\n", encoding="utf-8")
+            request = root / "batch.toml"
+            request.write_text(
+                f'''source = "bohr.test"
+
+[project]
+slug = "rits-zero-shot-ts"
+name = "RitS zero-shot TS"
+
+[batch]
+batch_id = "bohr-batch-001"
+root = "{root}"
+logs_dir = "downloads"
+
+[batch.metadata]
+bohr_job_group_id = "group-001"
+bohr_project_id = "991668"
+
+[provenance]
+workflow = "RitS -> Gaussian"
+initial_guess_source = "RitS zero-shot"
+''',
+                encoding="utf-8",
+            )
+            with (
+                patch.object(
+                    CapabilityDispatcher,
+                    "with_reaction_database",
+                    side_effect=AssertionError("dry-run must not construct a reaction DB adapter"),
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                main(
+                    [
+                        "run",
+                        "reaction-db.batch-import",
+                        str(request),
+                        "--run-id",
+                        "db-dry-run-1",
+                        "--run-dir",
+                        str(root / "run"),
+                    ]
+                )
+
+    def test_live_reaction_database_capability_injects_the_http_adapter(self) -> None:
+        class FakeAdapter:
+            def ingest_calculation_logs(self, _request, manifest):
+                self.manifest = manifest
+                return ReactionDatabaseImportReceipt(
+                    project_id="project-001",
+                    accepted_log_count=len(manifest.files),
+                )
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            logs = root / "downloads"
+            logs.mkdir()
+            (logs / "one.log").write_text("Gaussian\n", encoding="utf-8")
+            request = root / "batch.toml"
+            request.write_text(
+                f'''source = "bohr.test"
+
+[project]
+slug = "rits-zero-shot-ts"
+name = "RitS zero-shot TS"
+
+[batch]
+batch_id = "bohr-batch-001"
+root = "{root}"
+logs_dir = "downloads"
+
+[batch.metadata]
+bohr_job_group_id = "group-001"
+bohr_project_id = "991668"
+
+[provenance]
+workflow = "RitS -> Gaussian"
+initial_guess_source = "RitS zero-shot"
+''',
+                encoding="utf-8",
+            )
+            adapter = FakeAdapter()
+            with (
+                patch(
+                    "tricycle_agent.execution.create_reaction_database_adapter",
+                    return_value=adapter,
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                main(
+                    [
+                        "run",
+                        "reaction-db.batch-import",
+                        str(request),
+                        "--run-id",
+                        "db-live-1",
+                        "--run-dir",
+                        str(root / "run"),
+                        "--live",
+                    ]
+                )
+            self.assertEqual(len(adapter.manifest.files), 1)
 
     def test_live_planning_does_not_construct_a_bohr_adapter(self) -> None:
         with TemporaryDirectory() as temp:

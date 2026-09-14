@@ -12,6 +12,12 @@ from .contracts import (
     build_rits_mapped_reaction_requests,
     build_rxnresid_csv_export_request,
 )
+from .http_adapter import (
+    HttpReactionDatabaseAdapter,
+    ReactionDatabaseApiError,
+    ReactionDatabaseHttpConfig,
+    create_reaction_database_adapter,
+)
 from .models import (
     CYCLOADDITION_RXN_SMARTS,
     CalculationLogBatchManifest,
@@ -42,6 +48,8 @@ __all__ = [
     "InMemoryReactionRepository",
     "ReactionBatchImportRequest",
     "ReactionDatabaseAdapter",
+    "ReactionDatabaseApiError",
+    "ReactionDatabaseHttpConfig",
     "REACTION_SMARTS_FILTER_FIELD",
     "RITS_EXPORT_API_CONTRACT",
     "RITS_STANDARD_GEOMETRY_XYZ_ROUTE",
@@ -53,6 +61,7 @@ __all__ = [
     "ReactionDatabaseImportReceipt",
     "ReactionDatabaseProjectSpec",
     "ReactionDatabasePlugin",
+    "HttpReactionDatabaseAdapter",
     "ReactionFilterReceipt",
     "ReactionFilterRequest",
     "ReactionIngestRequest",
@@ -64,6 +73,7 @@ __all__ = [
     "build_filter_expression",
     "build_rits_mapped_reaction_requests",
     "build_rxnresid_csv_export_request",
+    "create_reaction_database_adapter",
     "record_from_mapping",
     "validate_export_receipt",
 ]
