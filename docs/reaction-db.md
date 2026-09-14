@@ -37,33 +37,42 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 `reaction_class` 条件，也不能在本地重做反应分类。RitS 的 TS 结构默认以 `xyz` 表示。RxnResid 的能量单位由数据库/adapter 明确记录；耗时单位
 固定为秒，阶段固定为 `reactant`、`transition_state`、`product`。CSV 的实际序列化、数据库
 查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。仓库内置的
-`HttpReactionDatabaseAdapter` 对接数据库已记录的 HTTP API；它通过
-`POST /api/projects` 创建 project，通过 `POST /api/upload-batches` 注册批次，再用
-`POST /api/upload-batches/{batch_id}/files/{client_file_id}` 流式上传每个日志。项目、批次和
-client file ID 都由导入幂等键确定，失败或中断后重新执行会复用已创建记录并跳过已 staged/
-processing/succeeded 的文件。
+`McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP endpoint：先调用
+`create_project`，再调用 `register_import_manifest`、`start_import_job` 和
+`get_import_status`；筛选和导出通过数据库 MCP 的 `compose_query` 调用 UseCase schema。
+MCP 的 `register_import_manifest` 明确规定文件字节不经过 MCP，因此每个 `.log` 必须先放在
+数据库服务可见的 `TRICYCLE_REACTION_DB_MCP_STAGING_ROOT` 下，manifest 同时记录暂存路径、
+文件 SHA-256、大小和 Gaussian 标记。MCP import job 自身支持继续执行；若等待超时，receipt
+保留 `import_job_id`，后续应按数据库 MCP job 状态继续处理。
 
 live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据。运行前通过环境变量提供
-`TRICYCLE_REACTION_DB_URL`、`TRICYCLE_REACTION_DB_TOKEN` 和
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID`；上传完成后默认等待服务端解析批次，超时可安全 resume。
-如果服务使用内部 CA，应配置 `TRICYCLE_REACTION_DB_CA_BUNDLE`；不要为了绕过证书问题默认关闭
-TLS 校验。
+`TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID` 和 `TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`；服务端任务
+默认等待完成，超时会保留远端状态。如果服务使用内部 CA，应配置
+`TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`；不要为了绕过证书问题默认关闭 TLS 校验。
 
-## 标准 API 导出门禁
+## 标准数据库导出门禁
 
-导出 adapter 不能把任意 MCP 查询结果或本地日志解析结果拼成一个“成功”的 CSV。成功返回的
-`ReactionSpaceExportReceipt` 必须带 `api_contract` 和标准 API 请求证明；插件会在生成
-`TaskResult` 前校验它们。
+导出 adapter 不能把任意本地日志解析结果拼成一个“成功”的 CSV。成功返回的
+`ReactionSpaceExportReceipt` 必须带 `api_contract` 和标准 HTTP API 或 MCP 请求证明；插件会在
+生成 `TaskResult` 前校验它们。MCP adapter 的证明记录 `compose_query` 所访问的 database
+service/method、project ID 和固定 reaction SMARTS。
 
-- RxnResid 固定使用 `POST /api/mapped-reactions/thermodynamics/export.csv`。请求体必须包含
-  当前内部 `project_id`、`filter_expression`（其 JSON 叶子字段为 `reaction_smarts`）、
+- 旧 HTTP adapter 的 RxnResid 路径固定使用
+  `POST /api/mapped-reactions/thermodynamics/export.csv`；请求体必须包含当前内部
+  `project_id`、`filter_expression`（其 JSON 叶子字段为 `reaction_smarts`）、
   `has_activation_gibbs_free_energy = true` 和 `has_reaction_gibbs_free_energy = true`。
-- RitS 当前没有单一的 mapped-reaction + TS CSV 路由。adapter 必须使用标准
-  `GET /api/mapped-reactions`（带 `project_id` 和 `reaction_smarts`）、mapped-reaction
-  detail 以及 `GET /api/depictions/geometry/{geometry_id}.xyz`，再将数据库返回的对象写入
-  本地 CSV；不能改用 `compose_query`、`reaction_class` 或本地日志推断。
+- MCP adapter 的 RxnResid 路径使用 `compose_query` 调用
+  `MappedReactionQueryService.list_mapped_reactions` 和
+  `ReactionEnergyQueryService.get_mapped_reaction_thermodynamics`，再将数据库返回的字段
+  写入 CSV。
+- 旧 HTTP adapter 的 RitS 路径使用标准 `GET /api/mapped-reactions`、mapped-reaction detail
+  和 `GET /api/depictions/geometry/{geometry_id}.xyz`；MCP adapter 对应使用
+  `MappedReactionQueryService.list_mapped_reactions`、`get_mapped_reaction` 和
+  `GeometryQueryService.get_geometry`。两种 adapter 都不能使用 `reaction_class` 或本地日志
+  推断。
 
-这些路由和请求构造器集中在
+这些 HTTP 路由和请求构造器集中在
 `packages/tricycle-reaction-db/src/tricycle_reaction_db/contracts.py`；adapter 应直接复用
 `build_rxnresid_csv_export_request` 和 `build_rits_mapped_reaction_requests`，不要手写路由或
 过滤体。

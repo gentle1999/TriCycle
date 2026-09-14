@@ -20,14 +20,15 @@ uv run --package tricycle-agent tricycle-agent plan reaction-db.batch-import req
 ```
 
 只有显式注入 `ReactionDatabaseAdapter` 后，才允许 live 导入。仓库提供的
-`HttpReactionDatabaseAdapter` 使用数据库的 HTTP project/upload-batch API；默认 CLI 只在
+`McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP API；默认 CLI 只在
 `--live` 执行阶段从环境变量组合并注入它。默认路径不读数据库凭据、不访问网络、不创建
 project。两批数据应使用两份请求，分别获得两个内部 `project_id`。
 
-HTTP live 配置至少需要 `TRICYCLE_REACTION_DB_URL`、`TRICYCLE_REACTION_DB_TOKEN` 和
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID`。上传按 client file ID 流式执行并支持 resume；默认
-等待远端解析完成，`TRICYCLE_REACTION_DB_WAIT_TIMEOUT_SECONDS` 到期时保留远端批次状态，后续
-可安全 resume。TLS 校验默认开启。
+MCP live 配置至少需要 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID` 和数据库服务可见的
+`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`。MCP manifest 只携带暂存路径、文件哈希和大小，文件
+字节不会经过 MCP；数据库 MCP job 默认等待完成，`TRICYCLE_REACTION_DB_MCP_WAIT_TIMEOUT_SECONDS`
+到期时保留远端 `import_job_id` 和状态，后续可继续处理。TLS 校验默认开启。
 
 实现入口：`packages/tricycle-reaction-db/src/tricycle_reaction_db/models.py`、`plugin.py`、
-`http_adapter.py`。
+`mcp_adapter.py`。

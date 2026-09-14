@@ -8,9 +8,11 @@
 
 ### 新增
 
-- 在 `tricycle-reaction-db` 中实现 `HttpReactionDatabaseAdapter`，通过数据库 HTTP API 创建
-  project、注册并流式上传计算日志批次，支持确定性幂等键、断点续传、失败文件重试和服务端解析等待。
-- live agent 自动注入该 adapter；数据库 URL、token、organization ID 和 TLS/超时策略只从环境变量读取，dry-run 不访问网络。
+- 在 `tricycle-reaction-db` 中实现 `McpReactionDatabaseAdapter`，通过数据库 Streamable HTTP
+  MCP 的 project、manifest、import-job 和 compose-query 工具完成导入、筛选与导出；MCP 导入
+  使用数据库服务可见的暂存路径和文件哈希，不通过 MCP 传输日志字节。
+- live agent 自动注入 MCP adapter；数据库 MCP URL、token、organization ID、暂存根目录和
+  TLS/超时策略只从环境变量读取，dry-run 不访问网络。
 
 ## 2026-09-13
 

@@ -370,7 +370,7 @@ initial_guess_source = "RitS zero-shot"
                     ]
                 )
 
-    def test_live_reaction_database_capability_injects_the_http_adapter(self) -> None:
+    def test_live_reaction_database_capability_injects_the_mcp_adapter(self) -> None:
         class FakeAdapter:
             def ingest_calculation_logs(self, _request, manifest):
                 self.manifest = manifest

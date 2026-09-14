@@ -58,9 +58,12 @@ uv run --package tricycle-agent tricycle-agent run \
 - `--bohr-config`：Bohr CLI adapter 的配置文件。
 
 Reaction DB 的 live capability 会在执行阶段自动注入
-`HttpReactionDatabaseAdapter`。配置 `TRICYCLE_REACTION_DB_URL`、
-`TRICYCLE_REACTION_DB_TOKEN` 和 `TRICYCLE_REACTION_DB_ORGANIZATION_ID`；这些凭据不会写入
-TOML 或 `run.toml`。默认启用 TLS 校验，内部 CA 使用 `TRICYCLE_REACTION_DB_CA_BUNDLE`。
+`McpReactionDatabaseAdapter`。配置数据库的 Streamable HTTP MCP 地址
+`TRICYCLE_REACTION_DB_MCP_URL`、MCP Token `TRICYCLE_REACTION_DB_MCP_TOKEN`、
+`TRICYCLE_REACTION_DB_ORGANIZATION_ID`，以及数据库服务可见的暂存目录
+`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入只
+发送 manifest，数据库服务从暂存目录读取日志字节。默认启用 TLS 校验，内部 CA 使用
+`TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
 
 ### 查看和恢复
 

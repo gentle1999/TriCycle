@@ -1,9 +1,9 @@
-"""HTTP adapter for the project-scoped reaction database API.
+"""Legacy HTTP adapter for the project-scoped reaction database API.
 
 The domain package deliberately keeps the remote API behind
-``ReactionDatabaseAdapter``.  This module is the concrete adapter for the
-database's documented HTTP API; it does not change the request or receipt
-contracts used by the plugin.
+``ReactionDatabaseAdapter``.  The live application composition uses the MCP
+adapter in ``mcp_adapter.py``; this module remains an explicit compatibility
+adapter for callers that still need the documented REST upload API.
 """
 
 from __future__ import annotations
@@ -1031,7 +1031,11 @@ def create_reaction_database_adapter(
     *,
     environ: Mapping[str, str] | None = None,
 ) -> HttpReactionDatabaseAdapter:
-    """Compose the production HTTP adapter for the live application path."""
+    """Compose the explicit legacy HTTP adapter.
+
+    The package-level ``create_reaction_database_adapter`` now resolves to the
+    MCP adapter.  Keep this module-local factory for backwards compatibility.
+    """
 
     return HttpReactionDatabaseAdapter.from_env(env_file, environ=environ)
 

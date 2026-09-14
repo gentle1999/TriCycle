@@ -367,7 +367,7 @@ class CapabilityDispatcher:
         )
 
     def with_reaction_database(self, env_file: Path | None = None) -> CapabilityDispatcher:
-        """Return a dispatcher with the live HTTP reaction DB adapter injected."""
+        """Return a dispatcher with the live MCP reaction DB adapter injected."""
 
         return CapabilityDispatcher(
             self.catalog,

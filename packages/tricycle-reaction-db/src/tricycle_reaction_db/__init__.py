@@ -7,6 +7,7 @@ from .contracts import (
     RXNRESID_EXPORT_API_CONTRACT,
     RXNRESID_STANDARD_CSV_EXPORT_METHOD,
     RXNRESID_STANDARD_CSV_EXPORT_ROUTE,
+    ReactionDatabaseMcpToolCall,
     StandardReactionDatabaseApiRequest,
     build_filter_expression,
     build_rits_mapped_reaction_requests,
@@ -16,6 +17,11 @@ from .http_adapter import (
     HttpReactionDatabaseAdapter,
     ReactionDatabaseApiError,
     ReactionDatabaseHttpConfig,
+)
+from .mcp_adapter import (
+    McpReactionDatabaseAdapter,
+    ReactionDatabaseMcpConfig,
+    ReactionDatabaseMcpError,
     create_reaction_database_adapter,
 )
 from .models import (
@@ -50,6 +56,9 @@ __all__ = [
     "ReactionDatabaseAdapter",
     "ReactionDatabaseApiError",
     "ReactionDatabaseHttpConfig",
+    "ReactionDatabaseMcpConfig",
+    "ReactionDatabaseMcpError",
+    "ReactionDatabaseMcpToolCall",
     "REACTION_SMARTS_FILTER_FIELD",
     "RITS_EXPORT_API_CONTRACT",
     "RITS_STANDARD_GEOMETRY_XYZ_ROUTE",
@@ -62,6 +71,7 @@ __all__ = [
     "ReactionDatabaseProjectSpec",
     "ReactionDatabasePlugin",
     "HttpReactionDatabaseAdapter",
+    "McpReactionDatabaseAdapter",
     "ReactionFilterReceipt",
     "ReactionFilterRequest",
     "ReactionIngestRequest",

@@ -58,13 +58,11 @@
 - 对应的 `ts_structure`，默认以 XYZ 物化；
 - 数据库 project ID、固定 reaction SMARTS 和导出行数/provenance。
 
-当前数据库没有同时返回这两类数据的单一 CSV 路由。adapter 必须按标准资源 API 读取：
-
-- `GET /api/mapped-reactions`；
-- mapped reaction detail；
-- `GET /api/depictions/geometry/{geometry_id}.xyz`。
-
-成功 receipt 必须记录 `RITS_EXPORT_API_CONTRACT` 以及这些标准请求。
+当前数据库没有同时返回这两类数据的单一 CSV 路由。MCP adapter 通过
+`compose_query` 读取 `MappedReactionQueryService.list_mapped_reactions`、
+`MappedReactionQueryService.get_mapped_reaction` 和 `GeometryQueryService.get_geometry`，再由
+数据库返回的坐标物化 XYZ。成功 receipt 必须记录 `RITS_EXPORT_API_CONTRACT` 以及这些 MCP
+调用证明。
 
 ### RxnResid
 
@@ -74,9 +72,11 @@
 - `reaction_free_energy`、`activation_free_energy`；
 - `reactant_compute_seconds`、`transition_state_compute_seconds`、`product_compute_seconds`。
 
-请求固定使用 `POST /api/mapped-reactions/thermodynamics/export.csv`，时间单位为 seconds，
-能量单位由请求声明。请求和 receipt 会保存 `RXNRESID_EXPORT_API_CONTRACT`，adapter 不能用
-本地 query-and-compose 替代标准 API 合约。
+MCP adapter 通过 `compose_query` 调用
+`MappedReactionQueryService.list_mapped_reactions` 和
+`ReactionEnergyQueryService.get_mapped_reaction_thermodynamics`，时间单位为 seconds，能量
+单位由请求声明。请求和 receipt 会保存 `RXNRESID_EXPORT_API_CONTRACT` 以及 MCP 调用证明，
+adapter 不能用本地日志解析替代数据库查询。
 
 ## 架构和 adapter 边界
 
@@ -88,7 +88,7 @@ flowchart LR
     A -->|ingest| I["ReactionDatabaseAdapter"]
     A -->|filter| F["database-authoritative filter"]
     A -->|RitS export| R["mapped reactions + XYZ resources"]
-    A -->|RxnResid export| X["thermodynamics CSV API"]
+    A -->|RxnResid export| X["thermodynamics MCP query"]
     I --> O["receipt + provenance"]
     F --> O
     R --> O
@@ -96,11 +96,13 @@ flowchart LR
 ```
 
 `ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；仓库内置的
-`HttpReactionDatabaseAdapter` 对接数据库的 HTTP API，并使用流式 multipart 上传计算日志。
-`ReactionRepository` 保留单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt
-形状，不写数据库、不发 HTTP、不创建远程 project。测试可使用 `InMemoryReactionRepository`
-或内存 adapter。HTTP adapter 的 URL、token、organization ID 和超时策略只从 live 环境变量
-读取，不能保存进请求 TOML。
+`McpReactionDatabaseAdapter` 通过数据库的 Streamable HTTP MCP endpoint 调用
+`create_project`、`register_import_manifest`、`start_import_job`、`get_import_status` 和
+`compose_query`。MCP 导入只发送带哈希的 manifest，日志文件必须预先位于数据库服务可见的
+`TRICYCLE_REACTION_DB_MCP_STAGING_ROOT` 下。`ReactionRepository` 保留单条记录兼容边界。
+dry-run 只解析请求、发现文件、生成计划和 receipt 形状，不写数据库、不发 MCP 请求、不创建
+远程 project。测试可使用 `InMemoryReactionRepository` 或内存 adapter。MCP endpoint、token、
+organization ID、暂存目录和超时策略只从 live 环境变量读取，不能保存进请求 TOML。
 
 ## CLI 示例
 
