@@ -19,6 +19,6 @@ output_artifacts = [
 task = "finetune"
 upstream_protocol = "refit"
 source_repository = "https://github.com/gentle1999/RxnResid"
-source_revision = "ac2a0c59b80d430564309c77d26f0a0d69139009"
+source_revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
 source_manifest = "packages/tricycle-sar/src/tricycle_sar/assets/rxnresid-model.toml"
 checkpoint_path = "runs/fold-00/checkpoint.pt"

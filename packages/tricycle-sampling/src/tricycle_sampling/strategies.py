@@ -23,18 +23,34 @@ class SamplingStrategy(Protocol):
 
 
 UNCERTAINTY_SCORE_KEYS: dict[str, tuple[str, ...]] = {
-    # These short names are the columns emitted by the reference
-    # implementation accompanying the Nature Communications paper.
-    "predictive": ("predictive_unc", "predictive_uncertainty"),
-    "epistemic": ("epistemic_unc", "epistemic_uncertainty"),
-    "aleatoric": ("aleatoric_unc", "aleatoric_uncertainty"),
+    # RxnResid's native evidential regression output is expressed in physical
+    # target units. Prefer variance for acquisition, then accept its standard
+    # deviation and the historical TriCycle/paper-compatible aliases.
+    "predictive": (
+        "predictive_variance",
+        "predictive_std",
+        "predictive_unc",
+        "predictive_uncertainty",
+    ),
+    "epistemic": (
+        "epistemic_variance",
+        "epistemic_std",
+        "epistemic_unc",
+        "epistemic_uncertainty",
+    ),
+    "aleatoric": (
+        "aleatoric_variance",
+        "aleatoric_std",
+        "aleatoric_unc",
+        "aleatoric_uncertainty",
+    ),
 }
 POSTERIOR_PROBABILITY_KEYS = ("posterior_probabilities", "posterior_probs")
 
 
 @dataclass(frozen=True, slots=True)
 class UncertaintyScores:
-    """Entropy-based uncertainty scores for one binary prediction."""
+    """Three scalar uncertainty scores for one candidate."""
 
     predictive: float
     epistemic: float
@@ -159,8 +175,9 @@ def _posterior_probabilities(payload: Mapping[str, Any]) -> tuple[float, ...] | 
 def get_uncertainty_scores(candidate: Candidate) -> UncertaintyScores:
     """Read or derive the three uncertainty scores for a candidate.
 
-    A model adapter may provide the paper-compatible scalar fields directly,
-    or provide posterior Bernoulli probabilities and let this pure helper
+    A model adapter may provide RxnResid's evidential variance/std fields or
+    the paper-compatible scalar fields directly. Alternatively, it may
+    provide posterior Bernoulli probabilities and let this pure helper
     calculate the entropy decomposition.
     """
 
@@ -215,6 +232,28 @@ def get_uncertainty_score(candidate: Candidate, kind: str) -> float:
         raw,
         field_name=f"candidate {candidate.candidate_id!r} {kind} uncertainty",
     )
+
+
+def get_uncertainty_field(candidate: Candidate, kind: str) -> str:
+    """Return the payload field used for one candidate's uncertainty score."""
+
+    if kind not in UNCERTAINTY_SCORE_KEYS:
+        raise InvalidRequestError(f"unknown uncertainty kind: {kind}")
+    keys = (*UNCERTAINTY_SCORE_KEYS[kind], kind)
+    for key in keys:
+        if key in candidate.payload:
+            return key
+    nested = candidate.payload.get("uncertainty", _MISSING)
+    if isinstance(nested, Mapping):
+        for key in keys:
+            if key in nested:
+                return f"uncertainty.{key}"
+    for key in POSTERIOR_PROBABILITY_KEYS:
+        if key in candidate.payload:
+            return key
+    # Reuse the canonical validation error when no source field exists.
+    get_uncertainty_score(candidate, kind)
+    return "derived"
 
 
 class RandomSamplingStrategy:

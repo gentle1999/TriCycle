@@ -109,6 +109,5 @@ flowchart LR
 ## 验证
 
 ```bash
-uv run pytest tests/test_capability_runtime.py
-make check
+uv run --frozen --all-packages pytest apps/tricycle-agent/tests
 ```

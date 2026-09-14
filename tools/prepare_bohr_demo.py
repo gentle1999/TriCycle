@@ -18,7 +18,7 @@ from collections import defaultdict
 from pathlib import Path
 
 RITS_REVISION = "6d8aa0704c21d2798326a7e070491abf438ca292"
-RXNRESID_REVISION = "ac2a0c59b80d430564309c77d26f0a0d69139009"
+RXNRESID_REVISION = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
 
 
 def _link_or_copy(source: str, destination: str) -> None:

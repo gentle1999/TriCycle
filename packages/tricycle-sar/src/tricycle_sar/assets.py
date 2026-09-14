@@ -19,9 +19,23 @@ def _required_text(payload: Mapping[str, object], key: str) -> str:
     return value.strip()
 
 
+def _text_list(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
+    value = payload.get(key)
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise InvalidRequestError(f"RxnResid model manifest {key} must be a list of strings")
+    values = tuple(item.strip() if isinstance(item, str) else item for item in value)
+    if any(not isinstance(item, str) or not item for item in values):
+        raise InvalidRequestError(
+            f"RxnResid model manifest {key} must contain non-empty strings"
+        )
+    return values
+
+
 @dataclass(frozen=True, slots=True)
 class RxnResidModelAsset:
-    """Pinned RxnResid source and task-entrypoint metadata."""
+    """Pinned RxnResid source, entrypoint, and prediction-output metadata."""
 
     model_name: str
     repository: str
@@ -31,6 +45,8 @@ class RxnResidModelAsset:
     inference_entrypoint: str
     default_data_path: str
     finetune_protocol: str = "refit"
+    uncertainty_method: str = "none"
+    uncertainty_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -42,12 +58,19 @@ class RxnResidModelAsset:
             "inference_entrypoint",
             "default_data_path",
             "finetune_protocol",
+            "uncertainty_method",
         ):
             value = getattr(self, field_name)
             if not value.strip():
                 raise InvalidRequestError(f"RxnResid model manifest {field_name} must not be empty")
         if not _COMMIT_PATTERN.fullmatch(self.revision):
             raise InvalidRequestError("RxnResid model revision must be a 40-character git commit")
+        if any(
+            not isinstance(field, str) or not field.strip() for field in self.uncertainty_fields
+        ):
+            raise InvalidRequestError(
+                "RxnResid model manifest uncertainty_fields must contain non-empty strings"
+            )
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> RxnResidModelAsset:
@@ -65,9 +88,15 @@ class RxnResidModelAsset:
             )
             if payload.get("finetune_protocol") is not None
             else "refit",
+            uncertainty_method=(
+                _required_text(payload, "uncertainty_method")
+                if payload.get("uncertainty_method") is not None
+                else "none"
+            ),
+            uncertainty_fields=_text_list(payload, "uncertainty_fields"),
         )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "model_name": self.model_name,
             "repository": self.repository,
@@ -77,6 +106,8 @@ class RxnResidModelAsset:
             "inference_entrypoint": self.inference_entrypoint,
             "default_data_path": self.default_data_path,
             "finetune_protocol": self.finetune_protocol,
+            "uncertainty_method": self.uncertainty_method,
+            "uncertainty_fields": list(self.uncertainty_fields),
         }
 
 

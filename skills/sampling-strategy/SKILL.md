@@ -29,8 +29,9 @@ description: "Select the next batch of reaction candidates with a registered, au
 - 输出 `SamplingResult`，其中 selected 与 remaining 保持候选对象完整性；
 - 相同输入和 seed 的内置 random 策略应可复现；
 - 三种 uncertainty 策略按对应 payload 分数降序选择候选，并稳定保留相同分数的输入顺序；
-- uncertainty 分数优先使用论文释出结果中的对应字段 `predictive_unc`、`epistemic_unc` 或
-  `aleatoric_unc`，也接受 `*_uncertainty` 完整拼写；
+- uncertainty 分数优先使用 RxnResid 原生 evidential 输出中的
+  `predictive_variance`、`epistemic_variance` 或 `aleatoric_variance`，也接受对应 `*_std`、
+  历史 `*_unc` 和 `*_uncertainty` 字段；variance 优先于 std；
 - 候选也可以提供 `posterior_probabilities`，由采样模块按二分类熵分解纯函数计算三种分数；
 - 不在策略插件内偷偷查询数据库或模型；外部信息通过 payload/adapter 显式传入；
 - 论文中的 `predictive_unc_based`、`epistemic_unc_based`、`aleatoric_unc_based` 和
@@ -52,3 +53,8 @@ epistemic  = predictive - aleatoric
 epistemic 表示模型知识不足/模型间分歧，aleatoric 表示数据或反应自身的不可约噪声；
 `random` 是不使用模型信息的可复现控制组。模型推理和分数生成应由上游显式 adapter 完成，
 采样组件只负责排序和选择。
+
+RxnResid 最新 `predict.py` 输出的 variance 位于目标物理单位下，且
+`predictive_variance = aleatoric_variance + epistemic_variance`。主动学习通常把
+`epistemic_variance` 作为 acquisition score；`lower_95`、`upper_95` 是随候选保留的预测区间，
+不参与排序。

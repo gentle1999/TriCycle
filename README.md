@@ -268,7 +268,7 @@ RxnResid（兼容保留的 `sar.*` 能力）固定使用以下上游仓库和 co
 
 ```text
 repository: https://github.com/gentle1999/RxnResid
-revision: ac2a0c59b80d430564309c77d26f0a0d69139009
+revision: 9deebde39b38df1085dbac3a379c2a59edd7c97d
 training_entrypoint: train.py
 inference_entrypoint: predict.py
 config: configs/rxnresid.yaml
@@ -281,6 +281,11 @@ config: configs/rxnresid.yaml
 [`configs/example-rxnresid-train-request.toml`](configs/example-rxnresid-train-request.toml) 和
 [`configs/example-rxnresid-infer-request.toml`](configs/example-rxnresid-infer-request.toml)、
 [`configs/example-rxnresid-finetune-request.toml`](configs/example-rxnresid-finetune-request.toml)。
+
+该 revision 引入原生 evidential regression 不确定度推理。新版 `predict.py` 会在预测 CSV 中
+写出 `aleatoric_variance`、`epistemic_variance`、`predictive_variance` 及对应的 `*_std` 和
+`lower_95`/`upper_95`；其中 `epistemic_variance` 可直接作为主动学习采样分数，采样示例和
+策略也接受这些上游字段。
 
 ## 5. TriCycle 元数据、任务输入与环境变量
 
@@ -644,6 +649,7 @@ downloaded = dispatcher.execute(
 ```bash
 make check
 make test
+make ci-test
 uv run pytest
 uv run ruff check .
 uv lock --check

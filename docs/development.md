@@ -15,6 +15,10 @@ uv run ruff format --check .
 uv run ruff check .
 ```
 
+CI 使用 [`tools/ci_test.sh`](../tools/ci_test.sh) 运行锁定依赖、编译检查、Ruff、根目录
+集成测试，以及 `packages/*/tests` 和 `apps/*/tests` 中每个 workspace 子项目的独立测试。
+缺少 `tests/` 或 `test_*.py` 的子项目会使 CI 失败。
+
 Bohr 的平台任务测试按代码边界放在具体 package 中：
 
 - `packages/tricycle-bohr/tests/` 验证组件层的任务推送、任务状态查看和结果下载，以及默认 dry-run 不调用 gateway；

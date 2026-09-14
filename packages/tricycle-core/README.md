@@ -99,11 +99,10 @@ plan = TaskPlan(
 
 ## 验证
 
-core 的契约主要由根目录测试覆盖：
+core 的契约测试位于 [`tests/`](tests/)；workspace 级跨组件测试仍位于根目录 `tests/`：
 
 ```bash
-uv run pytest tests/test_framework.py tests/test_capability_runtime.py
-make check
+uv run --frozen --all-packages pytest packages/tricycle-core/tests
 ```
 
 开发约束见 [`docs/plugin-contract.md`](../../docs/plugin-contract.md)。

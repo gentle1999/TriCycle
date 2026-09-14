@@ -76,6 +76,8 @@ class SarPlugin(BohrModelPlugin):
         job_parameters.setdefault("config_path", asset.config_path)
         job_parameters.setdefault("training_entrypoint", asset.training_entrypoint)
         job_parameters.setdefault("inference_entrypoint", asset.inference_entrypoint)
+        job_parameters.setdefault("uncertainty_method", asset.uncertainty_method)
+        job_parameters.setdefault("uncertainty_fields", list(asset.uncertainty_fields))
         bohr_job["parameters"] = job_parameters
         return replace(
             plan,
@@ -84,6 +86,8 @@ class SarPlugin(BohrModelPlugin):
                 **plan.metadata,
                 "source_repository": asset.repository,
                 "source_revision": asset.revision,
+                "uncertainty_method": asset.uncertainty_method,
+                "uncertainty_fields": list(asset.uncertainty_fields),
             },
         )
 

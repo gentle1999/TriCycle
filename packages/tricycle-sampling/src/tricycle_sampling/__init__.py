@@ -13,6 +13,7 @@ from .strategies import (
     UncertaintyScores,
     binary_entropy,
     decompose_binary_uncertainty,
+    get_uncertainty_field,
     get_uncertainty_score,
     get_uncertainty_scores,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "UncertaintySamplingStrategy",
     "binary_entropy",
     "decompose_binary_uncertainty",
+    "get_uncertainty_field",
     "get_uncertainty_score",
     "get_uncertainty_scores",
 ]

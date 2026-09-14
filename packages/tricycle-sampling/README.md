@@ -32,8 +32,10 @@
 | `metadata` | 供上层循环保留的附加信息 |
 
 不确定性策略要求每个候选的 `payload` 含有对应的模型分数：
-`predictive_unc`、`epistemic_unc` 或 `aleatoric_unc`。这些名称与论文释出的预测 CSV 列名一致，
-也接受完整拼写 `*_uncertainty`；如果提供 `posterior_probabilities`，则可由模块推导所需分数。
+RxnResid 最新版原生输出的 `predictive_variance`、`epistemic_variance` 或
+`aleatoric_variance` 优先，也接受对应的 `*_std`、历史 `*_unc` 和完整拼写
+`*_uncertainty`。variance/std 是目标物理单位下的不确定性量，排序时优先使用 variance；如果
+提供 `posterior_probabilities`，则可由模块推导论文 baseline 所需分数。
 采样模块不会自行加载模型或查询外部服务。
 
 返回的 `SamplingResult` 包含 `selected`、`remaining`、策略名称、seed 和 metadata，并提供
@@ -73,13 +75,18 @@ epistemic   = predictive - aleatoric
 
 | 策略 | 选择的候选 | 在探索循环中的含义 |
 | --- | --- | --- |
-| `predictive-uncertainty` | `predictive_unc` 最大 | 总体预测最不确定，兼顾模型知识不足和反应/数据本身噪声 |
-| `epistemic-uncertainty` | `epistemic_unc` 最大 | 模型之间分歧最大，优先填补模型的知识空白，通常最适合 active learning |
-| `aleatoric-uncertainty` | `aleatoric_unc` 最大 | 反应结果的内在随机性/实验噪声最大；适合作为对照，也可用于研究可重复性 |
+| `predictive-uncertainty` | `predictive_variance` 最大（兼容 `predictive_std`/`predictive_unc`） | 总体预测最不确定，兼顾模型知识不足和反应/数据本身噪声 |
+| `epistemic-uncertainty` | `epistemic_variance` 最大（兼容 `epistemic_std`/`epistemic_unc`） | 模型知识不确定性最大，优先填补模型的知识空白，通常最适合 active learning |
+| `aleatoric-uncertainty` | `aleatoric_variance` 最大（兼容 `aleatoric_std`/`aleatoric_unc`） | 反应结果的内在随机性/实验噪声最大；适合作为对照，也可用于研究可重复性 |
 | `random` | 固定 seed 下均匀随机抽取 | 不使用模型信息的控制组 |
 
 实现还接受 `payload.posterior_probabilities = [p_1, p_2, ...]`，会在本地计算上面的三个分数；
 如果同时提供了显式分数，则显式分数优先。排序相同分数时保持输入顺序。
+
+RxnResid 的 evidential regression 输出可以直接作为候选 payload。其
+`predictive_variance = aleatoric_variance + epistemic_variance`；主动学习通常选择
+`epistemic_variance` 最大的候选，预测区间 `lower_95`/`upper_95` 可随 payload 一并保存但不参与
+排序。
 
 ## TOML 示例
 
@@ -107,11 +114,11 @@ budget = 2
 
 [[candidates]]
 candidate_id = "rxn-001"
-payload = { reaction_smiles = "A>>B", predictive_unc = 0.12, epistemic_unc = 0.05, aleatoric_unc = 0.07 }
+payload = { reaction_smiles = "A>>B", predictive_variance = 0.12, epistemic_variance = 0.05, aleatoric_variance = 0.07 }
 
 [[candidates]]
 candidate_id = "rxn-002"
-payload = { reaction_smiles = "C>>D", predictive_unc = 0.63, epistemic_unc = 0.48, aleatoric_unc = 0.15 }
+payload = { reaction_smiles = "C>>D", predictive_variance = 0.63, epistemic_variance = 0.48, aleatoric_variance = 0.15 }
 ```
 
 通过组合应用执行：
@@ -162,6 +169,5 @@ class MyStrategy:
 ## 验证
 
 ```bash
-uv run pytest tests/test_framework.py -k sampling
-make check
+uv run --frozen --all-packages pytest packages/tricycle-sampling/tests
 ```

@@ -15,7 +15,7 @@ description: "Plan or explicitly submit a SAR inference job to Bohr from a TOML 
 `registry.dp.tech/dptech/dp/native/prod-23278/dl:260828` Bohr worker runtime；当前 RxnResid
 代码和推理入口随任务 artifact 上传，worker 使用系统 Python 直接安装项目，不创建虚拟环境。
 当前上游固定为 `https://github.com/gentle1999/RxnResid`，commit 为
-`ac2a0c59b80d430564309c77d26f0a0d69139009`；官方推理入口是 `predict.py`，配置为
+`9deebde39b38df1085dbac3a379c2a59edd7c97d`；该版本启用原生 evidential 不确定度推理。官方推理入口是 `predict.py`，配置为
 `configs/rxnresid.yaml`。可使用 `tricycle_sar.build_inference_command` 生成命令。
 默认只规划，不访问 Bohr：
 
@@ -28,6 +28,9 @@ uv run --package tricycle-agent tricycle-agent plan sar.infer request.toml --run
 推理命令通过输入目录中的 `bash run.sh` 安装当前任务代码后执行，脚本中的实际命令形式为
 `python3.12 predict.py --checkpoint ... --data ... --output ...`。TriCycle
 请求使用 TOML，任务原生配置作为输入 artifact 传递；不要把代码版本或任务配置假设写死在镜像中。
+新版预测 CSV 会生成 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、
+对应 `*_std` 以及 `lower_95`/`upper_95`。将预测行放入 candidate payload 后，
+`epistemic-uncertainty` 策略会优先选择 `epistemic_variance` 最大的候选。
 
 ## 不适用与失败恢复
 

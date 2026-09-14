@@ -134,12 +134,15 @@ cp artifacts/rits/rits.ckpt /path/to/RitS/data/rits.ckpt
 RxnResid 组件固定使用：
 
 ```text
-https://github.com/gentle1999/RxnResid@ac2a0c59b80d430564309c77d26f0a0d69139009
+https://github.com/gentle1999/RxnResid@9deebde39b38df1085dbac3a379c2a59edd7c97d
 ```
 
 其官方任务入口为 `train.py` 和 `predict.py`，默认项目配置为
 `configs/rxnresid.yaml`。任务目录应携带该仓库的代码、数据、配置和 checkpoint；
 `tricycle-sar` 仅在计划中记录仓库 provenance，并通过上传目录中的 bash entrypoint 调用这些入口。
+当前 `predict.py` 还会输出 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、
+对应标准差以及 `lower_95`/`upper_95`。主动学习默认使用 `epistemic_variance` 排序；这些字段
+会随 SAR plan 的 `uncertainty_fields` 元数据一并记录。
 
 ## Bohr 任务测试
 

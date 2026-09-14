@@ -6,10 +6,21 @@ schema = "tricycle.rxnresid-model/v1"
 [model]
 model_name = "rxnresid"
 repository = "https://github.com/gentle1999/RxnResid"
-revision = "ac2a0c59b80d430564309c77d26f0a0d69139009"
+revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
 revision_kind = "git-commit"
 config_path = "configs/rxnresid.yaml"
 training_entrypoint = "train.py"
 inference_entrypoint = "predict.py"
 default_data_path = "data/new_full_df_exact_balanced_40ene_40diene.csv"
 finetune_protocol = "refit"
+uncertainty_method = "evidential"
+uncertainty_fields = [
+    "aleatoric_variance",
+    "epistemic_variance",
+    "predictive_variance",
+    "aleatoric_std",
+    "epistemic_std",
+    "predictive_std",
+    "lower_95",
+    "upper_95",
+]

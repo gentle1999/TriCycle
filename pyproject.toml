@@ -21,7 +21,7 @@ members = ["packages/*", "apps/*"]
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"
-testpaths = ["tests", "packages"]
+testpaths = ["tests", "packages", "apps"]
 pythonpath = [
     "packages/tricycle-core/src",
     "packages/tricycle-bohr/src",

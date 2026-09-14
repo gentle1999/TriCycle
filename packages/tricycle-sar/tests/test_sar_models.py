@@ -24,11 +24,25 @@ class SarModelTests(unittest.TestCase):
         self.assertEqual(asset.repository, "https://github.com/gentle1999/RxnResid")
         self.assertEqual(
             asset.revision,
-            "ac2a0c59b80d430564309c77d26f0a0d69139009",
+            "9deebde39b38df1085dbac3a379c2a59edd7c97d",
         )
         self.assertEqual(asset.config_path, "configs/rxnresid.yaml")
         self.assertEqual(asset.training_entrypoint, "train.py")
         self.assertEqual(asset.inference_entrypoint, "predict.py")
+        self.assertEqual(asset.uncertainty_method, "evidential")
+        self.assertEqual(
+            asset.uncertainty_fields,
+            (
+                "aleatoric_variance",
+                "epistemic_variance",
+                "predictive_variance",
+                "aleatoric_std",
+                "epistemic_std",
+                "predictive_std",
+                "lower_95",
+                "upper_95",
+            ),
+        )
 
     def test_ml_worker_defaults_can_come_from_environment(self) -> None:
         request = {
@@ -60,6 +74,21 @@ class SarModelTests(unittest.TestCase):
         self.assertEqual(job["image"], "registry.example/dl:rxnresid")
         self.assertEqual(job["project_id"], "project-001")
         self.assertEqual(job["machine_type"], "gpu-machine")
+        self.assertEqual(job["parameters"]["uncertainty_method"], "evidential")
+        self.assertEqual(
+            job["parameters"]["uncertainty_fields"],
+            [
+                "aleatoric_variance",
+                "epistemic_variance",
+                "predictive_variance",
+                "aleatoric_std",
+                "epistemic_std",
+                "predictive_std",
+                "lower_95",
+                "upper_95",
+            ],
+        )
+        self.assertEqual(plan.metadata["uncertainty_method"], "evidential")
 
     def test_explicit_image_and_resources_override_environment(self) -> None:
         request = SarJobRequest(

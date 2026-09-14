@@ -20,7 +20,8 @@
 ## 模型资产和固定协议
 
 默认资产位于 [`src/tricycle_sar/assets/rxnresid-model.toml`](src/tricycle_sar/assets/rxnresid-model.toml)。
-它记录 repository、commit、配置路径和训练/推理入口；资产读取是本地操作，不会自动联网。
+它记录 repository、commit、配置路径、训练/推理入口和新版 evidential 不确定度输出字段；资产
+读取是本地操作，不会自动联网。
 
 `SarPlugin.plan_job()` 会校验并写入：
 
@@ -28,9 +29,14 @@
 - train/infer/finetune 对应的 upstream entrypoint；
 - `predict` 推理协议和 `refit` 微调协议；
 - 默认 `config_path`、训练入口和推理入口。
+- `uncertainty_method` 和 `uncertainty_fields`，其中 `epistemic_variance` 可供主动学习采样。
 
 请求中提供冲突的源码版本或入口会被拒绝。这样生成的 Bohr 计划可以独立审查，不依赖运行
 机器当前 checkout 的隐式版本。
+
+新版 `predict.py` 直接生成 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、
+对应标准差和 95% 区间。将预测行放入候选 `payload` 后，可直接交给
+[`tricycle-sampling`](../tricycle-sampling/README.md) 的 uncertainty 策略。
 
 ## 命令构造
 

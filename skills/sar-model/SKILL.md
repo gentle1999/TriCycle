@@ -13,7 +13,7 @@ description: "Create RxnResid training, fine-tuning, or inference jobs and submi
 
 - `model_name`、只包含公共依赖的 worker `image` 和可选 Bohr 资源；
 - 上游代码固定为 `https://github.com/gentle1999/RxnResid`，默认 commit 为
-  `ac2a0c59b80d430564309c77d26f0a0d69139009`；
+  `9deebde39b38df1085dbac3a379c2a59edd7c97d`；该版本启用原生 evidential 不确定度推理；
 - 训练时必须提供 `dataset` artifact；
 - 推理时必须提供 `checkpoint` artifact，可再提供待预测输入；
 - 必须提供实际任务 `command`，通常为 `bash run.sh`；`run.sh` 随 `input_directory` 上传，
@@ -37,6 +37,9 @@ description: "Create RxnResid training, fine-tuning, or inference jobs and submi
 - 不把任务原生配置误当成 `run.toml` 或 adapter 配置。
 - 官方训练/推理入口分别是 `train.py` 和 `predict.py`，配置文件为
   `configs/rxnresid.yaml`；可使用 `tricycle_sar` 的命令构造器生成 Bohr command。
+- `predict.py` 输出 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、对应
+  `*_std` 和 `lower_95`/`upper_95`；其中 `epistemic_variance` 可直接交给
+  `tricycle-sampling` 做主动学习排序。
 - `sar.finetune` 必须使用 `train.py --refit --checkpoint <selection-checkpoint>`；该模式从 checkpoint 读取 config/fold/split 和模型设置，在 train+valid 上以新 optimizer 重拟合，不能同时传 `--config`、`--fold-index` 或模型/encoder override。
 
 实现入口：`packages/tricycle-sar/src/tricycle_sar/plugin.py`。

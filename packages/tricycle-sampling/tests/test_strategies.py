@@ -10,6 +10,7 @@ from tricycle_sampling import (
     SamplingPlugin,
     SamplingRequest,
     decompose_binary_uncertainty,
+    get_uncertainty_field,
     get_uncertainty_scores,
 )
 
@@ -70,6 +71,47 @@ class UncertaintySamplingTests(unittest.TestCase):
                 SamplingRequest(candidates=candidates, budget=1, strategy=strategy)
             )
             self.assertEqual(result.selected_ids, ("rxn-b",))
+
+    def test_rxnresid_evidential_variances_are_sampling_scores(self) -> None:
+        candidates = (
+            Candidate(
+                "rxn-a",
+                {
+                    "predictive_variance": 0.2,
+                    "predictive_std": 0.1,
+                    "epistemic_variance": 0.1,
+                    "aleatoric_variance": 0.1,
+                },
+            ),
+            Candidate(
+                "rxn-b",
+                {
+                    "predictive_variance": 0.8,
+                    "predictive_std": 0.2,
+                    "epistemic_variance": 0.6,
+                    "aleatoric_variance": 0.2,
+                },
+            ),
+        )
+        plugin = SamplingPlugin()
+
+        result = plugin.select(
+            SamplingRequest(candidates=candidates, budget=1, strategy="epistemic-uncertainty")
+        )
+
+        self.assertEqual(result.selected_ids, ("rxn-b",))
+        self.assertEqual(get_uncertainty_scores(candidates[1]).epistemic, 0.6)
+        self.assertEqual(get_uncertainty_field(candidates[1], "epistemic"), "epistemic_variance")
+
+        plan = plugin.plan_select(
+            SamplingRequest(candidates=candidates, budget=1, strategy="epistemic-uncertainty"),
+            ExecutionContext(run_id="rxnresid-uncertainty"),
+        )
+        self.assertEqual(plan.parameters["score_field"], "epistemic_variance")
+        self.assertEqual(
+            plan.parameters["score_fields"],
+            ["epistemic_variance", "epistemic_variance"],
+        )
 
     def test_posterior_probabilities_are_decomposed_without_external_dependencies(self) -> None:
         scores = decompose_binary_uncertainty((0.01, 0.99))

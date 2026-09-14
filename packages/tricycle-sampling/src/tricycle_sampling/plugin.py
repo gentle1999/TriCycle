@@ -21,6 +21,7 @@ from .strategies import (
     RandomSamplingStrategy,
     SamplingStrategy,
     UncertaintySamplingStrategy,
+    get_uncertainty_field,
 )
 
 
@@ -101,7 +102,15 @@ class SamplingPlugin(PluginBase):
             "strategy_version": getattr(strategy, "version", self.manifest.version),
         }
         if isinstance(strategy, UncertaintySamplingStrategy):
-            parameters["score_field"] = strategy.score_key
+            score_fields = [
+                get_uncertainty_field(candidate, strategy.uncertainty_kind)
+                for candidate in request.candidates
+            ]
+            distinct_score_fields = tuple(dict.fromkeys(score_fields))
+            parameters["score_field"] = (
+                distinct_score_fields[0] if len(distinct_score_fields) == 1 else "mixed"
+            )
+            parameters["score_fields"] = score_fields
             parameters["candidate_scores"] = [
                 {
                     "candidate_id": candidate.candidate_id,
