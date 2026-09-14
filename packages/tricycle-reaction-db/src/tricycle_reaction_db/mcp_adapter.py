@@ -412,7 +412,12 @@ class _McpTransport:
                 raise ReactionDatabaseMcpError(
                     f"database MCP response was interrupted: {exc}"
                 ) from exc
-            except (URLError, TimeoutError, OSError) as exc:
+            except URLError as exc:
+                if self._is_retryable_url_error(exc) and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
+                raise ReactionDatabaseMcpError(f"database MCP request failed: {exc}") from exc
+            except (TimeoutError, OSError) as exc:
                 raise ReactionDatabaseMcpError(f"database MCP request failed: {exc}") from exc
 
         raise AssertionError("MCP rate-limit retry loop exited unexpectedly")
@@ -441,6 +446,16 @@ class _McpTransport:
             if value >= 0:
                 return min(value, _MCP_MAX_RETRY_AFTER_SECONDS)
         return 1.0
+
+    @staticmethod
+    def _is_retryable_url_error(error: URLError) -> bool:
+        reason = error.reason
+        if isinstance(
+            reason,
+            (IncompleteRead, RemoteDisconnected, ConnectionResetError, ssl.SSLEOFError),
+        ):
+            return True
+        return "EOF occurred in violation of protocol" in str(reason)
 
     @staticmethod
     def _decode_messages(raw: bytes, content_type: str) -> list[Mapping[str, Any]]:
