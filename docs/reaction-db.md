@@ -37,14 +37,16 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 `reaction_class` 条件，也不能在本地重做反应分类。RitS 的 TS 结构默认以 `xyz` 表示。RxnResid 的能量单位由数据库/adapter 明确记录；耗时单位
 固定为秒，阶段固定为 `reactant`、`transition_state`、`product`。CSV 的实际序列化、数据库
 查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。仓库内置的
-`McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP endpoint：先调用
-`create_project`，再对每个选中的 `.log` 调用 `upload_calculation_log`；筛选和导出通过数据库
-MCP 的 `compose_query` 调用 UseCase schema。上传请求使用标准 Base64 传输文件字节，同时携带
-相对路径、SHA-256 和大小，数据库统一执行 Artifact、RustFS、MolOP 和持久化校验。该路径不
-依赖数据库服务可见的共享目录，也不因同机部署而切换实现。每个文件调用返回 durable upload
-batch/item；adapter 在所有文件入队后返回 `submitted`，保留队列 ID 和初始状态，不等待异步
-MolOP 解析，也不会在提交阶段填充清洗反应数量。失败文件会继续尝试其余文件并记录在 receipt
-中。
+`McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP endpoint 创建 project，并通过
+数据库批量文件接口提交日志：先调用 MCP `create_project`，再按服务限制调用
+`POST /api/upload-batches` 创建队列和 `POST /api/upload-batches/{batch_id}/files` multipart
+上传文件；筛选和导出通过数据库 MCP 的 `compose_query` 调用 UseCase schema。批量接口与单文件
+接口共用数据库的 RustFS staging 和 durable worker，TriCycle 只传输文件字节和队列描述，不依赖
+数据库服务可见的共享目录，也不因同机部署而切换实现。默认批量模式可通过
+`TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE=batch` 明确配置；`mcp` 模式保留为旧服务的逐文件
+`upload_calculation_log` 兼容路径。每个批量响应返回 durable batch/item；adapter 在所有文件
+入队后返回 `submitted`，保留队列 ID 和初始状态，不等待异步 MolOP 解析，也不会在提交阶段填充
+清洗反应数量。失败文件/批次会继续尝试其余输入并记录在 receipt 中。
 
 live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据。运行前通过环境变量提供
 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN`、

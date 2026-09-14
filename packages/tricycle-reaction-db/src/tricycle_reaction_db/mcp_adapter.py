@@ -1,10 +1,10 @@
 """MCP adapter for the project-scoped reaction database.
 
-The database exposes a Streamable HTTP MCP endpoint.  This module contains a
-small synchronous MCP client so the domain package can keep its existing
-``ReactionDatabaseAdapter`` boundary without depending on a vendor SDK.  Every
-calculation log is uploaded through the database's file-upload MCP tool; the
-adapter never relies on a shared filesystem between the agent and database.
+The database exposes a Streamable HTTP MCP endpoint and a durable batch upload
+API.  This module contains a small synchronous MCP/HTTP client so the domain
+package can keep its existing ``ReactionDatabaseAdapter`` boundary without
+depending on a vendor SDK.  The adapter never relies on a shared filesystem
+between the agent and database.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import os
 import ssl
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -23,7 +24,7 @@ from http.client import IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from tricycle_core import IntegrationNotConfiguredError, InvalidRequestError, load_dotenv
@@ -52,6 +53,10 @@ _MCP_PROTOCOL_VERSION = "2025-03-26"
 _DEFAULT_APP_NAME = "example-chemistry-database"
 _MCP_RATE_LIMIT_RETRIES = 8
 _MCP_MAX_RETRY_AFTER_SECONDS = 60.0
+_DEFAULT_UPLOAD_MODE = "batch"
+_UPLOAD_MODES = frozenset({"batch", "mcp"})
+_BATCH_MAX_FILES = 64
+_BATCH_MAX_BYTES = 64 * 1024 * 1024
 _QUEUE_ACCEPTED_STATUSES = frozenset(
     {
         "queued",
@@ -80,6 +85,8 @@ _MCP_ENV_KEYS = frozenset(
         "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS",
         "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS",
         "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE",
+        "TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE",
+        "TRICYCLE_REACTION_DB_UPLOAD_MODE",
     }
 )
 
@@ -139,8 +146,9 @@ def _env_int(values: Mapping[str, str], name: str, default: int) -> int:
 class ReactionDatabaseMcpConfig:
     """Runtime settings for :class:`McpReactionDatabaseAdapter`.
 
-    Calculation-log bytes are transferred through MCP.  No path in the
-    database service's filesystem is part of this configuration.
+    Calculation-log bytes are transferred through the MCP control plane and
+    either the durable multipart queue API or the legacy MCP upload tool.  No
+    path in the database service's filesystem is part of this configuration.
     """
 
     endpoint_url: str
@@ -151,6 +159,7 @@ class ReactionDatabaseMcpConfig:
     ca_bundle: Path | None = None
     timeout_seconds: float = 60.0
     page_size: int = 200
+    upload_mode: str = _DEFAULT_UPLOAD_MODE
 
     def __post_init__(self) -> None:
         endpoint = str(self.endpoint_url).strip().rstrip("/")
@@ -179,6 +188,11 @@ class ReactionDatabaseMcpConfig:
             raise InvalidRequestError("timeout_seconds must be positive")
         if not 1 <= self.page_size <= 200:
             raise InvalidRequestError("page_size must be between 1 and 200")
+        upload_mode = str(self.upload_mode).strip().casefold()
+        if upload_mode not in _UPLOAD_MODES:
+            raise InvalidRequestError(
+                "upload_mode must be one of: " + ", ".join(sorted(_UPLOAD_MODES))
+            )
         ca_bundle = self.ca_bundle
         if ca_bundle is not None and not isinstance(ca_bundle, Path):
             ca_bundle = Path(str(ca_bundle)).expanduser()
@@ -189,6 +203,7 @@ class ReactionDatabaseMcpConfig:
         object.__setattr__(self, "organization_id", organization_id)
         object.__setattr__(self, "app_name", app_name)
         object.__setattr__(self, "ca_bundle", ca_bundle)
+        object.__setattr__(self, "upload_mode", upload_mode)
 
     @classmethod
     def from_env(
@@ -238,6 +253,10 @@ class ReactionDatabaseMcpConfig:
                 _env_float(values, "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS", 60.0),
             ),
             page_size=_env_int(values, "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE", 200),
+            upload_mode=values.get(
+                "TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE",
+                values.get("TRICYCLE_REACTION_DB_UPLOAD_MODE", _DEFAULT_UPLOAD_MODE),
+            ),
         )
 
     def ssl_context(self) -> ssl.SSLContext:
@@ -587,8 +606,14 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             )
         upload_files, archive_sha256 = self._build_upload_files(manifest)
         self._transport.ensure_tool("create_project")
-        self._transport.ensure_tool("upload_calculation_log")
+        if self.config.upload_mode == "mcp":
+            self._transport.ensure_tool("upload_calculation_log")
         idempotency_key = request.resolved_idempotency_key(manifest)
+        file_transfer = (
+            "database.upload-batches.multipart"
+            if self.config.upload_mode == "batch"
+            else "mcp.upload_calculation_log.base64"
+        )
         create_arguments = {
             "organization_id": organization_id,
             "slug": request.project.slug,
@@ -602,7 +627,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 "archive_sha256": archive_sha256,
                 "batch_metadata": dict(manifest.metadata),
                 "request_metadata": dict(request.metadata),
-                "file_transfer": "mcp.upload_calculation_log.base64",
+                "file_transfer": file_transfer,
                 "file_count": len(upload_files),
                 "total_bytes": manifest.total_bytes,
             },
@@ -636,6 +661,17 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             if (upload_file.file_sha256, upload_file.size_bytes) not in existing_keys
         ]
         existing_count = len(upload_files) - len(upload_files_to_submit)
+        if self.config.upload_mode == "batch":
+            return self._ingest_with_batch_upload(
+                request=request,
+                manifest=manifest,
+                project_id=project_id,
+                archive_sha256=archive_sha256,
+                idempotency_key=idempotency_key,
+                upload_files_to_submit=upload_files_to_submit,
+                existing_count=existing_count,
+                reused_project=reused_project,
+            )
         accepted_count = existing_count
         failed_count = 0
         uploaded_count = 0
@@ -752,6 +788,353 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             cleaned_reaction_count=None,
             metadata=metadata,
         )
+
+    def _ingest_with_batch_upload(
+        self,
+        *,
+        request: ReactionBatchImportRequest,
+        manifest: CalculationLogBatchManifest,
+        project_id: str,
+        archive_sha256: str,
+        idempotency_key: str,
+        upload_files_to_submit: list[_UploadFile],
+        existing_count: int,
+        reused_project: bool,
+    ) -> ReactionDatabaseImportReceipt:
+        accepted_count = existing_count
+        failed_count = 0
+        uploaded_count = 0
+        queue_item_status_counts: dict[str, int] = {}
+        queue_batch_status_counts: dict[str, int] = {}
+        queue_submissions: list[dict[str, str]] = []
+        errors: list[str] = []
+        queue_batch_count = 0
+        upload_groups = self._upload_groups(upload_files_to_submit)
+        for group_index, group in enumerate(upload_groups):
+            try:
+                batch, items, client_ids = self._upload_one_batch(
+                    project_id=project_id,
+                    request=request,
+                    manifest=manifest,
+                    archive_sha256=archive_sha256,
+                    idempotency_key=idempotency_key,
+                    group=group,
+                    group_index=group_index,
+                    group_count=len(upload_groups),
+                )
+            except (InvalidRequestError, OSError, ReactionDatabaseMcpError) as exc:
+                failed_count += len(group)
+                errors.append(f"batch {group_index + 1}: {exc}")
+                continue
+
+            batch_id = self._required_identifier(batch, "upload batch", ("id", "batch_id"))
+            queue_batch_count += 1
+            batch_status = self._status_value(batch) or "unknown"
+            queue_batch_status_counts[batch_status] = (
+                queue_batch_status_counts.get(batch_status, 0) + 1
+            )
+            items_by_client_id = {
+                str(item.get("client_file_id")): item
+                for item in items
+                if isinstance(item, Mapping) and item.get("client_file_id")
+            }
+            uploaded_count += len(items_by_client_id)
+            for upload_file in group:
+                client_file_id = client_ids[upload_file.relative_path]
+                item = items_by_client_id.get(client_file_id)
+                if item is None:
+                    failed_count += 1
+                    errors.append(
+                        f"{upload_file.relative_path}: batch response omitted client_file_id"
+                    )
+                    continue
+                item_id = self._required_identifier(
+                    item,
+                    "upload batch item",
+                    ("id", "item_id", "client_file_id"),
+                )
+                item_status = self._status_value(item) or "unknown"
+                queue_item_status_counts[item_status] = (
+                    queue_item_status_counts.get(item_status, 0) + 1
+                )
+                queue_submissions.append(
+                    {
+                        "relative_path": upload_file.relative_path,
+                        "batch_id": batch_id,
+                        "item_id": item_id,
+                        "item_status": item_status,
+                        "batch_status": batch_status,
+                    }
+                )
+                if item_status in _QUEUE_ACCEPTED_STATUSES:
+                    accepted_count += 1
+                else:
+                    failed_count += 1
+                    status_kind = "failed" if item_status in _QUEUE_FAILED_STATUSES else "unrecognized"
+                    errors.append(
+                        f"{upload_file.relative_path}: database queue item status={item_status}"
+                        f" ({status_kind})"
+                    )
+
+        status = "submitted" if failed_count == 0 else "failed"
+        metadata: dict[str, object] = {
+            "transport": "mcp+http",
+            "mcp_endpoint": self.config.endpoint_url,
+            "mcp_app_name": self.config.app_name,
+            "mcp_tools": ["create_project"],
+            "http_endpoints": [
+                "POST /api/upload-batches",
+                "POST /api/upload-batches/{batch_id}/files",
+            ],
+            "file_transfer": "multipart-batch-queue",
+            "queue_mode": "durable-upload-batch",
+            "manifest_digest": manifest.manifest_digest,
+            "archive_sha256": archive_sha256,
+            "total_count": len(manifest.files),
+            "existing_count": existing_count,
+            "uploaded_count": uploaded_count,
+            "accepted_count": accepted_count,
+            "failed_count": failed_count,
+            "queue_batch_count": queue_batch_count,
+            "queue_item_status_counts": queue_item_status_counts,
+            "queue_batch_status_counts": queue_batch_status_counts,
+            "queue_submissions": queue_submissions,
+            "parse_completion": "not_waited",
+            "project_reused": reused_project,
+        }
+        if errors:
+            metadata["errors"] = errors[:20]
+            metadata["error_count"] = len(errors)
+        return ReactionDatabaseImportReceipt(
+            status=status,
+            project_id=project_id,
+            accepted_log_count=accepted_count,
+            failed_log_count=failed_count,
+            cleaned_reaction_count=None,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _upload_groups(upload_files: list[_UploadFile]) -> tuple[tuple[_UploadFile, ...], ...]:
+        groups: list[tuple[_UploadFile, ...]] = []
+        current: list[_UploadFile] = []
+        current_bytes = 0
+        for upload_file in upload_files:
+            if current and (
+                len(current) >= _BATCH_MAX_FILES
+                or current_bytes + upload_file.size_bytes > _BATCH_MAX_BYTES
+            ):
+                groups.append(tuple(current))
+                current = []
+                current_bytes = 0
+            current.append(upload_file)
+            current_bytes += upload_file.size_bytes
+        if current:
+            groups.append(tuple(current))
+        return tuple(groups)
+
+    def _upload_one_batch(
+        self,
+        *,
+        project_id: str,
+        request: ReactionBatchImportRequest,
+        manifest: CalculationLogBatchManifest,
+        archive_sha256: str,
+        idempotency_key: str,
+        group: tuple[_UploadFile, ...],
+        group_index: int,
+        group_count: int,
+    ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], dict[str, str]]:
+        payloads: list[tuple[_UploadFile, bytes]] = []
+        batch_digest = sha256()
+        for upload_file in group:
+            payload = self._read_file_payload(upload_file)
+            payloads.append((upload_file, payload))
+            batch_digest.update(upload_file.relative_path.encode("utf-8"))
+            batch_digest.update(b"\0")
+            batch_digest.update(upload_file.file_sha256.encode("ascii"))
+            batch_digest.update(b"\0")
+            batch_digest.update(str(upload_file.size_bytes).encode("ascii"))
+            batch_digest.update(b"\n")
+        batch_manifest_sha256 = batch_digest.hexdigest()
+        client_ids = {
+            upload_file.relative_path: str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{idempotency_key}:{batch_manifest_sha256}:{upload_file.relative_path}",
+                )
+            )
+            for upload_file, _payload in payloads
+        }
+        create_payload = {
+            "project_id": project_id,
+            "artifact_kind": "calculation_output",
+            "shared_metadata": {
+                "adapter": "tricycle-reaction-db.mcp",
+                "idempotency_key": idempotency_key,
+                "source": request.source,
+                "batch_id": manifest.batch_id,
+                "manifest_digest": manifest.manifest_digest,
+                "archive_sha256": archive_sha256,
+                "chunk_index": group_index,
+                "chunk_count": group_count,
+                "chunk_manifest_sha256": batch_manifest_sha256,
+                "file_transfer": "database.upload-batches.multipart",
+            },
+            "files": [
+                {
+                    "client_file_id": client_ids[upload_file.relative_path],
+                    "original_filename": upload_file.path.name,
+                    "relative_path": upload_file.relative_path,
+                    "size_bytes": upload_file.size_bytes,
+                    "media_type": "text/plain",
+                }
+                for upload_file, _payload in payloads
+            ],
+        }
+        batch = self._rest_json("POST", "/api/upload-batches", create_payload)
+        if not isinstance(batch, Mapping):
+            raise ReactionDatabaseMcpError("batch upload creation returned no batch")
+        batch_id = self._required_identifier(batch, "upload batch", ("id", "batch_id"))
+        body, content_type = self._multipart_body(payloads, client_ids)
+        raw_response, _response_headers = self._rest_request(
+            "POST",
+            f"/api/upload-batches/{batch_id}/files",
+            body,
+            content_type=content_type,
+        )
+        try:
+            raw_items = json.loads(raw_response.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReactionDatabaseMcpError("batch file upload returned invalid JSON") from exc
+        if not isinstance(raw_items, list):
+            raise ReactionDatabaseMcpError("batch file upload returned no item list")
+        items = [item for item in raw_items if isinstance(item, Mapping)]
+        return batch, items, client_ids
+
+    def _multipart_body(
+        self,
+        payloads: list[tuple[_UploadFile, bytes]],
+        client_ids: Mapping[str, str],
+    ) -> tuple[bytes, str]:
+        boundary = f"tricycle-{uuid.uuid4().hex}"
+        chunks: list[bytes] = []
+        for upload_file, _payload in payloads:
+            chunks.extend(
+                [
+                    f"--{boundary}\r\n".encode("ascii"),
+                    b'Content-Disposition: form-data; name="client_file_ids"\r\n\r\n',
+                    client_ids[upload_file.relative_path].encode("ascii"),
+                    b"\r\n",
+                ]
+            )
+        for upload_file, payload in payloads:
+            filename = upload_file.path.name.replace('"', "_").replace("\r", "_").replace("\n", "_")
+            chunks.extend(
+                [
+                    f"--{boundary}\r\n".encode("ascii"),
+                    (
+                        'Content-Disposition: form-data; name="files"; '
+                        f'filename="{filename}"\r\n'
+                    ).encode(),
+                    b"Content-Type: text/plain\r\n\r\n",
+                    payload,
+                    b"\r\n",
+                ]
+            )
+        chunks.append(f"--{boundary}--\r\n".encode("ascii"))
+        return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+    def _rest_url(self, path: str) -> str:
+        endpoint = urlsplit(self.config.endpoint_url)
+        requested = urlsplit(path)
+        base_path = endpoint.path.rstrip("/")
+        if base_path.endswith("/mcp"):
+            base_path = base_path[:-4]
+        joined_path = f"{base_path.rstrip('/')}/{requested.path.lstrip('/')}"
+        return urlunsplit(
+            (endpoint.scheme, endpoint.netloc, joined_path, requested.query, "")
+        )
+
+    def _rest_json(self, method: str, path: str, payload: object | None = None) -> Any:
+        body = (
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            if payload is not None
+            else None
+        )
+        response, _headers = self._rest_request(
+            method,
+            path,
+            body,
+            content_type="application/json" if body is not None else None,
+        )
+        try:
+            return json.loads(response.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ReactionDatabaseMcpError(f"database REST {method} {path} returned invalid JSON") from exc
+
+    def _rest_request(
+        self,
+        method: str,
+        path: str,
+        data: bytes | None,
+        *,
+        content_type: str | None,
+    ) -> tuple[bytes, Mapping[str, str]]:
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.config.token}",
+            "User-Agent": "TriCycle-reaction-db-upload-batch/0.1",
+        }
+        if content_type is not None:
+            headers["Content-Type"] = content_type
+        for attempt in range(_MCP_RATE_LIMIT_RETRIES + 1):
+            request = Request(self._rest_url(path), data=data, headers=headers, method=method)
+            try:
+                with urlopen(
+                    request,
+                    timeout=self.config.timeout_seconds,
+                    context=self.config.ssl_context()
+                    if urlsplit(self.config.endpoint_url).scheme == "https"
+                    else None,
+                ) as response:
+                    raw = response.read()
+                    response_headers = {
+                        str(key).casefold(): str(value) for key, value in response.headers.items()
+                    }
+                    return raw, response_headers
+            except HTTPError as exc:
+                detail = exc.read(2048).decode("utf-8", errors="replace").strip()
+                if exc.code == 429 and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(_McpTransport._retry_after_seconds(exc.headers, detail))
+                    continue
+                if exc.code in {500, 502, 503, 504} and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
+                suffix = f": {detail[:500]}" if detail else ""
+                raise ReactionDatabaseMcpError(
+                    f"database REST {method} {path} HTTP {exc.code}{suffix}",
+                    status_code=exc.code,
+                ) from exc
+            except (IncompleteRead, RemoteDisconnected, ConnectionResetError) as exc:
+                if attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
+                raise ReactionDatabaseMcpError(
+                    f"database REST {method} {path} response was interrupted: {exc}"
+                ) from exc
+            except URLError as exc:
+                if _McpTransport._is_retryable_url_error(exc) and attempt < _MCP_RATE_LIMIT_RETRIES:
+                    time.sleep(min(2.0**attempt, 10.0))
+                    continue
+                raise ReactionDatabaseMcpError(
+                    f"database REST {method} {path} request failed: {exc}"
+                ) from exc
+            except (TimeoutError, OSError) as exc:
+                raise ReactionDatabaseMcpError(
+                    f"database REST {method} {path} request failed: {exc}"
+                ) from exc
+        raise AssertionError("REST retry loop exited unexpectedly")
 
     def _find_resumable_project(
         self,

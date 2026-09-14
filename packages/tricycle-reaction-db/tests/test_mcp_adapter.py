@@ -273,6 +273,7 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         )
 
     def _adapter(self, **kwargs: object) -> McpReactionDatabaseAdapter:
+        kwargs.setdefault("upload_mode", "mcp")
         return McpReactionDatabaseAdapter(
             ReactionDatabaseMcpConfig(
                 self.base_url,
@@ -347,6 +348,93 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(
             create_arguments["data_source"]["file_transfer"],
             "mcp.upload_calculation_log.base64",
+        )
+
+    def test_batch_upload_uses_multipart_queue_without_file_mcp_tool(self) -> None:
+        self.state.include_upload_tool = False
+        rest_paths: list[str] = []
+        create_payload: dict[str, object] = {}
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            logs = root / "downloads" / "worker-000"
+            logs.mkdir(parents=True)
+            (logs / "a.log").write_text("Gaussian A\n", encoding="utf-8")
+            (logs / "b.log").write_text("Gaussian B\n", encoding="utf-8")
+            request = self._request(root)
+            adapter = self._adapter(upload_mode="batch")
+
+            def fake_rest_json(
+                method: str,
+                path: str,
+                payload: object | None = None,
+            ) -> object:
+                self.assertEqual(method, "POST")
+                rest_paths.append(path)
+                assert isinstance(payload, dict)
+                create_payload.update(payload)
+                return {"id": "batch-bulk-001", "status": "active"}
+
+            def fake_rest_request(
+                method: str,
+                path: str,
+                data: bytes | None,
+                *,
+                content_type: str | None,
+            ) -> tuple[bytes, dict[str, str]]:
+                self.assertEqual(method, "POST")
+                rest_paths.append(path)
+                self.assertIsNotNone(data)
+                self.assertIsNotNone(content_type)
+                self.assertIn(b"Gaussian A\n", data or b"")
+                descriptors = create_payload["files"]
+                assert isinstance(descriptors, list)
+                items = [
+                    {
+                        "id": f"item-{index}",
+                        "client_file_id": descriptor["client_file_id"],
+                        "status": "staged",
+                    }
+                    for index, descriptor in enumerate(descriptors)
+                    if isinstance(descriptor, dict)
+                ]
+                return json.dumps(items).encode(), {}
+
+            adapter._rest_json = fake_rest_json  # type: ignore[method-assign]
+            adapter._rest_request = fake_rest_request  # type: ignore[method-assign]
+            receipt = adapter.ingest_calculation_logs(request, request.resolve_batch())
+
+        self.assertEqual(receipt.status, "submitted")
+        self.assertEqual(receipt.accepted_log_count, 2)
+        self.assertEqual(receipt.metadata["file_transfer"], "multipart-batch-queue")
+        self.assertEqual(receipt.metadata["queue_batch_count"], 1)
+        self.assertEqual(rest_paths, ["/api/upload-batches", "/api/upload-batches/batch-bulk-001/files"])
+        self.assertNotIn("archive_sha256", create_payload)
+        self.assertNotIn("manifest_sha256", create_payload)
+        self.assertNotIn("manifest_schema_version", create_payload)
+        descriptors = create_payload["files"]
+        assert isinstance(descriptors, list)
+        self.assertEqual(
+            [descriptor["relative_path"] for descriptor in descriptors if isinstance(descriptor, dict)],
+            ["downloads/worker-000/a.log", "downloads/worker-000/b.log"],
+        )
+        tool_calls = [
+            item["params"]["name"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+        ]
+        self.assertEqual(tool_calls, ["create_project"])
+        create = next(
+            item
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+            and item["params"]["name"] == "create_project"
+        )
+        create_arguments = create["params"]["arguments"]
+        assert isinstance(create_arguments, dict)
+        self.assertEqual(
+            create_arguments["data_source"]["file_transfer"],
+            "database.upload-batches.multipart",
         )
 
     def test_import_requires_organization_before_network_mutation(self) -> None:
