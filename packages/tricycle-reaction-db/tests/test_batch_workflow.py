@@ -12,6 +12,7 @@ from tricycle_reaction_db import (
     CalculationLogBatchSpec,
     ReactionBatchImportRequest,
     ReactionDatabaseImportReceipt,
+    ReactionDatabaseMcpToolCall,
     ReactionDatabasePlugin,
     ReactionDatabaseProjectSpec,
     ReactionFilterReceipt,
@@ -19,9 +20,6 @@ from tricycle_reaction_db import (
     ReactionSpaceExportReceipt,
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
-    StandardReactionDatabaseApiRequest,
-    build_rits_mapped_reaction_requests,
-    build_rxnresid_csv_export_request,
 )
 
 
@@ -54,9 +52,10 @@ class _FakeDatabaseAdapter:
             request.destination,
             row_count=1,
             api_contract=request.api_contract,
-            api_requests=build_rits_mapped_reaction_requests(
+            mcp_tool_calls=_mcp_export_calls(
                 request.project_id,
                 request.reaction_smarts,
+                "rits",
             ),
         )
 
@@ -66,13 +65,48 @@ class _FakeDatabaseAdapter:
             request.destination,
             row_count=1,
             api_contract=request.api_contract,
-            api_requests=(
-                build_rxnresid_csv_export_request(
-                    request.project_id,
-                    request.reaction_smarts,
-                ),
+            mcp_tool_calls=_mcp_export_calls(
+                request.project_id,
+                request.reaction_smarts,
+                "rxnresid",
             ),
         )
+
+
+def _mcp_export_calls(
+    project_id: str,
+    reaction_smarts: str,
+    export_kind: str,
+) -> tuple[ReactionDatabaseMcpToolCall, ...]:
+    operations = (
+        (
+            "MappedReactionQueryService.list_mapped_reactions",
+            "reaction-list",
+        ),
+        (
+            "MappedReactionQueryService.get_mapped_reaction",
+            "reaction-detail",
+        ),
+        ("GeometryQueryService.get_geometry", "geometry"),
+    )
+    if export_kind == "rxnresid":
+        operations = (
+            operations[0],
+            ("ReactionEnergyQueryService.get_mapped_reaction_thermodynamics", "energy"),
+        )
+    return tuple(
+        ReactionDatabaseMcpToolCall(
+            "compose_query",
+            {
+                "app_name": "test-reaction-db",
+                "operation": operation,
+                "project_id": project_id,
+                "reaction_smarts": reaction_smarts,
+                "resource": resource,
+            },
+        )
+        for operation, resource in operations
+    )
 
 
 class _FailingDatabaseAdapter:
@@ -242,34 +276,19 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
                 }
             )
 
-    def test_standard_rxnresid_export_request_is_post_csv_with_rxn_smarts(self) -> None:
-        request = build_rxnresid_csv_export_request(
-            "00000000-project",
-            CYCLOADDITION_RXN_SMARTS,
-        )
-        self.assertEqual(request.method, "POST")
-        self.assertEqual(request.route, "/api/mapped-reactions/thermodynamics/export.csv")
-        self.assertEqual(request.body["project_id"], "00000000-project")
-        self.assertEqual(
-            request.body["filter_expression"],
-            '{"field":"reaction_smarts","value":"'
-            + CYCLOADDITION_RXN_SMARTS
-            + '"}',
-        )
-        self.assertNotIn("reaction_class", request.body)
-
-    def test_successful_export_rejects_receipt_without_standard_api_provenance(self) -> None:
-        class _WrongRouteAdapter(_FakeDatabaseAdapter):
+    def test_successful_export_rejects_receipt_without_mcp_provenance(self) -> None:
+        class _IncompleteRxnResidAdapter(_FakeDatabaseAdapter):
             def export_rxnresid_dataset(self, request):
                 return ReactionSpaceExportReceipt(
                     request.destination,
                     row_count=1,
                     api_contract=RXNRESID_EXPORT_API_CONTRACT,
-                    api_requests=(
-                        StandardReactionDatabaseApiRequest(
-                            method="GET",
-                            route="/api/mapped-reactions",
-                            query={
+                    mcp_tool_calls=(
+                        ReactionDatabaseMcpToolCall(
+                            "compose_query",
+                            {
+                                "app_name": "test-reaction-db",
+                                "operation": "MappedReactionQueryService.list_mapped_reactions",
                                 "project_id": request.project_id,
                                 "reaction_smarts": request.reaction_smarts,
                             },
@@ -278,34 +297,39 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
                 )
 
         request = RxnResidDatasetExportRequest("00000000-project", Path("rxnresid.csv"))
-        with self.assertRaisesRegex(InvalidRequestError, "thermodynamics/export.csv"):
+        with self.assertRaisesRegex(InvalidRequestError, "thermodynamics"):
             ReactionDatabasePlugin().export_rxnresid(
                 request,
-                _WrongRouteAdapter(),
-                ExecutionContext(run_id="wrong-api", workdir=Path("."), dry_run=False),
+                _IncompleteRxnResidAdapter(),
+                ExecutionContext(run_id="incomplete-mcp", workdir=Path("."), dry_run=False),
             )
 
-    def test_successful_rits_export_requires_standard_resource_routes(self) -> None:
+    def test_successful_rits_export_requires_all_mcp_queries(self) -> None:
         class _IncompleteRitsAdapter(_FakeDatabaseAdapter):
             def export_rits_dataset(self, request):
                 return ReactionSpaceExportReceipt(
                     request.destination,
                     row_count=1,
                     api_contract=RITS_EXPORT_API_CONTRACT,
-                    api_requests=(
-                        build_rits_mapped_reaction_requests(
-                            request.project_id,
-                            request.reaction_smarts,
-                        )[0],
+                    mcp_tool_calls=(
+                        ReactionDatabaseMcpToolCall(
+                            "compose_query",
+                            {
+                                "app_name": "test-reaction-db",
+                                "operation": "MappedReactionQueryService.list_mapped_reactions",
+                                "project_id": request.project_id,
+                                "reaction_smarts": request.reaction_smarts,
+                            },
+                        ),
                     ),
                 )
 
         request = RitsDatasetExportRequest("00000000-project", Path("rits.csv"))
-        with self.assertRaisesRegex(InvalidRequestError, "standard mapped-reaction"):
+        with self.assertRaisesRegex(InvalidRequestError, "RitS MCP export"):
             ReactionDatabasePlugin().export_rits(
                 request,
                 _IncompleteRitsAdapter(),
-                ExecutionContext(run_id="incomplete-api", workdir=Path("."), dry_run=False),
+                ExecutionContext(run_id="incomplete-mcp", workdir=Path("."), dry_run=False),
             )
 
     @staticmethod

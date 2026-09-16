@@ -66,7 +66,7 @@
 
 ### RxnResid
 
-`RxnResidDatasetExportRequest` 通过标准 thermodynamics CSV endpoint 导出：
+`RxnResidDatasetExportRequest` 通过数据库 MCP 查询导出：
 
 - `mapped_reaction_smiles`；
 - `reaction_free_energy`、`activation_free_energy`；
@@ -108,6 +108,9 @@ MolOP 解析或填充清洗反应数量。
 形状，不写数据库、不发 MCP 请求、不创建远程 project。测试可使用 `InMemoryReactionRepository`
 或内存 adapter。MCP endpoint、token、organization ID 和超时策略只从 live 环境变量读取，不能
 保存进请求 TOML。
+
+需要核验数据库连接时，可调用 `McpReactionDatabaseAdapter.list_projects()`；这是只读 MCP
+`list_projects` 操作，不会创建 project 或提交文件。
 
 ## CLI 示例
 

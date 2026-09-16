@@ -73,20 +73,14 @@ _QUEUE_FAILED_STATUSES = frozenset({"failed", "error", "cancelled", "canceled"})
 _MCP_ENV_KEYS = frozenset(
     {
         "TRICYCLE_REACTION_DB_MCP_URL",
-        "TRICYCLE_REACTION_DB_URL",
         "TRICYCLE_REACTION_DB_MCP_TOKEN",
-        "TRICYCLE_REACTION_DB_TOKEN",
         "TRICYCLE_REACTION_DB_ORGANIZATION_ID",
         "TRICYCLE_REACTION_DB_MCP_APP_NAME",
         "TRICYCLE_REACTION_DB_MCP_VERIFY_TLS",
-        "TRICYCLE_REACTION_DB_VERIFY_TLS",
         "TRICYCLE_REACTION_DB_MCP_CA_BUNDLE",
-        "TRICYCLE_REACTION_DB_CA_BUNDLE",
         "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS",
-        "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS",
         "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE",
         "TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE",
-        "TRICYCLE_REACTION_DB_UPLOAD_MODE",
     }
 )
 
@@ -218,24 +212,16 @@ class ReactionDatabaseMcpConfig:
         if environ is None or env_file is not None:
             load_dotenv(env_file, environ=values, keys=_MCP_ENV_KEYS)
         raw_endpoint = values.get("TRICYCLE_REACTION_DB_MCP_URL", "").strip()
-        if not raw_endpoint:
-            raw_endpoint = values.get("TRICYCLE_REACTION_DB_URL", "").strip()
         token = values.get("TRICYCLE_REACTION_DB_MCP_TOKEN", "").strip()
-        if not token:
-            token = values.get("TRICYCLE_REACTION_DB_TOKEN", "").strip()
         if not raw_endpoint:
             raise IntegrationNotConfiguredError(
-                "TRICYCLE_REACTION_DB_MCP_URL or TRICYCLE_REACTION_DB_URL is required "
-                "for live database operations"
+                "TRICYCLE_REACTION_DB_MCP_URL is required for live database operations"
             )
         if not token:
             raise IntegrationNotConfiguredError(
-                "TRICYCLE_REACTION_DB_MCP_TOKEN or TRICYCLE_REACTION_DB_TOKEN is required "
-                "for live database operations"
+                "TRICYCLE_REACTION_DB_MCP_TOKEN is required for live database operations"
             )
         ca_bundle_value = values.get("TRICYCLE_REACTION_DB_MCP_CA_BUNDLE", "").strip()
-        if not ca_bundle_value:
-            ca_bundle_value = values.get("TRICYCLE_REACTION_DB_CA_BUNDLE", "").strip()
         return cls(
             endpoint_url=raw_endpoint,
             token=token,
@@ -244,19 +230,12 @@ class ReactionDatabaseMcpConfig:
             verify_tls=_env_bool(
                 values,
                 "TRICYCLE_REACTION_DB_MCP_VERIFY_TLS",
-                _env_bool(values, "TRICYCLE_REACTION_DB_VERIFY_TLS", True),
+                True,
             ),
             ca_bundle=Path(ca_bundle_value).expanduser() if ca_bundle_value else None,
-            timeout_seconds=_env_float(
-                values,
-                "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS",
-                _env_float(values, "TRICYCLE_REACTION_DB_TIMEOUT_SECONDS", 60.0),
-            ),
+            timeout_seconds=_env_float(values, "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS", 60.0),
             page_size=_env_int(values, "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE", 200),
-            upload_mode=values.get(
-                "TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE",
-                values.get("TRICYCLE_REACTION_DB_UPLOAD_MODE", _DEFAULT_UPLOAD_MODE),
-            ),
+            upload_mode=values.get("TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE", _DEFAULT_UPLOAD_MODE),
         )
 
     def ssl_context(self) -> ssl.SSLContext:
@@ -592,6 +571,34 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         environ: Mapping[str, str] | None = None,
     ) -> McpReactionDatabaseAdapter:
         return cls(ReactionDatabaseMcpConfig.from_env(env_file, environ=environ))
+
+    def list_projects(
+        self,
+        *,
+        organization_id: str | None = None,
+        include_archived: bool = False,
+    ) -> tuple[Mapping[str, Any], ...]:
+        """List reaction-database projects through the read-only MCP tool."""
+
+        self._transport.ensure_tool("list_projects")
+        resolved_organization_id = organization_id or self.config.organization_id
+        arguments: dict[str, object] = {"include_archived": include_archived}
+        if resolved_organization_id:
+            arguments["organization_id"] = resolved_organization_id
+        result = self._transport.call_tool("list_projects", arguments)
+        raw_projects = result.get("data")
+        if not isinstance(raw_projects, list):
+            raw_projects = result.get("projects")
+        if not isinstance(raw_projects, list):
+            raise ReactionDatabaseMcpError(
+                "database list_projects returned no project list",
+                tool_name="list_projects",
+            )
+        return tuple(
+            dict(project)
+            for project in raw_projects
+            if isinstance(project, Mapping)
+        )
 
     def ingest_calculation_logs(
         self,
@@ -1143,16 +1150,11 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         slug: str,
         idempotency_key: str,
     ) -> Mapping[str, Any]:
-        self._transport.ensure_tool("list_projects")
-        result = self._transport.call_tool(
-            "list_projects",
-            {"organization_id": organization_id, "include_archived": False},
-        )
-        raw_projects = result.get("data") if isinstance(result, Mapping) else None
-        if not isinstance(raw_projects, list):
-            raw_projects = result.get("projects") if isinstance(result, Mapping) else None
-        for project in raw_projects if isinstance(raw_projects, list) else ():
-            if not isinstance(project, Mapping) or str(project.get("slug", "")).strip() != slug:
+        for project in self.list_projects(
+            organization_id=organization_id,
+            include_archived=False,
+        ):
+            if str(project.get("slug", "")).strip() != slug:
                 continue
             if str(project.get("organization_id", "")).strip() != organization_id:
                 continue

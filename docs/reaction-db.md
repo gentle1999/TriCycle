@@ -56,28 +56,17 @@ live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据�
 ## 标准数据库导出门禁
 
 导出 adapter 不能把任意本地日志解析结果拼成一个“成功”的 CSV。成功返回的
-`ReactionSpaceExportReceipt` 必须带 `api_contract` 和标准 HTTP API 或 MCP 请求证明；插件会在
-生成 `TaskResult` 前校验它们。MCP adapter 的证明记录 `compose_query` 所访问的 database
+`ReactionSpaceExportReceipt` 必须带 `api_contract` 和 MCP 请求证明；插件会在生成
+`TaskResult` 前校验它们。MCP adapter 的证明记录 `compose_query` 所访问的 database
 service/method、project ID 和固定 reaction SMARTS。
 
-- 旧 HTTP adapter 的 RxnResid 路径固定使用
-  `POST /api/mapped-reactions/thermodynamics/export.csv`；请求体必须包含当前内部
-  `project_id`、`filter_expression`（其 JSON 叶子字段为 `reaction_smarts`）、
-  `has_activation_gibbs_free_energy = true` 和 `has_reaction_gibbs_free_energy = true`。
-- MCP adapter 的 RxnResid 路径使用 `compose_query` 调用
-  `MappedReactionQueryService.list_mapped_reactions` 和
-  `ReactionEnergyQueryService.get_mapped_reaction_thermodynamics`，再将数据库返回的字段
-  写入 CSV。
-- 旧 HTTP adapter 的 RitS 路径使用标准 `GET /api/mapped-reactions`、mapped-reaction detail
-  和 `GET /api/depictions/geometry/{geometry_id}.xyz`；MCP adapter 对应使用
-  `MappedReactionQueryService.list_mapped_reactions`、`get_mapped_reaction` 和
-  `GeometryQueryService.get_geometry`。两种 adapter 都不能使用 `reaction_class` 或本地日志
-  推断。
-
-这些 HTTP 路由和请求构造器集中在
-`packages/tricycle-reaction-db/src/tricycle_reaction_db/contracts.py`；adapter 应直接复用
-`build_rxnresid_csv_export_request` 和 `build_rits_mapped_reaction_requests`，不要手写路由或
-过滤体。
+RxnResid 通过 `compose_query` 调用
+`MappedReactionQueryService.list_mapped_reactions` 和
+`ReactionEnergyQueryService.get_mapped_reaction_thermodynamics`，再将数据库返回的字段写入
+CSV。RitS 通过 `compose_query` 调用
+`MappedReactionQueryService.list_mapped_reactions`、`get_mapped_reaction` 和
+`GeometryQueryService.get_geometry`，再由数据库返回的坐标物化 XYZ。MCP adapter 不能使用
+`reaction_class` 或本地日志推断。
 
 ## 基本查询能力
 

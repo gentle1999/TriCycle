@@ -10,9 +10,6 @@ from tricycle_core.errors import InvalidRequestError
 
 from .contracts import (
     ReactionDatabaseMcpToolCall,
-    StandardReactionDatabaseApiRequest,
-    build_rits_mapped_reaction_requests,
-    build_rxnresid_csv_export_request,
 )
 from .models import (
     CYCLOADDITION_RXN_SMARTS,
@@ -66,8 +63,8 @@ class ReactionSpaceExportReceipt:
     A successful receipt must identify the standard database API contract and
     the canonical request shapes used by the adapter.  This prevents a
     unproven local query-and-compose implementation from being reported as a
-    successful standard export.  Both the legacy HTTP adapter and the MCP
-    adapter carry explicit provenance for the transport they used.
+    successful standard export must carry explicit MCP provenance for the
+    database queries that produced the artifact.
     """
 
     destination: Path
@@ -75,7 +72,6 @@ class ReactionSpaceExportReceipt:
     row_count: int | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
     api_contract: str | None = None
-    api_requests: tuple[StandardReactionDatabaseApiRequest, ...] = ()
     mcp_tool_calls: tuple[ReactionDatabaseMcpToolCall, ...] = ()
 
     def __post_init__(self) -> None:
@@ -88,10 +84,6 @@ class ReactionSpaceExportReceipt:
         if self.api_contract is not None:
             contract = str(self.api_contract).strip()
             object.__setattr__(self, "api_contract", contract or None)
-        requests = tuple(self.api_requests)
-        if not all(isinstance(request, StandardReactionDatabaseApiRequest) for request in requests):
-            raise TypeError("reaction-space export api_requests must use the standard API request type")
-        object.__setattr__(self, "api_requests", requests)
         mcp_tool_calls = tuple(self.mcp_tool_calls)
         if not all(isinstance(call, ReactionDatabaseMcpToolCall) for call in mcp_tool_calls):
             raise TypeError(
@@ -107,7 +99,6 @@ class ReactionSpaceExportReceipt:
             "row_count": self.row_count,
             "metadata": dict(self.metadata),
             "api_contract": self.api_contract,
-            "api_requests": [request.to_dict() for request in self.api_requests],
             "mcp_tool_calls": [call.to_dict() for call in self.mcp_tool_calls],
         }
 
@@ -116,13 +107,7 @@ def validate_export_receipt(
     request: RitsDatasetExportRequest | RxnResidDatasetExportRequest,
     receipt: ReactionSpaceExportReceipt,
 ) -> None:
-    """Reject a successful export that did not use the standard DB contract.
-
-    The adapter remains transport-injected, but the successful result is no
-    longer transport-agnostic: it must prove the route and request shape that
-    produced the local artifact.  This is intentionally checked at the plugin
-    boundary so every adapter implementation gets the same guard.
-    """
+    """Reject a successful export without the required database MCP proof."""
 
     if receipt.status.casefold().strip() not in {"succeeded", "success", "completed"}:
         return
@@ -132,44 +117,11 @@ def validate_export_receipt(
             "successful reaction-space export must declare the request's standard database "
             f"API contract ({request.api_contract})"
         )
-    if not receipt.api_requests and not receipt.mcp_tool_calls:
+    if not receipt.mcp_tool_calls:
         raise InvalidRequestError(
-            "successful reaction-space export must return standard database API or MCP request provenance"
+            "successful reaction-space export must return database MCP request provenance"
         )
-
-    if receipt.mcp_tool_calls:
-        _validate_mcp_export_receipt(request, receipt.mcp_tool_calls)
-        return
-
-    for api_request in receipt.api_requests:
-        keys = set(api_request.query) | set(api_request.body)
-        if "reaction_class" in keys:
-            raise InvalidRequestError(
-                "reaction-space export provenance contains reaction_class; use reaction_smarts"
-            )
-
-    if isinstance(request, RxnResidDatasetExportRequest):
-        expected = build_rxnresid_csv_export_request(
-            request.project_id,
-            request.reaction_smarts,
-        )
-        if expected not in receipt.api_requests:
-            raise InvalidRequestError(
-                "RxnResid export must use POST "
-                "`/api/mapped-reactions/thermodynamics/export.csv` with the project-scoped "
-                "reaction_smarts filter"
-            )
-        return
-
-    expected_requests = build_rits_mapped_reaction_requests(
-        request.project_id,
-        request.reaction_smarts,
-    )
-    if not all(expected in receipt.api_requests for expected in expected_requests):
-        raise InvalidRequestError(
-            "RitS export must use the standard mapped-reaction and XYZ geometry API routes; "
-            "the database has no combined CSV route"
-        )
+    _validate_mcp_export_receipt(request, receipt.mcp_tool_calls)
 
 
 def _validate_mcp_export_receipt(

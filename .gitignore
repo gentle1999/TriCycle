@@ -13,6 +13,7 @@ dist/
 # Local configuration and credentials
 .env
 .env.local
+.reaction-db-caddy-root.crt
 
 # Agent run state and generated artifacts
 .tricycle/

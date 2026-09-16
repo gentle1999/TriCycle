@@ -30,6 +30,12 @@ class _McpState:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
         self.project_id = "project-001"
+        self.projects = [
+            {"id": "project-001", "slug": "space-001", "name": "Space 001"},
+            {"id": "project-002", "slug": "space-002", "name": "Space 002"},
+            {"id": "project-003", "slug": "space-003", "name": "Space 003"},
+            {"id": "project-004", "slug": "space-004", "name": "Space 004"},
+        ]
         self.include_upload_tool = True
         self.fail_upload_filenames: set[str] = set()
 
@@ -74,6 +80,7 @@ class _McpHandler(BaseHTTPRequestHandler):
             names = {
                 "compose_query",
                 "create_project",
+                "list_projects",
             }
             if self.state.include_upload_tool:
                 names.add("upload_calculation_log")
@@ -114,6 +121,8 @@ class _McpHandler(BaseHTTPRequestHandler):
             return
         if name == "create_project":
             data: object = {"id": self.state.project_id}
+        elif name == "list_projects":
+            data = self.state.projects
         elif name == "upload_calculation_log":
             filename = arguments["filename"]
             assert isinstance(filename, str)
@@ -282,6 +291,41 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
                 **kwargs,
             )
         )
+
+    def test_list_projects_uses_read_only_mcp_tool(self) -> None:
+        projects = self._adapter().list_projects()
+
+        self.assertEqual([project["id"] for project in projects], [
+            "project-001",
+            "project-002",
+            "project-003",
+            "project-004",
+        ])
+        tool_calls = [
+            item["params"]["name"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+        ]
+        self.assertEqual(tool_calls, ["list_projects"])
+        arguments = next(
+            item["params"]["arguments"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+        )
+        assert isinstance(arguments, dict)
+        self.assertEqual(arguments["include_archived"], False)
+        self.assertEqual(arguments["organization_id"], "organization-001")
+
+    def test_from_env_accepts_only_mcp_variable_names(self) -> None:
+        with TemporaryDirectory() as temp:
+            env_file = Path(temp) / ".env"
+            env_file.write_text(
+                "TRICYCLE_REACTION_DB_URL=http://legacy.example\n"
+                "TRICYCLE_REACTION_DB_TOKEN=legacy-token\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(IntegrationNotConfiguredError, "MCP_URL"):
+                ReactionDatabaseMcpConfig.from_env(env_file, environ={})
 
     def test_import_uploads_each_file_bytes_through_mcp(self) -> None:
         with TemporaryDirectory() as temp:
