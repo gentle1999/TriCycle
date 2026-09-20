@@ -239,7 +239,7 @@ class BohrCliGatewayTests(unittest.TestCase):
         self.assertIsInstance(args, list)
         self.assertEqual(
             captured["config"],
-            {"backward_files": ["outputs/rxnresid-smoke/**"]},
+            {"backward_files": ["outputs/rxnresid-smoke/"]},
         )
         self.assertFalse(Path(captured["config_path"]).exists())
 

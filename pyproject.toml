@@ -23,6 +23,7 @@ members = ["packages/*", "apps/*"]
 addopts = "-ra -q"
 testpaths = ["tests", "packages", "apps"]
 pythonpath = [
+    ".",
     "packages/tricycle-core/src",
     "packages/tricycle-bohr/src",
     "packages/tricycle-bohrsubmit/src",

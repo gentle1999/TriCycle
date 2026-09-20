@@ -162,6 +162,66 @@ class UncertaintySamplingTests(unittest.TestCase):
 
         self.assertEqual(plugin.select(request).selected_ids, ("rxn-high",))
 
+    def test_pair_core_set_uses_previous_pairs_as_references(self) -> None:
+        candidates = tuple(
+            Candidate(candidate_id, {"pair_embedding": embedding})
+            for candidate_id, embedding in (
+                ("near-a", 0b0001),
+                ("far-b", 0b1111),
+                ("near-c", 0b0011),
+            )
+        )
+        plugin = SamplingPlugin()
+        result = plugin.select(
+            SamplingRequest(
+                candidates=candidates,
+                budget=1,
+                strategy="pair-core-set",
+                metadata={"reference_embeddings": {"already-selected": 0b0000}},
+            )
+        )
+        self.assertEqual(result.selected_ids, ("far-b",))
+
+    def test_density_weighted_uncertainty_prefers_dense_uncertain_candidate(self) -> None:
+        candidates = (
+            Candidate(
+                "sparse-high-uncertainty",
+                {"predictive_variance": 10.0, "pair_density": 0.1},
+            ),
+            Candidate(
+                "dense-moderate-uncertainty",
+                {"predictive_variance": 2.0, "pair_density": 1.0},
+            ),
+        )
+        result = SamplingPlugin().select(
+            SamplingRequest(candidates=candidates, budget=1, strategy="density-weighted-uncertainty")
+        )
+        self.assertEqual(result.selected_ids, ("dense-moderate-uncertainty",))
+
+    def test_uncertainty_diversity_uses_distance_within_a_batch(self) -> None:
+        candidates = tuple(
+            Candidate(
+                candidate_id,
+                {"predictive_variance": uncertainty, "pair_embedding": embedding},
+            )
+            for candidate_id, uncertainty, embedding in (
+                ("high-a", 1.0, 0b0001),
+                ("high-b", 0.99, 0b0011),
+                ("diverse-c", 0.5, 0b1111),
+            )
+        )
+        result = SamplingPlugin().select(
+            SamplingRequest(
+                candidates=candidates,
+                budget=2,
+                strategy="uncertainty-diversity",
+                seed=0,
+                metadata={"diversity_weight": 0.8},
+            )
+        )
+        self.assertEqual(result.selected_ids[0], "high-a")
+        self.assertIn("diverse-c", result.selected_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

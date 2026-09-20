@@ -15,11 +15,14 @@ from .models import SamplingRequest, SamplingResult
 from .strategies import (
     STRATEGY_ALIASES,
     AleatoricUncertaintySamplingStrategy,
+    DensityWeightedUncertaintySamplingStrategy,
     EpistemicUncertaintySamplingStrategy,
     FirstNSamplingStrategy,
+    PairCoreSetSamplingStrategy,
     PredictiveUncertaintySamplingStrategy,
     RandomSamplingStrategy,
     SamplingStrategy,
+    UncertaintyDiversitySamplingStrategy,
     UncertaintySamplingStrategy,
     get_uncertainty_field,
 )
@@ -46,6 +49,9 @@ class SamplingPlugin(PluginBase):
             PredictiveUncertaintySamplingStrategy(),
             EpistemicUncertaintySamplingStrategy(),
             AleatoricUncertaintySamplingStrategy(),
+            PairCoreSetSamplingStrategy(),
+            DensityWeightedUncertaintySamplingStrategy(),
+            UncertaintyDiversitySamplingStrategy(),
         ):
             self._strategies[strategy.name] = strategy
         for strategy in strategies:
@@ -87,8 +93,9 @@ class SamplingPlugin(PluginBase):
 
     def plan_select(self, request: SamplingRequest, context: ExecutionContext) -> TaskPlan:
         strategy = self._resolve_strategy(request.strategy)
-        if isinstance(strategy, UncertaintySamplingStrategy):
-            strategy.validate(request.candidates, request.budget)
+        validator = getattr(strategy, "validate", None)
+        if callable(validator):
+            validator(request.candidates, request.budget)
 
         parameters: dict[str, Any] = {
             "strategy": request.strategy,
@@ -134,7 +141,16 @@ class SamplingPlugin(PluginBase):
 
     def select(self, request: SamplingRequest) -> SamplingResult:
         strategy = self._resolve_strategy(request.strategy)
-        selected = strategy.select(request.candidates, request.budget, request.seed)
+        contextual_select = getattr(strategy, "select_with_context", None)
+        if callable(contextual_select):
+            selected = contextual_select(
+                request.candidates,
+                request.budget,
+                request.seed,
+                request.metadata,
+            )
+        else:
+            selected = strategy.select(request.candidates, request.budget, request.seed)
         selected_ids = {candidate.candidate_id for candidate in selected}
         remaining = tuple(
             candidate

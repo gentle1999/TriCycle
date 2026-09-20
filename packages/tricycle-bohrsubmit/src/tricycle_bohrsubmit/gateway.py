@@ -430,9 +430,8 @@ class BohrCliGateway:
         if declared is None:
             values: object = [
                 (
-                    f"{artifact.location.rstrip('/')}/**"
+                    f"{artifact.location.rstrip('/')}/"
                     if artifact.kind == "directory"
-                    and not artifact.location.rstrip('/').endswith("/**")
                     else artifact.location
                 )
                 for artifact in job.output_artifacts
@@ -745,11 +744,17 @@ class BohrCliGateway:
             args.extend(["--out", str(destination)])
         return self._run(args, mode=self.config.download_retry_mode)
 
-    def terminate(self, external_id: str) -> str:
-        return self._run(["job", "terminate", str(external_id)], mode="transient")
+    def terminate(self, external_id: str, *, confirm: bool = False) -> str:
+        args = ["job", "terminate", str(external_id)]
+        if confirm:
+            args.append("--yes")
+        return self._run(args, mode="transient")
 
-    def terminate_group(self, group_id: str) -> str:
-        return self._run(["job_group", "terminate", str(group_id)], mode="transient")
+    def terminate_group(self, group_id: str, *, confirm: bool = False) -> str:
+        args = ["job_group", "terminate", str(group_id)]
+        if confirm:
+            args.append("--yes")
+        return self._run(args, mode="transient")
 
 @dataclass
 class InMemoryBohrGateway:

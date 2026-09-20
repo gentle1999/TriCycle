@@ -23,6 +23,9 @@ artifacts/
 *.sqlite3
 *.db
 
+# Local reaction records extracted from active-learning exports for inspection
+tests/fixtures/rxnresid-mapped-reactant-schema/
+
 # Editors / notebooks
 .idea/
 .vscode/

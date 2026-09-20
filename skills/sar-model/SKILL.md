@@ -41,5 +41,6 @@ description: "Create RxnResid training, fine-tuning, or inference jobs and submi
   `*_std` 和 `lower_95`/`upper_95`；其中 `epistemic_variance` 可直接交给
   `tricycle-sampling` 做主动学习排序。
 - `sar.finetune` 必须使用 `train.py --refit --checkpoint <selection-checkpoint>`；该模式从 checkpoint 读取 config/fold/split 和模型设置，在 train+valid 上以新 optimizer 重拟合，不能同时传 `--config`、`--fold-index` 或模型/encoder override。
+- RxnResid 主动学习每轮统一使用 300 epochs；同一配置同时用于初始训练和从上一轮 checkpoint 继续的 refit。
 
 实现入口：`packages/tricycle-sar/src/tricycle_sar/plugin.py`。

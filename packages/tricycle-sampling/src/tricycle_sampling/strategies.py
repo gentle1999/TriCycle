@@ -22,6 +22,91 @@ class SamplingStrategy(Protocol):
     ) -> tuple[Candidate, ...]: ...
 
 
+Embedding = int | tuple[float, ...]
+_EMBEDDING_KEYS = ("pair_embedding", "embedding")
+
+
+def _embedding_value(value: Any, *, field_name: str) -> Embedding:
+    """Validate the compact binary or dense embedding used by batch strategies."""
+
+    if isinstance(value, bool):
+        raise InvalidRequestError(f"{field_name} must be a non-negative integer or numeric sequence")
+    if isinstance(value, int):
+        if value < 0:
+            raise InvalidRequestError(f"{field_name} must be a non-negative integer")
+        return value
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
+        raise InvalidRequestError(
+            f"{field_name} must be a non-negative integer or numeric sequence"
+        )
+    values: list[float] = []
+    for index, item in enumerate(value):
+        if isinstance(item, bool):
+            raise InvalidRequestError(f"{field_name}[{index}] must be a finite number")
+        try:
+            parsed = float(item)
+        except (TypeError, ValueError) as exc:
+            raise InvalidRequestError(f"{field_name}[{index}] must be a finite number") from exc
+        if not math.isfinite(parsed):
+            raise InvalidRequestError(f"{field_name}[{index}] must be a finite number")
+        values.append(parsed)
+    if not values:
+        raise InvalidRequestError(f"{field_name} must not be empty")
+    return tuple(values)
+
+
+def _candidate_embedding(candidate: Candidate) -> Embedding:
+    for key in _EMBEDDING_KEYS:
+        if key in candidate.payload:
+            return _embedding_value(candidate.payload[key], field_name=f"candidate {candidate.candidate_id!r} {key}")
+    raise InvalidRequestError(
+        f"candidate {candidate.candidate_id!r} is missing pair_embedding or embedding"
+    )
+
+
+def _embedding_distance(left: Embedding, right: Embedding) -> float:
+    """Return Hamming distance for bitsets and Euclidean distance otherwise."""
+
+    if isinstance(left, int) and isinstance(right, int):
+        return float((left ^ right).bit_count())
+    if isinstance(left, int) or isinstance(right, int):
+        raise InvalidRequestError("all candidate embeddings must use the same representation")
+    if len(left) != len(right):
+        raise InvalidRequestError("all candidate embeddings must have the same dimension")
+    return math.sqrt(sum((left[index] - right[index]) ** 2 for index in range(len(left))))
+
+
+def _reference_embeddings(metadata: Mapping[str, Any] | None) -> tuple[Embedding, ...]:
+    if not metadata:
+        return ()
+    raw = metadata.get("reference_embeddings", {})
+    if raw is None:
+        return ()
+    if not isinstance(raw, Mapping):
+        raise InvalidRequestError("selection metadata.reference_embeddings must be a mapping")
+    return tuple(
+        _embedding_value(value, field_name=f"reference_embeddings[{candidate_id!r}]")
+        for candidate_id, value in raw.items()
+    )
+
+
+def _min_distance(embedding: Embedding, references: Sequence[Embedding]) -> float:
+    if not references:
+        return 0.0
+    return min(_embedding_distance(embedding, reference) for reference in references)
+
+
+def _diversity_weight(metadata: Mapping[str, Any] | None) -> float:
+    value = 0.5 if not metadata else metadata.get("diversity_weight", 0.5)
+    try:
+        weight = float(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRequestError("diversity_weight must be a number in [0, 1]") from exc
+    if not math.isfinite(weight) or not 0.0 <= weight <= 1.0:
+        raise InvalidRequestError("diversity_weight must be a number in [0, 1]")
+    return weight
+
+
 UNCERTAINTY_SCORE_KEYS: dict[str, tuple[str, ...]] = {
     # RxnResid's native evidential regression output is expressed in physical
     # target units. Prefer variance for acquisition, then accept its standard
@@ -258,7 +343,7 @@ def get_uncertainty_field(candidate: Candidate, kind: str) -> str:
 
 class RandomSamplingStrategy:
     name = "random"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def select(
         self,
@@ -267,7 +352,10 @@ class RandomSamplingStrategy:
         seed: int | None = None,
     ) -> tuple[Candidate, ...]:
         generator = random.Random(seed)
-        return tuple(generator.sample(list(candidates), budget))
+        # Canonicalize the input so a fixed seed maps a candidate set to the
+        # same sampled subset even if the pool arrived in a different order.
+        ordered = sorted(candidates, key=lambda candidate: candidate.candidate_id)
+        return tuple(generator.sample(ordered, budget))
 
 
 class UncertaintySamplingStrategy:
@@ -276,7 +364,7 @@ class UncertaintySamplingStrategy:
     name: ClassVar[str]
     uncertainty_kind: ClassVar[str]
     score_key: ClassVar[str]
-    version: ClassVar[str] = "1.0.0"
+    version: ClassVar[str] = "1.1.0"
 
     def score(self, candidate: Candidate) -> float:
         return get_uncertainty_score(candidate, self.uncertainty_kind)
@@ -302,9 +390,13 @@ class UncertaintySamplingStrategy:
         del seed
         if budget == 0:
             return ()
-        # sorted() is stable, so equal scores retain the input order. This
-        # makes batch selection deterministic without a second tie breaker.
-        return tuple(sorted(candidates, key=self.score, reverse=True)[:budget])
+        # Candidate IDs provide an explicit tie-break instead of relying on
+        # the incoming pool order.
+        ranked = sorted(
+            candidates,
+            key=lambda candidate: (-self.score(candidate), candidate.candidate_id),
+        )
+        return tuple(ranked[:budget])
 
 
 class PredictiveUncertaintySamplingStrategy(UncertaintySamplingStrategy):
@@ -323,6 +415,172 @@ class AleatoricUncertaintySamplingStrategy(UncertaintySamplingStrategy):
     name = "aleatoric-uncertainty"
     uncertainty_kind = "aleatoric"
     score_key = "aleatoric_unc"
+
+
+class PairCoreSetSamplingStrategy:
+    """Greedy k-center sampling over substrate-pair embeddings.
+
+    ``selection metadata.reference_embeddings`` should contain the embeddings
+    of substrate pairs selected in earlier rounds.  The strategy then chooses
+    candidates farthest from the already selected set and from one another.
+    A compact integer bitset is supported so molecular fingerprints do not
+    need a numerical dependency in the sampling package.
+    """
+
+    name = "pair-core-set"
+    version = "1.1.0"
+
+    def validate(self, candidates: Sequence[Candidate], budget: int) -> None:
+        if budget == 0:
+            return
+        for candidate in candidates:
+            _candidate_embedding(candidate)
+
+    def select_with_context(
+        self,
+        candidates: Sequence[Candidate],
+        budget: int,
+        seed: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[Candidate, ...]:
+        del seed
+        if budget == 0:
+            return ()
+        if budget > len(candidates):
+            raise InvalidRequestError("sampling budget cannot exceed candidate count")
+        embeddings = tuple(_candidate_embedding(candidate) for candidate in candidates)
+        references = list(_reference_embeddings(metadata))
+        remaining = set(range(len(candidates)))
+        selected: list[int] = []
+
+        for _ in range(budget):
+            if not selected and not references:
+                index = min(
+                    remaining,
+                    key=lambda candidate_index: candidates[candidate_index].candidate_id,
+                )
+            else:
+                reference_pool = [*references, *(embeddings[index] for index in selected)]
+                index = min(
+                    remaining,
+                    key=lambda candidate_index: (
+                        -_min_distance(embeddings[candidate_index], reference_pool),
+                        candidates[candidate_index].candidate_id,
+                    ),
+                )
+            remaining.remove(index)
+            selected.append(index)
+        return tuple(candidates[index] for index in selected)
+
+    def select(
+        self,
+        candidates: Sequence[Candidate],
+        budget: int,
+        seed: int | None = None,
+    ) -> tuple[Candidate, ...]:
+        return self.select_with_context(candidates, budget, seed, {})
+
+
+class DensityWeightedUncertaintySamplingStrategy(UncertaintySamplingStrategy):
+    """Prefer uncertain candidates in dense regions of substrate space."""
+
+    name = "density-weighted-uncertainty"
+    uncertainty_kind = "predictive"
+    score_key = "density_weighted_predictive_unc"
+    version = "1.1.0"
+
+    def density(self, candidate: Candidate) -> float:
+        raw = candidate.payload.get("pair_density", candidate.payload.get("density", _MISSING))
+        if raw is _MISSING:
+            raise InvalidRequestError(
+                f"candidate {candidate.candidate_id!r} is missing pair_density or density"
+            )
+        density = _as_uncertainty_score(
+            raw,
+            field_name=f"candidate {candidate.candidate_id!r} pair density",
+        )
+        return density
+
+    def score(self, candidate: Candidate) -> float:
+        return super().score(candidate) * self.density(candidate)
+
+    def validate(self, candidates: Sequence[Candidate], budget: int) -> None:
+        super().validate(candidates, budget)
+        if budget:
+            for candidate in candidates:
+                self.density(candidate)
+
+
+class UncertaintyDiversitySamplingStrategy(UncertaintySamplingStrategy):
+    """Greedily balance predictive uncertainty and substrate-space coverage."""
+
+    name = "uncertainty-diversity"
+    uncertainty_kind = "predictive"
+    score_key = "predictive_unc_with_diversity"
+    version = "1.1.0"
+
+    def validate(self, candidates: Sequence[Candidate], budget: int) -> None:
+        super().validate(candidates, budget)
+        if budget:
+            for candidate in candidates:
+                _candidate_embedding(candidate)
+
+    def select_with_context(
+        self,
+        candidates: Sequence[Candidate],
+        budget: int,
+        seed: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[Candidate, ...]:
+        del seed
+        if budget == 0:
+            return ()
+        if budget > len(candidates):
+            raise InvalidRequestError("sampling budget cannot exceed candidate count")
+        embeddings = tuple(_candidate_embedding(candidate) for candidate in candidates)
+        uncertainties = tuple(self._raw_uncertainty(candidate) for candidate in candidates)
+        minimum = min(uncertainties)
+        spread = max(uncertainties) - minimum
+        normalized_uncertainties = tuple(
+            (value - minimum) / spread if spread else 0.0 for value in uncertainties
+        )
+        references = list(_reference_embeddings(metadata))
+        weight = _diversity_weight(metadata)
+        remaining = set(range(len(candidates)))
+        selected: list[int] = []
+
+        for _ in range(budget):
+            reference_pool = [*references, *(embeddings[index] for index in selected)]
+            distances = {
+                index: _min_distance(embeddings[index], reference_pool)
+                for index in remaining
+            }
+            maximum_distance = max(distances.values(), default=0.0)
+            selected_index = min(
+                remaining,
+                key=lambda index: (
+                    -(
+                        (1.0 - weight) * normalized_uncertainties[index]
+                        + weight
+                        * (distances[index] / maximum_distance if maximum_distance else 0.0)
+                    ),
+                    candidates[index].candidate_id,
+                ),
+            )
+            remaining.remove(selected_index)
+            selected.append(selected_index)
+        return tuple(candidates[index] for index in selected)
+
+    def _raw_uncertainty(self, candidate: Candidate) -> float:
+        return get_uncertainty_score(candidate, self.uncertainty_kind)
+
+    def select(
+        self,
+        candidates: Sequence[Candidate],
+        budget: int,
+        seed: int | None = None,
+    ) -> tuple[Candidate, ...]:
+        return self.select_with_context(candidates, budget, seed, {})
 
 
 class FirstNSamplingStrategy:
@@ -352,4 +610,9 @@ STRATEGY_ALIASES: dict[str, str] = {
     "predictive_unc": PredictiveUncertaintySamplingStrategy.name,
     "epistemic_unc": EpistemicUncertaintySamplingStrategy.name,
     "aleatoric_unc": AleatoricUncertaintySamplingStrategy.name,
+    "pair_core_set": PairCoreSetSamplingStrategy.name,
+    "core_set": PairCoreSetSamplingStrategy.name,
+    "density_weighted_uncertainty": DensityWeightedUncertaintySamplingStrategy.name,
+    "density_uncertainty": DensityWeightedUncertaintySamplingStrategy.name,
+    "uncertainty_diversity": UncertaintyDiversitySamplingStrategy.name,
 }
