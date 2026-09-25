@@ -32,6 +32,16 @@ uv run --package tricycle-agent tricycle-agent plan sar.infer request.toml --run
 对应 `*_std` 以及 `lower_95`/`upper_95`。将预测行放入 candidate payload 后，
 `epistemic-uncertainty` 策略会优先选择 `epistemic_variance` 最大的候选。
 
+`agent-authored-acquisition` 模式可将 SAR worker 命令设为
+`bash agent_acquisition_worker.sh agent-acquisition-worker.toml`，调用
+`tools/agent_acquisition_worker.py`。该 worker 对剩余候选空间和有标签验证集分别运行 `predict.py`，
+校验预测 ID 覆盖后生成 `candidate-model-signals.csv`、`model-metrics.json` 和 `worker-report.json`；
+把 `outputs/agent-acquisition/` 声明为回传 artifact。它不选择或提交反应候选。下载后由本地流程将
+`candidate-model-signals.csv` 中的预测字段并入候选 payload，再执行智能体采集函数。输入示例见
+[`configs/example-agent-acquisition-worker.toml`](../../../configs/example-agent-acquisition-worker.toml)，
+Bohr 请求模板见 [`configs/example-agent-acquisition-sar-infer-request.toml`](../../../configs/example-agent-acquisition-sar-infer-request.toml)，
+worker 代码见 [`tools/agent_acquisition_worker.py`](../../../tools/agent_acquisition_worker.py)。
+
 ## 不适用与失败恢复
 
 没有 checkpoint 或稳定输入 artifact 时先修正 TOML 并重新规划。提交失败时检查 `run.toml` 和 Bohr

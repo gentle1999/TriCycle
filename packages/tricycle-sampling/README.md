@@ -13,8 +13,10 @@
 | `candidate.select` | 按已注册策略选择候选 |
 | `strategy.register` | 在进程内注册自定义策略 |
 
-默认注册五个策略：`random`、`first-n`、`predictive-uncertainty`、
-`epistemic-uncertainty` 和 `aleatoric-uncertainty`。后三者按候选的不确定性分数从高到低
+默认还注册 `agent-authored-acquisition`：它逐轮读取请求携带的 agent 编写公式、模型质量摘要、
+已采样分布摘要和候选成本字段，以固定版本的安全数值表达式解释器打分。公式不是注册的固定
+baseline，采集函数和上下文随轮次保存在探索轨迹中。传统策略包括 `random`、`first-n`、
+`predictive-uncertainty`、`epistemic-uncertainty` 和 `aleatoric-uncertainty`。后三者按候选的不确定性分数从高到低
 选择；`random` 与论文中的 `random_selection` 等价。论文中的
 `predictive_unc_based`、`epistemic_unc_based` 和 `aleatoric_unc_based` 名称也作为兼容别名
 接受。
@@ -40,6 +42,29 @@ RxnResid 最新版原生输出的 `predictive_variance`、`epistemic_variance` �
 
 返回的 `SamplingResult` 包含 `selected`、`remaining`、策略名称、seed 和 metadata，并提供
 `selected_ids` 便于写入运行状态或下游请求。
+
+## 智能体编写的采集函数
+
+选择 `agent-authored-acquisition` 时，请求必须含有 `metadata.agent_acquisition`，包括
+`tricycle.agent-acquisition/v1` schema、每轮唯一 `function_id`、`expression`、
+`cost_expression`、rationale、已采样分布摘要、模型精度摘要和证据来源。候选 payload 必须带有
+`product_count` 和 `mean_product_atom_count`；成本表达式必须使用这两个字段，并为每个候选生成
+正的成本估计。每个候选还需提供 `[0, 1]` 范围的 `sampled_novelty`，表示相对已有样本分布的
+新颖性。仓库级 `agent-authored-acquisition` skill 要求调用 RDKit 结构分析工具生成新颖度、局部密度
+和结构描述符，并将工具产物路径/hash 与分析依据记录在每轮 provenance 中；采样包接收这些数值字段，
+不自行解析化学结构。采集表达式必须组合 `sampled_novelty`、模型精度、采样分布摘要和成本，并根据
+本轮证据使用有区分力的结构字段，使每轮证据实际改变候选相对排序；表达式以高分优先选择，同分按
+candidate ID 排序。
+
+每次决策还必须引用已下载到本地的 Bohr `status.tsv` 和 `download-results.tsv` 绝对路径及
+SHA-256。采样包会校验所有 worker 已进入 `SUCCEEDED`/`FAILED` 终态、结果状态为 `DOWNLOADED`，
+并检查各自 `download-manifest.txt` 列出的 artifact 确实存在；它不负责提交、查询或下载计算任务。
+
+公式使用 `tricycle.safe-numeric-expression/v1`，只支持候选数值字段、`context`、`estimated_cost`、
+基础算术/比较/条件表达式及 `abs`、`exp`、`log`、`log1p`、`max`、`min`、`sqrt`。采样包不会使用
+Python `eval`，不允许 import、随机数、文件、网络或系统状态访问。操作说明和请求示例见
+[`agent-authored-acquisition` skill](../../.agents/skills/agent-authored-acquisition/SKILL.md) 和
+[`configs/example-agent-authored-exploration-round-request.toml`](../../configs/example-agent-authored-exploration-round-request.toml)。
 
 ```mermaid
 flowchart LR

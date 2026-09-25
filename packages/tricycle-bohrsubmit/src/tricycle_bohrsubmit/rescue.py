@@ -4,6 +4,7 @@ import csv
 import shlex
 from pathlib import Path
 
+from tricycle_core import timestamped_run_directory
 from tricycle_core.errors import InvalidRequestError
 
 from .config import dump_toml, flatten_sections, load_toml
@@ -128,7 +129,12 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
     source_prefix = str(source_env.get("job_prefix", "dpa-berny"))
     job_prefix = compact_name(request.job_prefix or f"{source_prefix}-{run_id}-rescue")
     group_name = compact_name(request.job_group_name or job_prefix)
-    output = (request.out_dir or workdir / "runs" / f"{source_run.name}-rescue-{run_id}").resolve()
+    output = (
+        request.out_dir
+        or timestamped_run_directory(
+            workdir / "runs", f"{source_run.name}-rescue-{run_id}"
+        )
+    ).resolve()
     _assert_empty_output(output)
     worker_dirs = [
         output / worker_label(index, request.workers) for index in range(request.workers)

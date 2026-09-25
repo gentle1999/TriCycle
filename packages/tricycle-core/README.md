@@ -78,6 +78,8 @@ core 只定义接口，不提供真实平台实现：
 
 `RunStore` 支持创建、打开、读取、写入和更新，适合 `inspect`、恢复和审计。写入使用临时
 文件替换，避免中途失败留下半份状态文件。
+未指定运行目录时，`timestamped_run_directory` 按本机时间生成
+`runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`。
 
 ## 使用示例
 

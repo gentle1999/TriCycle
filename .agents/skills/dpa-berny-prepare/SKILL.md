@@ -9,7 +9,7 @@ description: "Prepare local DPA-Berny or Gaussian worker inputs from a TOML requ
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
-  dpa-berny.prepare request.toml --run-id <id> --run-dir runs/<id>
+  dpa-berny.prepare request.toml --run-id <id> --run-dir 'runs/<date>/<timestamp>/<id>'
 ```
 
 该能力只创建本地输入和 `batch.toml`，不会提交 Bohr。检查 `.gjf`、`tasks.tsv` 和 `submit-plan.tsv` 后，

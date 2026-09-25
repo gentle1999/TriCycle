@@ -28,6 +28,7 @@ class FrameworkSmokeTests(unittest.TestCase):
                 "tricycle.reaction-database",
                 "tricycle.sar",
                 "tricycle.rits",
+                "tricycle.rits.ssh",
                 "tricycle.sampling",
                 "tricycle.reactionopt",
                 "tricycle.exploration",

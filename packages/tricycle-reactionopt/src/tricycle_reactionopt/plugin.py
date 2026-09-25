@@ -12,25 +12,36 @@ from tricycle_core import (
     TaskPlan,
     TaskResult,
     TaskStatus,
+    timestamped_run_directory,
 )
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.protocols import ReactionOptAdapter
 
-from .models import ReactionConfig, ReactionConfigRequest, ReactionProfileRequest
+from .diels_alder import enumerate_diels_alder_reactions, write_mapped_reaction_csv
+from .models import (
+    DielsAlderEnumerationRequest,
+    ReactionConfig,
+    ReactionConfigRequest,
+    ReactionProfileRequest,
+)
 
 
 class ReactionOptPlugin(PluginBase):
     _manifest = PluginManifest(
         plugin_id="tricycle.reactionopt",
-        display_name="ReactionOpt reaction configuration",
+        display_name="ReactionOpt reaction workflows",
         version="0.1.0",
         kind=PluginKind.REACTIONOPT,
-        description="Generate versioned reaction-path configuration for the ReactionOpt adapter.",
+        description=(
+            "Generate mapped Diels–Alder reaction candidates, ReactionOpt profiles, "
+            "and versioned reaction-path configuration."
+        ),
         capabilities=(
             "reaction-config.validate",
             "reaction-config.generate",
             "reaction-config.export",
             "reactionopt.profile",
+            "reactionopt.enumerate-da",
         ),
     )
 
@@ -44,11 +55,80 @@ class ReactionOptPlugin(PluginBase):
         request: dict[str, Any],
         context: ExecutionContext,
     ) -> TaskPlan:
+        if operation == "enumerate-da":
+            return self.plan_diels_alder_enumeration(
+                DielsAlderEnumerationRequest.from_mapping(request),
+                context,
+                prefer_context_run_dir=(request.get("output_dir") is None),
+            )
         if operation == "profile":
             return self.plan_profile(ReactionProfileRequest.from_mapping(request), context)
         if operation != "generate":
             raise InvalidRequestError(f"unsupported ReactionOpt operation: {operation}")
         return self.plan_generate(ReactionConfigRequest.from_mapping(request), context)
+
+    def plan_diels_alder_enumeration(
+        self,
+        request: DielsAlderEnumerationRequest,
+        context: ExecutionContext,
+        *,
+        prefer_context_run_dir: bool = False,
+    ) -> TaskPlan:
+        destination = _enumeration_output_path(
+            request, context, prefer_context_run_dir=prefer_context_run_dir
+        )
+        return TaskPlan(
+            task_id=f"{context.run_id}/reactionopt/enumerate-da",
+            plugin_id=self.manifest.plugin_id,
+            operation="enumerate-da",
+            parameters={
+                "request": request.to_dict(),
+                "output_csv": str(destination),
+            },
+            metadata={
+                "schema_version": "tricycle.reactionopt/da-candidates-v1",
+                "substrate_pair_count": len(request.pairs),
+                "stereochemistry": request.stereochemistry,
+                "dry_run": context.dry_run,
+            },
+        )
+
+    def execute_diels_alder_enumeration(
+        self,
+        request: DielsAlderEnumerationRequest,
+        context: ExecutionContext,
+        plan: TaskPlan | None = None,
+    ) -> TaskResult:
+        plan = plan or self.plan_diels_alder_enumeration(request, context)
+        enumeration = enumerate_diels_alder_reactions(request)
+        destination = write_mapped_reaction_csv(
+            enumeration.candidates,
+            Path(str(plan.parameters["output_csv"])),
+        )
+        return TaskResult(
+            task_id=plan.task_id,
+            plugin_id=self.manifest.plugin_id,
+            status=TaskStatus.SUCCEEDED,
+            outputs=(
+                Artifact(
+                    artifact_id="mapped-reactions",
+                    location=str(destination),
+                    media_type="text/csv",
+                    metadata={
+                        "candidate_count": len(enumeration.candidates),
+                        "complete": enumeration.complete,
+                    },
+                ),
+            ),
+            message="mapped Diels–Alder reaction candidates enumerated",
+            metadata={
+                "candidate_count": len(enumeration.candidates),
+                "substrate_pair_count": enumeration.substrate_pair_count,
+                "enumeration_complete": enumeration.complete,
+                "stereochemistry": request.stereochemistry,
+                "output_csv": str(destination),
+            },
+        )
 
     def generate(self, request: ReactionConfigRequest) -> ReactionConfig:
         return ReactionConfig(
@@ -190,3 +270,36 @@ def _profile_output_dir(value: str | None, context: ExecutionContext) -> Path | 
     if not path.is_absolute():
         path = context.workdir / path
     return path.resolve()
+
+
+def _enumeration_output_path(
+    request: DielsAlderEnumerationRequest,
+    context: ExecutionContext,
+    *,
+    prefer_context_run_dir: bool = False,
+) -> Path:
+    if request.output_csv is not None:
+        path = Path(request.output_csv)
+        if not path.is_absolute():
+            path = context.workdir / path
+        return path.resolve()
+
+    run_dir = context.metadata.get("run_dir")
+    if prefer_context_run_dir and run_dir is not None:
+        output_dir = Path(str(run_dir))
+        if not output_dir.is_absolute():
+            output_dir = context.workdir / output_dir
+    elif request.output_dir is not None:
+        output_dir = Path(request.output_dir)
+        if not output_dir.is_absolute():
+            output_dir = context.workdir / output_dir
+    else:
+        if run_dir is None:
+            output_dir = timestamped_run_directory(
+                context.workdir / "runs", context.run_id
+            )
+        else:
+            output_dir = Path(str(run_dir))
+            if not output_dir.is_absolute():
+                output_dir = context.workdir / output_dir
+    return (output_dir / "mapped-reactions.csv").resolve()

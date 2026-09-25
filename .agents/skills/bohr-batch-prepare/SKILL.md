@@ -19,8 +19,8 @@ description: "Prepare an auditable local Bohr batch run from a TOML request with
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
-  bohr.batch.prepare request.toml --run-id <id> --run-dir runs/<id>
-uv run --package tricycle-agent tricycle-agent inspect --run-dir runs/<id>
+  bohr.batch.prepare request.toml --run-id <id>
+uv run --package tricycle-agent tricycle-agent inspect --run-dir 'runs/<date>/<timestamp>/<id>'
 ```
 
 输出目录必须为空；检查任务数量、worker 分片和 `submit-plan.tsv` 后，才进入提交能力。

@@ -22,10 +22,12 @@ from tricycle_core import (
     TraceStore,
     canonical_json,
     sha256_value,
+    timestamped_run_directory,
 )
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_sampling import (
+    AGENT_ACQUISITION_STRATEGY,
     STRATEGY_ALIASES,
     UNCERTAINTY_SCORE_KEYS,
     SamplingPlugin,
@@ -159,7 +161,8 @@ class ExplorationPlugin(PluginBase):
         kind=PluginKind.EXPLORATION,
         description=(
             "Record the candidate space, model scores, sampling decision, next-space policy, "
-            "and RitS training gate for one exploration round."
+            "and RitS training gate for one exploration round, including an optional agent-authored "
+            "acquisition function."
         ),
         capabilities=("round.execute",),
     )
@@ -202,7 +205,11 @@ class ExplorationPlugin(PluginBase):
         output_dir = parsed.output_dir
         if output_dir is None:
             context_run_dir = context.metadata.get("run_dir")
-            output_dir = Path(str(context_run_dir)) if context_run_dir else context.workdir / "runs" / context.run_id
+            output_dir = (
+                Path(str(context_run_dir))
+                if context_run_dir
+                else timestamped_run_directory(context.workdir / "runs", context.run_id)
+            )
         output_dir = output_dir.resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         trace = _trace_for(context, output_dir)
@@ -248,10 +255,51 @@ class ExplorationPlugin(PluginBase):
                 )
 
             model_kind = _strategy_kind(parsed.strategy)
-            if model_kind is not None and parsed.model_snapshot.snapshot_id == "unspecified":
+            needs_model_snapshot = model_kind is not None or parsed.strategy == AGENT_ACQUISITION_STRATEGY
+            if needs_model_snapshot and parsed.model_snapshot.snapshot_id == "unspecified":
                 raise InvalidRequestError(
-                    "uncertainty sampling requires model_snapshot.snapshot_id"
+                    "model-informed sampling requires model_snapshot.snapshot_id"
                 )
+            if parsed.strategy == AGENT_ACQUISITION_STRATEGY:
+                if not parsed.model_snapshot.checkpoint_hash:
+                    raise InvalidRequestError(
+                        "agent-authored-acquisition requires model_snapshot.checkpoint_hash"
+                    )
+                if not parsed.observed_metrics:
+                    raise InvalidRequestError(
+                        "agent-authored-acquisition requires observed model evaluation metrics"
+                    )
+                acquisition_input = parsed.metadata.get("agent_acquisition", {})
+                acquisition_context = (
+                    acquisition_input.get("context", {})
+                    if isinstance(acquisition_input, Mapping)
+                    else {}
+                )
+                agent_metrics = (
+                    acquisition_context.get("model_metrics", {})
+                    if isinstance(acquisition_context, Mapping)
+                    else {}
+                )
+                if not isinstance(agent_metrics, Mapping):
+                    raise InvalidRequestError(
+                        "metadata.agent_acquisition.context.model_metrics must be a mapping"
+                    )
+                shared_metrics = set(agent_metrics) & set(parsed.observed_metrics)
+                if not shared_metrics:
+                    raise InvalidRequestError(
+                        "agent-authored model_metrics must repeat at least one observed_metrics value"
+                    )
+                mismatched_metrics = sorted(
+                    key
+                    for key in shared_metrics
+                    if canonical_json(agent_metrics[key])
+                    != canonical_json(parsed.observed_metrics[key])
+                )
+                if mismatched_metrics:
+                    raise InvalidRequestError(
+                        "agent-authored model_metrics disagree with observed_metrics: "
+                        + ", ".join(mismatched_metrics)
+                    )
             # Resolve policy inputs before any round artifact is materialized.
             # Invalid training recipes therefore fail without leaving a
             # partial candidate/score trajectory behind.
@@ -272,12 +320,21 @@ class ExplorationPlugin(PluginBase):
                 manual_action=parsed.training_action,
             )
 
+            sampling_metadata = dict(parsed.metadata)
+            if parsed.strategy == AGENT_ACQUISITION_STRATEGY:
+                sampling_metadata["round_context"] = {
+                    "round_id": parsed.round_id,
+                    "round_index": parsed.round_index,
+                    "space_hash": parsed.space.fingerprint,
+                    "model_snapshot": parsed.model_snapshot.to_dict(),
+                    "observed_metrics": dict(parsed.observed_metrics),
+                }
             sampling_request = SamplingRequest(
                 candidates=eligible,
                 budget=parsed.budget,
                 strategy=parsed.strategy,
                 seed=parsed.seed,
-                metadata=parsed.metadata,
+                metadata=sampling_metadata,
             )
             sampling = SamplingPlugin()
             sampling_plan = sampling.plan_select(sampling_request, context)
@@ -288,13 +345,64 @@ class ExplorationPlugin(PluginBase):
                 for item in score_entries
                 if isinstance(item, Mapping) and "candidate_id" in item and "score" in item
             }
+            acquisition_cost_map = {
+                str(item["candidate_id"]): float(item["estimated_cost"])
+                for item in score_entries
+                if isinstance(item, Mapping)
+                and "candidate_id" in item
+                and "estimated_cost" in item
+            }
+            acquisition_function = sampling_plan.parameters.get("acquisition_function")
+            acquisition_path: Path | None = None
+            if isinstance(acquisition_function, Mapping):
+                acquisition_path = round_dir / "acquisition-function.toml"
+                dump_toml(
+                    acquisition_path,
+                    {
+                        "schema": acquisition_function.get("schema", ""),
+                        "strategy": acquisition_function.get("strategy", ""),
+                        "strategy_version": acquisition_function.get("strategy_version", ""),
+                        "function_id": acquisition_function.get("function_id", ""),
+                        "function_version": acquisition_function.get("version", ""),
+                        "authored_by": acquisition_function.get("authored_by", ""),
+                        "expression_language": acquisition_function.get("expression_language", ""),
+                        "expression": acquisition_function.get("expression", ""),
+                        "cost_expression": acquisition_function.get("cost_expression", ""),
+                        "rationale": acquisition_function.get("rationale", ""),
+                        "author_notes": acquisition_function.get("author_notes", ""),
+                        "function_hash": acquisition_function.get("function_hash", ""),
+                        "context_json": canonical_json(acquisition_function.get("context", {})),
+                        "effective_context_json": canonical_json(
+                            acquisition_function.get("effective_context", {})
+                        ),
+                        "evidence_json": canonical_json(acquisition_function.get("evidence", {})),
+                        "cost_summary_json": canonical_json(
+                            acquisition_function.get("cost_summary", {})
+                        ),
+                    },
+                )
+                trace.emit(
+                    "acquisition.function.authored",
+                    round_id=parsed.round_id,
+                    step_id=f"{parsed.round_id}/acquisition-function",
+                    capability_id="exploration.round",
+                    payload={
+                        "path": str(acquisition_path.relative_to(output_dir)),
+                        "sha256": _sha256_file(acquisition_path),
+                        "function_hash": acquisition_function.get("function_hash", ""),
+                        "function_id": acquisition_function.get("function_id", ""),
+                        "expression": acquisition_function.get("expression", ""),
+                        "cost_expression": acquisition_function.get("cost_expression", ""),
+                    },
+                    status="succeeded",
+                )
             input_index = {
                 candidate.candidate_id: index for index, candidate in enumerate(parsed.candidates)
             }
             if score_map:
                 ranked = sorted(
                     eligible,
-                    key=lambda candidate: (-score_map[candidate.candidate_id], input_index[candidate.candidate_id]),
+                    key=lambda candidate: (-score_map[candidate.candidate_id], candidate.candidate_id),
                 )
             else:
                 ranked = list(eligible)
@@ -324,10 +432,17 @@ class ExplorationPlugin(PluginBase):
                     "candidate_id": candidate.candidate_id,
                     "score": score_map.get(candidate.candidate_id, ""),
                     "score_type": sampling_plan.parameters.get("score_field", ""),
-                    "score_source": _score_source(candidate, model_kind) if model_kind else "",
-                    "model_snapshot_id": parsed.model_snapshot.snapshot_id if model_kind else "",
-                    "model_checkpoint_hash": parsed.model_snapshot.checkpoint_hash if model_kind else "",
-                    "model_score_artifact": parsed.model_snapshot.score_artifact if model_kind else "",
+                    "score_source": (
+                        _score_source(candidate, model_kind)
+                        if model_kind
+                        else "agent-authored-expression"
+                        if parsed.strategy == AGENT_ACQUISITION_STRATEGY
+                        else ""
+                    ),
+                    "model_snapshot_id": parsed.model_snapshot.snapshot_id if needs_model_snapshot else "",
+                    "model_checkpoint_hash": parsed.model_snapshot.checkpoint_hash if needs_model_snapshot else "",
+                    "model_score_artifact": parsed.model_snapshot.score_artifact if needs_model_snapshot else "",
+                    "acquisition_cost": acquisition_cost_map.get(candidate.candidate_id, ""),
                     "eligible": candidate.candidate_id not in excluded,
                 }
                 for candidate in parsed.candidates
@@ -345,7 +460,8 @@ class ExplorationPlugin(PluginBase):
                         "exclusion_reason": excluded.get(candidate_id, ""),
                         "score": score_map.get(candidate_id, ""),
                         "score_rank": score_rank.get(candidate_id, ""),
-                        "tie_break_key": str(index),
+                        "tie_break_key": candidate_id if score_map else str(index),
+                        "estimated_cost": acquisition_cost_map.get(candidate_id, ""),
                         "selected": selected,
                         "selection_order": selection_order.get(candidate_id, ""),
                         "decision_reason": (
@@ -364,6 +480,7 @@ class ExplorationPlugin(PluginBase):
                     "payload_json": canonical_json(candidate.payload),
                     "score": score_map.get(candidate.candidate_id, ""),
                     "score_rank": score_rank.get(candidate.candidate_id, ""),
+                    "estimated_cost": acquisition_cost_map.get(candidate.candidate_id, ""),
                 }
                 for candidate in sampling_result.selected
             ]
@@ -421,6 +538,7 @@ class ExplorationPlugin(PluginBase):
                     "model_snapshot_id",
                     "model_checkpoint_hash",
                     "model_score_artifact",
+                    "acquisition_cost",
                     "eligible",
                 ),
                 score_rows,
@@ -450,6 +568,7 @@ class ExplorationPlugin(PluginBase):
                     "score",
                     "score_rank",
                     "tie_break_key",
+                    "estimated_cost",
                     "selected",
                     "selection_order",
                     "decision_reason",
@@ -459,7 +578,14 @@ class ExplorationPlugin(PluginBase):
             selected_path = round_dir / "selected-candidates.tsv"
             _write_tsv(
                 selected_path,
-                ("selection_order", "candidate_id", "payload_json", "score", "score_rank"),
+                (
+                    "selection_order",
+                    "candidate_id",
+                    "payload_json",
+                    "score",
+                    "score_rank",
+                    "estimated_cost",
+                ),
                 selected_rows,
             )
             sampling_decision_hash = sha256_value(
@@ -471,6 +597,11 @@ class ExplorationPlugin(PluginBase):
                     "candidate_pool_hash": _sha256_file(pool_path),
                     "model_scores_hash": _sha256_file(scores_path),
                     "selection_decisions_hash": _sha256_file(decisions_path),
+                    "acquisition_function_hash": (
+                        acquisition_function.get("function_hash", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
                     "selected_ids": list(sampling_result.selected_ids),
                     "remaining_ids": [
                         candidate.candidate_id for candidate in sampling_result.remaining
@@ -491,6 +622,11 @@ class ExplorationPlugin(PluginBase):
                     "selected_ids": list(sampling_result.selected_ids),
                     "candidate_pool_hash": _sha256_file(pool_path),
                     "sampling_decision_hash": sampling_decision_hash,
+                    "acquisition_function_hash": (
+                        acquisition_function.get("function_hash", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
                     "decision_table": str(decisions_path.relative_to(output_dir)),
                 },
                 status="succeeded",
@@ -629,6 +765,7 @@ class ExplorationPlugin(PluginBase):
                 range_path,
                 training_path,
                 snapshot_path,
+                *((acquisition_path,) if acquisition_path is not None else ()),
             )
             manifest_values: dict[str, object] = {
                 "schema": "tricycle.artifact-manifest/v1",
@@ -658,6 +795,16 @@ class ExplorationPlugin(PluginBase):
                     "model_snapshot_hash": parsed.model_snapshot.fingerprint,
                     "strategy": parsed.strategy,
                     "strategy_version": sampling_plan.metadata.get("strategy_version", ""),
+                    "acquisition_function_id": (
+                        acquisition_function.get("function_id", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
+                    "acquisition_function_hash": (
+                        acquisition_function.get("function_hash", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
                     "budget": parsed.budget,
                     "seed": parsed.seed if parsed.seed is not None else "",
                     "candidate_count": len(parsed.candidates),
@@ -714,6 +861,11 @@ class ExplorationPlugin(PluginBase):
                     _relative_artifact(decisions_path, output_dir),
                     _relative_artifact(training_path, output_dir),
                     _relative_artifact(snapshot_path, output_dir),
+                    *(
+                        (_relative_artifact(acquisition_path, output_dir),)
+                        if acquisition_path is not None
+                        else ()
+                    ),
                 ),
                 message="exploration round provenance recorded",
                 metadata={
@@ -727,6 +879,16 @@ class ExplorationPlugin(PluginBase):
                     "eligible_count": len(eligible),
                     "excluded_count": len(parsed.candidates) - len(eligible),
                     "selected_ids": list(sampling_result.selected_ids),
+                    "acquisition_function_id": (
+                        acquisition_function.get("function_id", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
+                    "acquisition_function_hash": (
+                        acquisition_function.get("function_hash", "")
+                        if isinstance(acquisition_function, Mapping)
+                        else ""
+                    ),
                     "remaining_ids": [candidate.candidate_id for candidate in sampling_result.remaining],
                     "range_decision": range_decision.to_dict(),
                     "training_decision": training_decision.to_dict(),
@@ -800,6 +962,11 @@ class ExplorationPlugin(PluginBase):
                 _relative_artifact(decisions_path, round_dir.parent.parent),
                 _relative_artifact(training_path, round_dir.parent.parent),
                 _relative_artifact(snapshot_path, round_dir.parent.parent),
+                *(
+                    (_relative_artifact(round_dir / "acquisition-function.toml", round_dir.parent.parent),)
+                    if (round_dir / "acquisition-function.toml").is_file()
+                    else ()
+                ),
             ),
             message="existing exploration round provenance reused",
             metadata={
@@ -809,6 +976,8 @@ class ExplorationPlugin(PluginBase):
                 "request_hash": request.request_hash,
                 "selected_ids": selected_ids,
                 "remaining_ids": remaining_ids,
+                "acquisition_function_id": state.get("acquisition_function_id", ""),
+                "acquisition_function_hash": state.get("acquisition_function_hash", ""),
                 "training_action": state.get("training_action", ""),
                 "training_reason_code": state.get("training_reason_code", ""),
                 "snapshot_transition_hash": state.get("snapshot_transition_hash", ""),

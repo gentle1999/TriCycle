@@ -70,6 +70,13 @@
 snapshot，实际 checkpoint 返回后再绑定 `next_model_snapshot`。QM 计算不属于该重放函数，但其
 候选输入和数据集 artifact hash 必须已存在。
 
+`agent-authored-acquisition` 是无副作用的本地采样策略：智能体按轮次编写安全数值表达式，
+`tricycle-sampling` 负责有限语法校验、确定性求值、成本排序和公式 hash。每次决策还必须引用
+本地 `status.tsv` 与 `download-results.tsv` 的路径和 SHA-256；所有 worker 必须已进入终态，且
+下载清单中的文件都存在。此检查将采样轮次与计算提交/运行分开，采样组件不能在同一计算任务中
+提交候选或操作 Bohr 生命周期。每个候选还需有按指定距离定义预计算的 `sampled_novelty`，以将
+已采样分布分析落实到候选间的排序中。
+
 ## BohrSubmit 迁移边界
 
 `tricycle-bohr` 是单任务 Bohr 基础层：`BohrJobSpec`/`BohrGateway` 定义平台边界，

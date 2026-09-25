@@ -1,8 +1,7 @@
-project_id = "replace-with-internal-database-project-id"
-destination = "outputs/reaction-space-rxnresid.csv"
+project_id = "00000000-0000-7000-8000-000000000201"
 consumer = "RxnResid"
-energy_unit = "database-native"
+energy_unit = "kcal/mol"
 timing_unit = "seconds"
 reaction_filter = "cycloaddition"
-reaction_smarts = "[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1"
+reaction_smarts = "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1"
 cleaned_only = true

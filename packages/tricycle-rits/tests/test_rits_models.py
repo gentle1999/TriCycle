@@ -26,7 +26,7 @@ class RitsModelTests(unittest.TestCase):
         self.assertEqual(asset.repository, "https://github.com/gentle1999/RitS")
         self.assertEqual(
             asset.revision,
-            "6d8aa0704c21d2798326a7e070491abf438ca292",
+            "b4fc883a0e97d8946731c4df12e3585cd4e98fd5",
         )
         self.assertEqual(asset.checkpoint_name, "rits.ckpt")
         self.assertEqual(asset.resolve_checkpoint(), Path("artifacts/rits/rits.ckpt"))

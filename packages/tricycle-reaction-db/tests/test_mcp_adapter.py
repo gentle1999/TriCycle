@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import json
 import os
 import threading
@@ -20,7 +21,6 @@ from tricycle_reaction_db import (
     ReactionDatabaseProjectSpec,
     ReactionFilterRequest,
     RitsDatasetExportRequest,
-    RxnResidDatasetExportRequest,
     validate_export_receipt,
 )
 from tricycle_reaction_db.mcp_adapter import _McpTransport
@@ -80,6 +80,7 @@ class _McpHandler(BaseHTTPRequestHandler):
             names = {
                 "compose_query",
                 "create_project",
+                "export_mapped_reaction_transition_state_geometries",
                 "list_projects",
             }
             if self.state.include_upload_tool:
@@ -151,6 +152,46 @@ class _McpHandler(BaseHTTPRequestHandler):
                 "batch": {"id": f"batch-{filename}", "status": "active"},
                 "item": {"id": f"item-{filename}", "status": "staged"},
             }
+        elif name == "export_mapped_reaction_transition_state_geometries":
+            after_binding_id = arguments.get("after_binding_id")
+            geometry_id = "geometry-ts" if after_binding_id is None else "geometry-ts-2"
+            binding_id = "binding-ts" if after_binding_id is None else "binding-ts-2"
+            data = {
+                "project_id": arguments["project_id"],
+                "records": [
+                    {
+                        "schema": "mapped-reaction-ts-geometry-v2",
+                        "key": "[C:1][O:2]>>[C:1][O:2]",
+                        "value": {
+                            "geometry": {
+                                "geometry_id": geometry_id,
+                                "geometry_binding_id": binding_id,
+                                "geometry_hash": "sha256:fake",
+                                "charge": 0,
+                                "multiplicity": 1,
+                                "coordinate_units": "angstrom",
+                                "atoms": [
+                                    {
+                                        "element": "O",
+                                        "atomic_number": 8,
+                                        "atom_map_number": 2,
+                                        "coordinates_angstrom": [3.0, 4.0, 5.0],
+                                    },
+                                    {
+                                        "element": "C",
+                                        "atomic_number": 6,
+                                        "atom_map_number": 1,
+                                        "coordinates_angstrom": [0.0, 1.0, 2.0],
+                                    }
+                                ],
+                            },
+                            "rdkit_mol": {"format": "molblock", "value": "molblock"},
+                        },
+                    }
+                ],
+                "has_more": after_binding_id is None,
+                "next_after_binding_id": "binding-ts" if after_binding_id is None else None,
+            }
         elif name == "compose_query":
             query = str(arguments["query"])
             if "list_mapped_reactions" in query:
@@ -160,7 +201,7 @@ class _McpHandler(BaseHTTPRequestHandler):
                             "items": [
                                 {
                                     "id": "mapped-001",
-                                    "mapped_reaction_smiles": "[C:1]>>[C:1]",
+                                    "mapped_reaction_smiles": "[C:1][O:2]>>[C:1][O:2]",
                                 }
                             ],
                             "page": {"total": 1, "limit": 200, "offset": 0},
@@ -549,7 +590,7 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(uploaded_names, ["a.log", "b.log"])
 
-    def test_filter_and_exports_use_mcp_compose_query(self) -> None:
+    def test_rits_export_uses_paged_mcp_geometry_tool_and_database_filter(self) -> None:
         adapter = self._adapter()
         filtered = adapter.filter_cleaned_reactions(ReactionFilterRequest("project-001"))
         self.assertEqual(filtered.selected_count, 1)
@@ -560,19 +601,15 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             rits = adapter.export_rits_dataset(
                 RitsDatasetExportRequest("project-001", root / "rits.csv")
             )
-            rxnresid = adapter.export_rxnresid_dataset(
-                RxnResidDatasetExportRequest("project-001", root / "rxnresid.csv")
-            )
-            self.assertEqual(rits.row_count, 1)
-            self.assertIn("geometry_id=geometry-ts", (root / "rits.csv").read_text())
-            self.assertEqual(rxnresid.row_count, 1)
-            self.assertIn("[C:1]>>[C:1],1.0,2.0,3.0,4.0,5.0", (root / "rxnresid.csv").read_text())
-
+            self.assertEqual(rits.row_count, 2)
+            with (root / "rits.csv").open(encoding="utf-8", newline="") as handle:
+                rits_rows = list(csv.reader(handle))
+            self.assertEqual(rits_rows[1][0], "[C:1][O:2]>>[C:1][O:2]")
+            self.assertIn("geometry_id=geometry-ts", rits_rows[1][1])
+            self.assertIn("geometry_binding_id=binding-ts", rits_rows[1][1])
+            self.assertEqual(rits_rows[1][1].splitlines()[2:], ["C 0 1 2", "O 3 4 5"])
         validate_export_receipt(
             RitsDatasetExportRequest("project-001", Path("rits.csv")), rits
-        )
-        validate_export_receipt(
-            RxnResidDatasetExportRequest("project-001", Path("rxnresid.csv")), rxnresid
         )
         self.assertTrue(
             all(
@@ -588,6 +625,40 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         ]
         self.assertTrue(compose_queries)
         self.assertTrue(all("reaction_smarts" in query for query in compose_queries if "list_mapped_reactions" in query))
+        geometry_calls = [
+            item["params"]
+            for item in self.state.requests
+            if item.get("method") == "tools/call"
+            and item["params"]["name"] == "export_mapped_reaction_transition_state_geometries"
+        ]
+        self.assertEqual(len(geometry_calls), 2)
+        self.assertEqual(geometry_calls[0]["arguments"]["limit"], 64)
+        self.assertIsNone(geometry_calls[0]["arguments"]["after_binding_id"])
+        self.assertEqual(geometry_calls[1]["arguments"]["after_binding_id"], "binding-ts")
+
+    def test_rits_export_still_accepts_v1_geometry_records(self) -> None:
+        mapped_smiles, xyz = McpReactionDatabaseAdapter._mapped_geometry_record_xyz(
+            {
+                "schema": "mapped-reaction-ts-geometry-v1",
+                "key": "[C:1]>>[C:1]",
+                "value": {
+                    "geometry": {
+                        "geometry_id": "geometry-v1",
+                        "coordinate_units": "angstrom",
+                        "atoms": [
+                            {
+                                "element": "C",
+                                "atom_map_number": 1,
+                                "coordinates_angstrom": [0.0, 1.0, 2.0],
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(mapped_smiles, "[C:1]>>[C:1]")
+        self.assertEqual(xyz, "1\ngeometry_id=geometry-v1\nC 0 1 2\n")
 
 
 if __name__ == "__main__":

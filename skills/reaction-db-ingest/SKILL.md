@@ -36,7 +36,7 @@ description: "Validate reaction records and project-scoped calculation-log datab
 
 批次导入后，使用数据库自己的实际反应 `reaction_smarts` 规则筛选清洗成功的反应，而不是
 显式 `reaction_class` 分类。固定模式为
-`[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1`。RitS 导出至少包含
+`[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1`。RitS 导出至少包含
 `mapped_reaction_smiles` 和 `ts_structure`；RxnResid 导出至少包含 mapped reaction SMILES、反应
 自由能、活化自由能以及前体/TS/后体计算秒数。TriCycle 不在本地猜测这些关系、能量或耗时。
 

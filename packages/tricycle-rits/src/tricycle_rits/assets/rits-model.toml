@@ -6,7 +6,7 @@ schema = "tricycle.rits-model/v1"
 [model]
 model_name = "rits-rgd1-chembl-extended"
 repository = "https://github.com/gentle1999/RitS"
-revision = "6d8aa0704c21d2798326a7e070491abf438ca292"
+revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
 revision_kind = "git-commit"
 
 # This is the broad/default RitS checkpoint described by the upstream README.

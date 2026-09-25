@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import timestamped_run_directory
 from tricycle_core.errors import InvalidRequestError
 
 from .config import dump_toml
@@ -253,7 +254,7 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
     tasks = _expand_patterns(request.task_patterns)
     if not tasks:
         raise InvalidRequestError(f"no task files matched: {request.task_patterns}")
-    output = (request.out_dir or workdir / "runs" / run_id).resolve()
+    output = (request.out_dir or timestamped_run_directory(workdir / "runs", run_id)).resolve()
     _assert_empty_output(output)
 
     job_prefix = compact_name(request.job_prefix or f"bohr-batch-{run_id}")
@@ -403,7 +404,7 @@ def stage_dpa_berny(
     else:
         model_path = None
 
-    output = (request.out_dir or workdir / "runs" / run_id).resolve()
+    output = (request.out_dir or timestamped_run_directory(workdir / "runs", run_id)).resolve()
     _assert_empty_output(output)
     job_prefix = compact_name(request.job_prefix or f"dpa-berny-{run_id}")
     job_group_name = compact_name(request.job_group_name or job_prefix)

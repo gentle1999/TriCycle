@@ -18,6 +18,7 @@
 | `rits-model` | `tricycle-rits` | RitS 训练/微调/推理并提交 Bohr |
 | `sampling-strategy` | `tricycle-sampling` | 从候选空间选择下一批反应 |
 | `exploration-round` | `tricycle-exploration` | 记录候选空间、采样决策、下一轮范围和 RitS 训练 gate |
+| `agent-authored-acquisition` | `tricycle-sampling` + `tricycle-exploration` | 分析历史分布、成本和模型精度，由智能体逐轮编写可重放采集函数 |
 | `reactionopt-config` | `tricycle-reactionopt` | 生成 ReactionOpt 配置 |
 | `reactionopt-profile` | `tricycle-reactionopt` | 从 mapped reaction 生成独立端点与 RitS TS profile |
 

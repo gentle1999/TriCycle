@@ -16,7 +16,7 @@ description: "Read the status of an existing Bohr job or prepared batch run and 
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/<id> --live
+  --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
 
 单任务请求 TOML 至少包含 `external_id`，能力为 `bohr.job.status`。默认 dry-run 不发起网络请求；

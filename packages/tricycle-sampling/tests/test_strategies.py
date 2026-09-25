@@ -1,8 +1,12 @@
+import hashlib
 import math
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from tricycle_core import ExecutionContext, InvalidRequestError
 from tricycle_sampling import (
+    AGENT_ACQUISITION_SCHEMA,
     AleatoricUncertaintySamplingStrategy,
     Candidate,
     EpistemicUncertaintySamplingStrategy,
@@ -221,6 +225,170 @@ class UncertaintySamplingTests(unittest.TestCase):
         )
         self.assertEqual(result.selected_ids[0], "high-a")
         self.assertIn("diverse-c", result.selected_ids)
+
+
+class AgentAuthoredAcquisitionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.download_dir = self.root / "downloads" / "worker-001"
+        self.download_dir.mkdir(parents=True)
+        (self.download_dir / "result.tsv").write_text("completed\n", encoding="utf-8")
+        (self.download_dir / "download-manifest.txt").write_text("result.tsv\n", encoding="utf-8")
+        report_path = self.root / "download-results.tsv"
+        report_path.write_text(
+            "worker\ttasks\tjob_id\tjob_name\tstatus\tdownload_dir\n"
+            f"worker-001\t1\tbohr-1\tjob-1\tDOWNLOADED\t{self.download_dir}\n",
+            encoding="utf-8",
+        )
+        status_path = self.root / "status.tsv"
+        status_path.write_text(
+            "worker\ttasks\tjob_id\tjob_name\tsubmit_status\tjob_status\tterminal\tresult\tinput_dir\tchecked_at\n"
+            "worker-001\t1\tbohr-1\tjob-1\tSUBMITTED\tCOMPLETED\tyes\tSUCCEEDED\tinputs\t2026-09-24\n",
+            encoding="utf-8",
+        )
+        self.metadata = {
+            "agent_acquisition": {
+                "schema": AGENT_ACQUISITION_SCHEMA,
+                "function_id": "adaptive-round-0001",
+                "version": "1.0.0",
+                "authored_by": "agent-authored-acquisition",
+                "expression": (
+                    "epistemic_variance / estimated_cost + context.model_metrics.validation_mae "
+                    "* (sampled_novelty + context.sampled_distribution.coverage_gap) / estimated_cost"
+                ),
+                "cost_expression": "product_count * mean_product_atom_count",
+                "rationale": "Prioritize uncertain candidates in poorly covered regions per cost.",
+                "context": {
+                    "sampled_distribution": {
+                        "coverage_gap": 0.25,
+                        "sampled_count": 4,
+                        "novelty_definition": "nearest-labeled-pair-distance-normalized-v1",
+                    },
+                    "model_metrics": {"validation_mae": 0.2},
+                },
+                "evidence": {
+                    "sampled_set": "sha256:sampled-set",
+                    "candidate_space": "sha256:candidate-space",
+                    "model_evaluation": "sha256:model-evaluation",
+                    "calculation_status": {
+                        "manifest_path": str(status_path.resolve()),
+                        "sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
+                    },
+                    "downloaded_results": {
+                        "manifest_path": str(report_path.resolve()),
+                        "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                    },
+                },
+            }
+        }
+        self.candidates = (
+            Candidate(
+                "rxn-a",
+                {
+                    "epistemic_variance": 0.9,
+                    "product_count": 2,
+                    "mean_product_atom_count": 10,
+                    "sampled_novelty": 0.9,
+                },
+            ),
+            Candidate(
+                "rxn-b",
+                {
+                    "epistemic_variance": 0.8,
+                    "product_count": 4,
+                    "mean_product_atom_count": 5,
+                    "sampled_novelty": 0.3,
+                },
+            ),
+            Candidate(
+                "rxn-c",
+                {
+                    "epistemic_variance": 0.4,
+                    "product_count": 2,
+                    "mean_product_atom_count": 10,
+                    "sampled_novelty": 0.4,
+                },
+            ),
+        )
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_agent_function_scores_with_cost_and_replays_deterministically(self) -> None:
+        plugin = SamplingPlugin()
+        request = SamplingRequest(
+            candidates=self.candidates,
+            budget=2,
+            strategy="agent-authored-acquisition",
+            metadata=self.metadata,
+        )
+
+        result = plugin.select(request)
+        plan = plugin.plan_select(request, ExecutionContext(run_id="adaptive-test"))
+
+        self.assertEqual(result.selected_ids, ("rxn-a", "rxn-b"))
+        self.assertEqual(result.selected_ids, plugin.select(request).selected_ids)
+        self.assertEqual(plan.parameters["candidate_scores"][0]["estimated_cost"], 20.0)
+        function = plan.parameters["acquisition_function"]
+        self.assertEqual(function["cost_summary"]["total"], 60.0)
+        self.assertEqual(len(function["function_hash"]), 64)
+
+    def test_agent_function_rejects_python_execution(self) -> None:
+        plugin = SamplingPlugin()
+        metadata = {
+            **self.metadata,
+            "agent_acquisition": {
+                **self.metadata["agent_acquisition"],
+                "expression": "__import__('os').getcwd()",
+            },
+        }
+
+        with self.assertRaises(InvalidRequestError):
+            plugin.plan_select(
+                SamplingRequest(
+                    candidates=self.candidates,
+                    budget=1,
+                    strategy="agent-authored-acquisition",
+                    metadata=metadata,
+                ),
+                ExecutionContext(run_id="adaptive-test"),
+            )
+
+    def test_agent_function_waits_for_terminal_and_downloaded_workers(self) -> None:
+        plugin = SamplingPlugin()
+        status_path = Path(
+            self.metadata["agent_acquisition"]["evidence"]["calculation_status"]["manifest_path"]
+        )
+        status_path.write_text(
+            "worker\ttasks\tjob_id\tjob_name\tsubmit_status\tjob_status\tterminal\tresult\tinput_dir\tchecked_at\n"
+            "worker-001\t1\tbohr-1\tjob-1\tSUBMITTED\tRUNNING\tno\tRUNNING\tinputs\t2026-09-24\n",
+            encoding="utf-8",
+        )
+        metadata = {
+            **self.metadata,
+            "agent_acquisition": {
+                **self.metadata["agent_acquisition"],
+                "evidence": {
+                    **self.metadata["agent_acquisition"]["evidence"],
+                    "calculation_status": {
+                        "manifest_path": str(status_path),
+                        "sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
+                    },
+                },
+            },
+        }
+
+        with self.assertRaisesRegex(InvalidRequestError, "every calculation worker to be terminal"):
+            plugin.plan_select(
+                SamplingRequest(
+                    candidates=self.candidates,
+                    budget=1,
+                    strategy="agent-authored-acquisition",
+                    metadata=metadata,
+                ),
+                ExecutionContext(run_id="adaptive-test"),
+            )
 
 
 if __name__ == "__main__":

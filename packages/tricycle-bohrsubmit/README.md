@@ -90,17 +90,17 @@ flowchart LR
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   bohr.batch.prepare request.toml \
-  --run-id batch-demo --run-dir runs/batch-demo
+  --run-id batch-demo
 
 uv run --package tricycle-agent tricycle-agent inspect \
-  --run-dir runs/batch-demo
+  --run-dir 'runs/<date>/<timestamp>/batch-demo'
 ```
 
 确认 `manifest.tsv` 和 `submit-plan.tsv` 后，才执行已准备 run 的后续生命周期操作：
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
-  bohr.batch.submit runs/batch-demo \
+  bohr.batch.submit 'runs/<date>/<timestamp>/batch-demo' \
   --run-id batch-submit-demo --live
 ```
 

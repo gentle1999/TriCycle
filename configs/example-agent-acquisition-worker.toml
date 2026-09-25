@@ -1,0 +1,30 @@
+# Worker input for tools/agent_acquisition_worker.py.
+# Place this file, agent_acquisition_worker.py/.sh, the RxnResid checkout,
+# checkpoint, remaining-candidate CSV, and labelled validation CSV in the SAR worker's
+# uploaded input directory. Paths below are relative to this file.
+
+schema = "tricycle.agent-acquisition-worker/v1"
+model_snapshot_id = "sar-checkpoint-round-0004"
+source_revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
+source_directory = "rxnresid"
+predict_script = "predict.py"
+python_executable = "python3.12"
+
+checkpoint = "inputs/model/checkpoint.pt"
+candidate_space = "inputs/candidates/remaining-candidates.csv"
+candidate_id_column = "candidate_id"
+component_id_columns = ["candidate_id"]
+
+# Use a genuinely held-out set or a cross-validation prediction file. Do not
+# use training predictions as the model-quality metric for acquisition.
+validation_data = "inputs/evaluation/validation.csv"
+validation_id_column = "validation_id"
+validation_component_id_columns = ["validation_id"]
+validation_target_column = "target"
+validation_role = "held-out"
+validation_target_unit = "replace-with-the-dataset-target-unit"
+
+output_directory = "outputs/agent-acquisition"
+batch_size = 512
+cpu = false
+mixed_precision = "no"

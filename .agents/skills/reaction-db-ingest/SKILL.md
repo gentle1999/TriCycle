@@ -26,7 +26,7 @@ artifact 字段。批次请求一次只能声明一个 project 创建描述和�
 `reaction_smarts` 筛选清洗成功数据（不是 `reaction_class` 分类）：
 
 ```text
-[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1
+[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1
 ```
 
 - RitS：`mapped_reaction_smiles + ts_structure`；

@@ -9,6 +9,7 @@ from tricycle_reaction_db import (
     CYCLOADDITION_RXN_SMARTS,
     RITS_EXPORT_API_CONTRACT,
     RXNRESID_EXPORT_API_CONTRACT,
+    RXNRESID_GROUND_TRUTH_PROJECT_ID,
     CalculationLogBatchSpec,
     ReactionBatchImportRequest,
     ReactionDatabaseImportReceipt,
@@ -78,6 +79,29 @@ def _mcp_export_calls(
     reaction_smarts: str,
     export_kind: str,
 ) -> tuple[ReactionDatabaseMcpToolCall, ...]:
+    if export_kind == "rits":
+        return (
+            ReactionDatabaseMcpToolCall(
+                "compose_query",
+                {
+                    "app_name": "test-reaction-db",
+                    "operation": "MappedReactionQueryService.list_mapped_reactions",
+                    "project_id": project_id,
+                    "reaction_smarts": reaction_smarts,
+                    "page_count": 1,
+                },
+            ),
+            ReactionDatabaseMcpToolCall(
+                "export_mapped_reaction_transition_state_geometries",
+                {
+                    "project_id": project_id,
+                    "limit": 64,
+                    "page_count": 1,
+                    "record_count": 1,
+                    "matched_record_count": 1,
+                },
+            ),
+        )
     operations = (
         (
             "MappedReactionQueryService.list_mapped_reactions",
@@ -241,7 +265,10 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
             self.assertEqual(adapter.rits_calls[0].reaction_smarts, CYCLOADDITION_RXN_SMARTS)
 
             rxnresid = plugin.export_rxnresid(
-                RxnResidDatasetExportRequest("project-uuid-1", root / "rxnresid.csv"),
+                RxnResidDatasetExportRequest(
+                    RXNRESID_GROUND_TRUTH_PROJECT_ID,
+                    root / "rxnresid.csv",
+                ),
                 adapter,
                 live,
             )
@@ -249,12 +276,20 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
             self.assertEqual(adapter.rxnresid_calls[0].reaction_smarts, CYCLOADDITION_RXN_SMARTS)
 
     def test_export_requests_use_internal_project_id_and_database_filter(self) -> None:
+        self.assertEqual(
+            CYCLOADDITION_RXN_SMARTS,
+            "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>"
+            "[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1",
+        )
         with self.assertRaisesRegex(InvalidRequestError, "project_id"):
             ReactionFilterRequest.from_mapping(
                 {"project_slug": "not-an-internal-project-id"}
             )
         rits = RitsDatasetExportRequest("00000000-project", Path("rits.csv"))
-        rxnresid = RxnResidDatasetExportRequest("00000000-project", Path("rxnresid.csv"))
+        rxnresid = RxnResidDatasetExportRequest(
+            RXNRESID_GROUND_TRUTH_PROJECT_ID,
+            Path("rxnresid.csv"),
+        )
         self.assertEqual(ReactionFilterRequest("00000000-project").reaction_smarts, CYCLOADDITION_RXN_SMARTS)
         self.assertEqual(rits.to_dict()["required_columns"], ["mapped_reaction_smiles", "ts_structure"])
         self.assertEqual(rits.to_dict()["reaction_smarts"], CYCLOADDITION_RXN_SMARTS)
@@ -296,7 +331,10 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
                     ),
                 )
 
-        request = RxnResidDatasetExportRequest("00000000-project", Path("rxnresid.csv"))
+        request = RxnResidDatasetExportRequest(
+            RXNRESID_GROUND_TRUTH_PROJECT_ID,
+            Path("rxnresid.csv"),
+        )
         with self.assertRaisesRegex(InvalidRequestError, "thermodynamics"):
             ReactionDatabasePlugin().export_rxnresid(
                 request,

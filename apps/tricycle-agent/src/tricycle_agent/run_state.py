@@ -6,7 +6,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from tricycle_core import InvalidRequestError, RunStore, TaskResult, TaskStatus, load_dotenv
+from tricycle_core import (
+    InvalidRequestError,
+    RunStore,
+    TaskResult,
+    TaskStatus,
+    load_dotenv,
+    timestamped_run_directory,
+)
 
 _PREPARATION_CAPABILITIES = frozenset(
     {"bohr.batch.prepare", "dpa-berny.prepare", "dpa-berny.rescue"}
@@ -34,6 +41,9 @@ _FAILED_REMOTE_STATUSES = frozenset(
         "cancel",
         "canceled",
         "cancelled",
+        "lost",
+        "missing",
+        "not_running",
     }
 )
 _RETRYABLE_CAPABILITIES = frozenset(
@@ -56,6 +66,9 @@ _RETRYABLE_CAPABILITIES = frozenset(
         "rits.train",
         "rits.infer",
         "rits.finetune",
+        "rits.ssh.status",
+        "rits.ssh.logs",
+        "rits.ssh.download",
         "exploration.round",
     }
 )
@@ -70,7 +83,7 @@ def requested_run_dir(request: Mapping[str, Any], workdir: Path, run_id: str) ->
         return Path(str(output)).resolve()
     load_dotenv(keys=("TRICYCLE_RUN_ROOT",))
     run_root = os.environ.get("TRICYCLE_RUN_ROOT", "runs")
-    return (workdir / run_root / run_id).resolve()
+    return timestamped_run_directory(workdir / run_root, run_id).resolve()
 
 
 def copy_request(request_path: Path, run_dir: Path) -> Path:
@@ -114,7 +127,7 @@ def _as_int(value: object, default: int = 0) -> int:
 
 def _remote_status(metadata: Mapping[str, Any]) -> str:
     return (
-        str(metadata.get("status") or metadata.get("job_status") or "")
+        str(metadata.get("status") or metadata.get("job_status") or metadata.get("state") or "")
         .lower()
         .replace("_", "")
         .replace("-", "")
@@ -161,6 +174,18 @@ def next_action_for(capability_id: str, result: TaskResult) -> str:
         "rits.finetune",
     }:
         return "bohr.job.status" if result.external_id else ""
+    if capability_id == "rits.ssh.finetune":
+        return "rits.ssh.status" if result.external_id else ""
+    if capability_id == "rits.ssh.status":
+        normalized = _remote_status(result.metadata)
+        return (
+            capability_id
+            if normalized
+            in {"running", "created", "restarting", "paused", "staging", "stopping", "submitted"}
+            else ""
+        )
+    if capability_id in {"rits.ssh.logs", "rits.ssh.download", "rits.ssh.terminate"}:
+        return ""
     if capability_id == "bohr.job.status":
         normalized = _remote_status(result.metadata)
         if normalized in _SUCCESSFUL_REMOTE_STATUSES:
@@ -181,6 +206,10 @@ def state_for_result(capability_id: str, result: TaskResult) -> tuple[str, str]:
         return "planned", "plan"
     if capability_id == "bohr.batch.terminate" and result.status is not TaskStatus.FAILED:
         return "stopped", "remote"
+    if capability_id == "rits.ssh.terminate" and result.status is not TaskStatus.FAILED:
+        return "stopped", "remote"
+    if capability_id == "rits.ssh.download" and result.status is not TaskStatus.FAILED:
+        return "downloaded", "local"
     if capability_id == "bohr.batch.download" and result.status is not TaskStatus.FAILED:
         return "downloaded", "local"
     if capability_id == "bohr.job.download" and result.status is not TaskStatus.FAILED:

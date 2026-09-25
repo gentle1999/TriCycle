@@ -36,11 +36,12 @@ from tricycle_reaction_db import (
     create_reaction_database_adapter,
 )
 from tricycle_reactionopt import (
+    DielsAlderEnumerationRequest,
     ReactionConfigRequest,
     ReactionOptPlugin,
     ReactionProfileRequest,
 )
-from tricycle_rits import RitsPlugin
+from tricycle_rits import OpenSshRitsGateway, RitsPlugin, RitsSshGateway, RitsSshPlugin
 from tricycle_sampling import SamplingPlugin, SamplingRequest
 from tricycle_sar import SarPlugin
 
@@ -64,6 +65,7 @@ class CapabilityDispatcher:
         reaction_database_adapter: ReactionDatabaseAdapter | None = None,
         reactionopt_adapter: ReactionOptAdapter | None = None,
         reactionopt_profile_adapter: Any | None = None,
+        rits_ssh_gateway: RitsSshGateway | None = None,
     ) -> None:
         self.catalog = catalog
         self.bohr_gateway = bohr_gateway
@@ -71,6 +73,7 @@ class CapabilityDispatcher:
         self.reaction_database_adapter = reaction_database_adapter
         self.reactionopt_adapter = reactionopt_adapter
         self.reactionopt_profile_adapter = reactionopt_profile_adapter
+        self.rits_ssh_gateway = rits_ssh_gateway
 
     def plan(
         self,
@@ -154,6 +157,15 @@ class CapabilityDispatcher:
                 status=TaskStatus.SUCCEEDED,
                 message="ReactionOpt configuration generated",
                 metadata={"capability_id": capability_id, "config": config.to_dict()},
+            )
+
+        if capability_id == "reactionopt.enumerate-da":
+            component = self._as(provider, ReactionOptPlugin)
+            parsed = DielsAlderEnumerationRequest.from_mapping(request)
+            return component.execute_diels_alder_enumeration(
+                parsed,
+                context,
+                planned,
             )
 
         if capability_id == "candidate.select":
@@ -264,6 +276,16 @@ class CapabilityDispatcher:
                 return component.execute(planned, context)
             return component.submit_to_bohr(planned, self._require_bohr(), context)
 
+        if capability_id.startswith("rits.ssh."):
+            component = self._as(provider, RitsSshPlugin)
+            if context.dry_run:
+                return component.execute(planned, context)
+            if self.rits_ssh_gateway is None:
+                raise IntegrationNotConfiguredError(
+                    "RitS SSH execution requires an injected RitsSshGateway"
+                )
+            return component.execute_remote(planned, self.rits_ssh_gateway, context)
+
         if capability_id == "bohr.compute.plan":
             # Planning is intrinsically dry-run even if a caller passes the
             # live flag for a uniform command-line workflow.
@@ -364,6 +386,7 @@ class CapabilityDispatcher:
             reaction_database_adapter=self.reaction_database_adapter,
             reactionopt_adapter=self.reactionopt_adapter,
             reactionopt_profile_adapter=self.reactionopt_profile_adapter,
+            rits_ssh_gateway=self.rits_ssh_gateway,
         )
 
     def with_reaction_database(self, env_file: Path | None = None) -> CapabilityDispatcher:
@@ -376,6 +399,20 @@ class CapabilityDispatcher:
             reaction_database_adapter=create_reaction_database_adapter(env_file),
             reactionopt_adapter=self.reactionopt_adapter,
             reactionopt_profile_adapter=self.reactionopt_profile_adapter,
+            rits_ssh_gateway=self.rits_ssh_gateway,
+        )
+
+    def with_rits_ssh(self, gateway: RitsSshGateway | None = None) -> CapabilityDispatcher:
+        """Return a dispatcher with an explicit internal-host SSH adapter injected."""
+
+        return CapabilityDispatcher(
+            self.catalog,
+            bohr_gateway=self.bohr_gateway,
+            reaction_repository=self.reaction_repository,
+            reaction_database_adapter=self.reaction_database_adapter,
+            reactionopt_adapter=self.reactionopt_adapter,
+            reactionopt_profile_adapter=self.reactionopt_profile_adapter,
+            rits_ssh_gateway=gateway or OpenSshRitsGateway(),
         )
 
     def _require_bohr(self) -> BohrGateway:

@@ -1,0 +1,14 @@
+# Expand explicit ene/diene substrate pairs into atom-mapped reaction candidates.
+stereochemistry = "reactant-constrained"
+
+[[pairs]]
+ene_id = "ene-001"
+ene_smiles = "C=C"
+diene_id = "diene-001"
+diene_smiles = "C=CC=C"
+
+[[pairs]]
+ene_id = "ene-002"
+ene_smiles = "C/C=C/C"
+diene_id = "diene-002"
+diene_smiles = "C=CC=C"

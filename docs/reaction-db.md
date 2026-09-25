@@ -29,18 +29,22 @@ worker `.out` 和其他批次目录不在上传范围内。请求必须携带以
 筛选使用的实际数据库 rxn-SMARTS 固定为：
 
 ```text
-[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1
+[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1
 ```
 
 请求中的 `reaction_filter = "cycloaddition"` 仅保留为本地操作兼容标签；adapter 必须将
-`reaction_smarts` 原样传给数据库的 `reaction_smarts` 查询参数，不能转换成显式的
-`reaction_class` 条件，也不能在本地重做反应分类。RitS 的 TS 结构默认以 `xyz` 表示。RxnResid 的能量单位由数据库/adapter 明确记录；耗时单位
-固定为秒，阶段固定为 `reactant`、`transition_state`、`product`。CSV 的实际序列化、数据库
-查询和文件下载由注入的 `ReactionDatabaseAdapter` 完成。仓库内置的
+`reaction_smarts` 原样传给数据库筛选表达式，不能转换成显式的 `reaction_class` 条件，也不能
+在本地重做反应分类。RitS 的 TS 结构默认以 `xyz` 表示。RxnResid 通过数据库 MCP 的
+`MappedReactionQueryService.list_mapped_reactions` 按 `project_id` 和完整 `reaction_smarts` 分页筛选，
+并为每条 mapped reaction 读取 materialized thermodynamics profile。输出能量单位固定为 kcal/mol，
+阶段耗时单位固定为秒。ground-truth 项目 ID 固定为 `00000000-0000-7000-8000-000000000201`。未显式传入
+destination 时，CSV 和 `receipt.json` 写入 `$TRICYCLE_RUN_ROOT/YYYY-MM-DD/<本地时间戳>/record/`；
+未设置 run root 时使用 `runs/`。CSV 的实际序列化、数据库查询和文件下载由注入的 `ReactionDatabaseAdapter`
+完成。仓库内置的
 `McpReactionDatabaseAdapter` 使用数据库的 Streamable HTTP MCP endpoint 创建 project，并通过
 数据库批量文件接口提交日志：先调用 MCP `create_project`，再按服务限制调用
 `POST /api/upload-batches` 创建队列和 `POST /api/upload-batches/{batch_id}/files` multipart
-上传文件；筛选和导出通过数据库 MCP 的 `compose_query` 调用 UseCase schema。批量接口与单文件
+上传文件；一般筛选、RitS 结构导出和 RxnResid 热力学导出通过数据库 MCP 的 `compose_query` / 分页查询。批量接口与单文件
 接口共用数据库的 RustFS staging 和 durable worker，TriCycle 只传输文件字节和队列描述，不依赖
 数据库服务可见的共享目录，也不因同机部署而切换实现。默认批量模式可通过
 `TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE=batch` 明确配置；`mcp` 模式保留为旧服务的逐文件
@@ -56,17 +60,16 @@ live CLI 只在执行阶段注入该 adapter，dry-run 不读取数据库凭据�
 ## 标准数据库导出门禁
 
 导出 adapter 不能把任意本地日志解析结果拼成一个“成功”的 CSV。成功返回的
-`ReactionSpaceExportReceipt` 必须带 `api_contract` 和 MCP 请求证明；插件会在生成
-`TaskResult` 前校验它们。MCP adapter 的证明记录 `compose_query` 所访问的 database
-service/method、project ID 和固定 reaction SMARTS。
+`ReactionSpaceExportReceipt` 必须带 `api_contract` 和标准请求证明；插件会在生成
+`TaskResult` 前校验它们。RitS 的 MCP 证明记录 `compose_query` 筛选、分页 geometry 导出工具、
+project ID 和固定 reaction SMARTS；RxnResid 的 MCP 证明记录筛选/热力学 service、分页和 alias 批次、
+project ID 及固定 reaction SMARTS。
 
-RxnResid 通过 `compose_query` 调用
-`MappedReactionQueryService.list_mapped_reactions` 和
-`ReactionEnergyQueryService.get_mapped_reaction_thermodynamics`，再将数据库返回的字段写入
-CSV。RitS 通过 `compose_query` 调用
-`MappedReactionQueryService.list_mapped_reactions`、`get_mapped_reaction` 和
-`GeometryQueryService.get_geometry`，再由数据库返回的坐标物化 XYZ。MCP adapter 不能使用
-`reaction_class` 或本地日志推断。
+RxnResid 通过 `compose_query` 分页读取数据库筛选结果，并从同一个 `profiles[0]` 获取能量和阶段耗时；
+每批 thermodynamics alias 最多 24 条。缺少必需能量的行会排除并记录原因，缺少 profile 或 profile 格式无效时终止导出。RitS 通过 `compose_query` 调用
+`MappedReactionQueryService.list_mapped_reactions` 执行 database-authoritative SMARTS 筛选，再用
+`export_mapped_reaction_transition_state_geometries` 按游标分页读取 mapped SMILES 和 TS geometry，
+依 atom-map 编号物化 XYZ。MCP adapter 不能使用 `reaction_class` 或本地日志推断。
 
 ## 基本查询能力
 

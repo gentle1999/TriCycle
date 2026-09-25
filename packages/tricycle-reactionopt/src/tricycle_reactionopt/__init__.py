@@ -1,7 +1,10 @@
 from typing import Any
 
+from .diels_alder import DielsAlderEnumeration, enumerate_diels_alder_reactions
 from .models import (
     ConformerSamplingConfig,
+    DielsAlderEnumerationRequest,
+    DielsAlderSubstratePair,
     ReactionConfig,
     ReactionConfigRequest,
     ReactionProfileRequest,
@@ -89,10 +92,14 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "ConformerSamplingConfig",
+    "DielsAlderEnumeration",
+    "DielsAlderEnumerationRequest",
+    "DielsAlderSubstratePair",
     "ReactionConfig",
     "ReactionConfigRequest",
     "ReactionOptPlugin",
     "ReactionProfileRequest",
+    "enumerate_diels_alder_reactions",
     *_PROFILE_EXPORT_ORDER,
     *_RITS_EXPORT_ORDER,
 ]

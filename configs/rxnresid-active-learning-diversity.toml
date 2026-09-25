@@ -2,7 +2,6 @@
 # The existing four-strategy run remains separately reproducible; this batch
 # contains only the three new strategies requested for comparison.
 experiment_name = "rxnresid-cycloaddition-active-learning-diversity"
-output_root = "runs/rxnresid-active-learning-diversity"
 strategies = [
   "pair-core-set",
   "density-weighted-uncertainty",
@@ -27,20 +26,20 @@ cost_unit = "core_hours"
 persist_round_predictions = true
 
 [dataset]
-ground_truth_collection = "runs/ground-truth-export/reaction-collection.csv"
-ground_truth_resources = "runs/ground-truth-export/ts-time-aggregation.csv"
+ground_truth_collection = "runs/2026-09-17/23-25-49.009869+0800/ground-truth-export/reaction-collection.csv"
+ground_truth_resources = "runs/2026-09-17/23-25-49.009869+0800/ground-truth-export/ts-time-aggregation.csv"
 
 [projects.autode]
-collection = "runs/autode-export/reaction-collection.csv"
-resources = "runs/autode-export/ts-time-aggregation.csv"
+collection = "runs/2026-09-19/09-34-10.627619+0800/autode-export/reaction-collection.csv"
+resources = "runs/2026-09-19/09-34-10.627619+0800/autode-export/ts-time-aggregation.csv"
 
 [projects."dpa-fined-rits-da"]
-collection = "runs/dpa-fined-rits-da-export/reaction-collection.csv"
-resources = "runs/dpa-fined-rits-da-export/ts-time-aggregation.csv"
+collection = "runs/2026-09-17/21-11-16.258592+0800/dpa-fined-rits-da-export/reaction-collection.csv"
+resources = "runs/2026-09-17/21-11-16.258592+0800/dpa-fined-rits-da-export/ts-time-aggregation.csv"
 
 [projects."rits-zero-shot-da"]
-collection = "runs/rits-zero-shot-da-export-preview/reaction-collection.csv"
-resources = "runs/rits-zero-shot-da-export-preview/ts-time-aggregation.csv"
+collection = "runs/2026-09-17/20-37-29.580818+0800/rits-zero-shot-da-export-preview/reaction-collection.csv"
+resources = "runs/2026-09-17/20-37-29.580818+0800/rits-zero-shot-da-export-preview/ts-time-aggregation.csv"
 
 [rxnresid]
 source_directory = ""

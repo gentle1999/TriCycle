@@ -3,5 +3,5 @@ destination = "outputs/reaction-space-rits.csv"
 consumer = "RitS"
 structure_format = "xyz"
 reaction_filter = "cycloaddition"
-reaction_smarts = "[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1"
+reaction_smarts = "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1"
 cleaned_only = true

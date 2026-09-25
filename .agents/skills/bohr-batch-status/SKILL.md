@@ -18,7 +18,7 @@ description: "Query all submitted workers in a Bohr batch run and persist a stat
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/<id> --live
+  --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
 
 真实查询产生 `status.tsv`，默认 dry-run 不调用网络；凭据可放在项目 `.env` 中，shell 环境变量优先。查询后检查 `incomplete`、`failed` 和下一动作，

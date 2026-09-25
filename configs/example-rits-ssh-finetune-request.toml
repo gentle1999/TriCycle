@@ -1,0 +1,20 @@
+# Replace these example values with the internal SSH host and an image available to its Docker daemon.
+# Authentication comes from OpenSSH config/agent; never paste a private key here.
+host = "gpu-box.internal"
+user = "trainer"
+port = 22
+remote_root = "/mnt/fast/rits-jobs"
+docker_context = "remote"
+
+# This directory must contain run.sh, the pinned RitS checkout, prepared dataset, and checkpoint.
+bundle_dir = "/path/to/rits-finetune-bundle/RitS"
+command = ["bash", "run.sh"]
+
+# The target machine's Docker daemon pulls/runs this image; it must be compatible with the host driver.
+container_image = "tricycle/rits-training:torch2.12.0-cu130"
+container_gpus = "all"
+container_workdir = "/workspace/job"
+
+connect_timeout = 10
+transfer_timeout = 3600
+log_lines = 200

@@ -23,6 +23,7 @@ from tricycle_core import (
     TaskStatus,
 )
 from tricycle_reaction_db import ReactionDatabaseImportReceipt
+from tricycle_rits import InMemoryRitsSshGateway
 
 
 class CapabilityRuntimeTests(unittest.TestCase):
@@ -44,6 +45,11 @@ class CapabilityRuntimeTests(unittest.TestCase):
             "rits.train",
             "rits.infer",
             "rits.finetune",
+            "rits.ssh.finetune",
+            "rits.ssh.status",
+            "rits.ssh.logs",
+            "rits.ssh.terminate",
+            "rits.ssh.download",
         }
         self.assertTrue(
             expected.issubset({manifest.capability_id for manifest in catalog.manifests()})
@@ -64,6 +70,31 @@ class CapabilityRuntimeTests(unittest.TestCase):
                 f"name: {manifest.capability_id.replace('.', '-')}",
                 skill.read_text(encoding="utf-8"),
             )
+
+    def test_rits_ssh_live_dispatch_requires_and_uses_injected_gateway(self) -> None:
+        catalog = create_capability_catalog()
+        request = {
+            "host": "gpu-box.internal",
+            "user": "trainer",
+            "remote_root": "/mnt/fast/rits-jobs",
+            "bundle_dir": "/tmp/rits-bundle",
+            "command": ["bash", "run.sh"],
+            "container_image": "registry.internal/rits:cuda",
+        }
+        dry_result = CapabilityDispatcher(catalog).execute(
+            "rits.ssh.finetune", request, ExecutionContext(run_id="rits-ssh-dry")
+        )
+        self.assertEqual(dry_result.status, TaskStatus.PLANNED)
+
+        gateway = InMemoryRitsSshGateway()
+        result = CapabilityDispatcher(catalog, rits_ssh_gateway=gateway).execute(
+            "rits.ssh.finetune",
+            request,
+            ExecutionContext(run_id="rits-ssh-live", dry_run=False),
+        )
+        self.assertEqual(result.status, TaskStatus.SUBMITTED)
+        self.assertEqual(result.metadata["container_runtime"], "docker")
+        self.assertIn(result.external_id, gateway.jobs)
 
     def test_run_persists_toml_request_and_state(self) -> None:
         with TemporaryDirectory() as temp:

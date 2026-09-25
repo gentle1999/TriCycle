@@ -58,6 +58,172 @@ class ReactionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DielsAlderSubstratePair:
+    """One ene/diene pair to expand into mapped Diels–Alder reactions."""
+
+    ene_smiles: str
+    diene_smiles: str
+    ene_id: str | None = None
+    diene_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("ene_smiles", "diene_smiles"):
+            value = str(getattr(self, name)).strip()
+            if not value:
+                raise InvalidRequestError(f"{name} must not be empty")
+            object.__setattr__(self, name, value)
+        for name, smiles in (("ene_id", self.ene_smiles), ("diene_id", self.diene_smiles)):
+            value = getattr(self, name)
+            if value is None or not str(value).strip():
+                digest = sha256(smiles.encode("utf-8")).hexdigest()[:12]
+                value = f"{name.removesuffix('_id')}-{digest}"
+            object.__setattr__(self, name, str(value).strip())
+
+    @property
+    def pair_id(self) -> str:
+        return f"{self.ene_id}+{self.diene_id}"
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> DielsAlderSubstratePair:
+        allowed = {"ene_id", "ene_smiles", "diene_id", "diene_smiles"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise InvalidRequestError("unknown substrate-pair fields: " + ", ".join(unknown))
+        return cls(
+            ene_smiles=str(payload.get("ene_smiles", "")),
+            diene_smiles=str(payload.get("diene_smiles", "")),
+            ene_id=(str(payload["ene_id"]) if payload.get("ene_id") is not None else None),
+            diene_id=(str(payload["diene_id"]) if payload.get("diene_id") is not None else None),
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "ene_id": str(self.ene_id),
+            "ene_smiles": self.ene_smiles,
+            "diene_id": str(self.diene_id),
+            "diene_smiles": self.diene_smiles,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DielsAlderEnumerationRequest:
+    """Request to enumerate mapped Diels–Alder reactions from substrate pairs."""
+
+    pairs: tuple[DielsAlderSubstratePair, ...]
+    stereochemistry: str = "reactant-constrained"
+    max_products_per_pair: int | None = None
+    max_isomers_per_product: int | None = None
+    output_csv: str | None = None
+    output_dir: str | None = None
+
+    def __post_init__(self) -> None:
+        pairs = tuple(
+            pair
+            if isinstance(pair, DielsAlderSubstratePair)
+            else DielsAlderSubstratePair.from_mapping(pair)
+            for pair in self.pairs
+        )
+        if not pairs:
+            raise InvalidRequestError("at least one substrate pair is required")
+        object.__setattr__(self, "pairs", pairs)
+        if self.stereochemistry not in {"reactant-constrained", "all"}:
+            raise InvalidRequestError(
+                "stereochemistry must be 'reactant-constrained' or 'all'"
+            )
+        for name in ("max_products_per_pair", "max_isomers_per_product"):
+            object.__setattr__(
+                self, name, _positive_optional_int(getattr(self, name), name)
+            )
+        for name in ("output_csv", "output_dir"):
+            value = getattr(self, name)
+            if value is not None:
+                text = str(value).strip()
+                if not text:
+                    raise InvalidRequestError(f"{name} must not be empty when provided")
+                object.__setattr__(self, name, text)
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> DielsAlderEnumerationRequest:
+        allowed = {
+            "pairs",
+            "ene_id",
+            "ene_smiles",
+            "diene_id",
+            "diene_smiles",
+            "stereochemistry",
+            "max_products_per_pair",
+            "max_isomers_per_product",
+            "output_csv",
+            "output_dir",
+            "out_dir",
+            "run_dir",
+        }
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise InvalidRequestError(
+                "unknown reactionopt.enumerate-da fields: " + ", ".join(unknown)
+            )
+        pair_values = payload.get("pairs")
+        if pair_values is None:
+            pair_fields = {"ene_id", "ene_smiles", "diene_id", "diene_smiles"}
+            pair_values = [
+                {key: value for key, value in payload.items() if key in pair_fields}
+            ]
+        if not isinstance(pair_values, (list, tuple)):
+            raise InvalidRequestError("pairs must be an array of tables")
+        pairs: list[DielsAlderSubstratePair] = []
+        for index, value in enumerate(pair_values):
+            if not isinstance(value, Mapping):
+                raise InvalidRequestError(f"pairs[{index}] must be a table")
+            pairs.append(DielsAlderSubstratePair.from_mapping(value))
+        output_dir = payload.get(
+            "output_dir", payload.get("out_dir", payload.get("run_dir"))
+        )
+        return cls(
+            pairs=tuple(pairs),
+            stereochemistry=str(payload.get("stereochemistry", "reactant-constrained")),
+            max_products_per_pair=_positive_optional_int(
+                payload.get("max_products_per_pair"), "max_products_per_pair"
+            ),
+            max_isomers_per_product=_positive_optional_int(
+                payload.get("max_isomers_per_product"), "max_isomers_per_product"
+            ),
+            output_csv=(
+                str(payload["output_csv"])
+                if payload.get("output_csv") is not None
+                else None
+            ),
+            output_dir=(str(output_dir) if output_dir is not None else None),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pairs": [pair.to_dict() for pair in self.pairs],
+            "stereochemistry": self.stereochemistry,
+            "max_products_per_pair": self.max_products_per_pair,
+            "max_isomers_per_product": self.max_isomers_per_product,
+            "output_csv": self.output_csv,
+            "output_dir": self.output_dir,
+        }
+
+
+def _positive_optional_int(value: Any, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise InvalidRequestError(f"{name} must be a positive integer when provided")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRequestError(
+            f"{name} must be a positive integer when provided"
+        ) from exc
+    if parsed < 1 or str(value).strip() != str(parsed):
+        raise InvalidRequestError(f"{name} must be a positive integer when provided")
+    return parsed
+
+
+@dataclass(frozen=True, slots=True)
 class ConformerSamplingConfig:
     """Configuration for one independent reactant/product conformer pool.
 

@@ -20,7 +20,9 @@ description: "Select the next batch of reaction candidates with a registered, au
 1. 用 `SamplingRequest` 检查候选 ID 唯一性和 budget 边界。
 2. 用 `SamplingPlugin.plan("select", ...)` 先生成可审计计划。
 3. 选择已注册策略；内置提供 `random`、`first-n`、`predictive-uncertainty`、
-   `epistemic-uncertainty` 和 `aleatoric-uncertainty`。
+   `epistemic-uncertainty` 和 `aleatoric-uncertainty`。需要结合每轮样本分布、计算成本和模型精度
+   动态制定公式时，使用 `agent-authored-acquisition` 策略和
+   [`agent-authored-acquisition` skill](../../.agents/skills/agent-authored-acquisition/SKILL.md)。
 4. 调用 `select`，保存 selected/remaining 和策略 metadata。
 5. 将 selected candidate 交给 ReactionOpt/Bohr 流程，并保留本轮 seed。
 
@@ -34,6 +36,9 @@ description: "Select the next batch of reaction candidates with a registered, au
   历史 `*_unc` 和 `*_uncertainty` 字段；variance 优先于 std；
 - 候选也可以提供 `posterior_probabilities`，由采样模块按二分类熵分解纯函数计算三种分数；
 - 不在策略插件内偷偷查询数据库或模型；外部信息通过 payload/adapter 显式传入；
+- `agent-authored-acquisition` 的公式、分析上下文、成本代理和证据必须随 round 请求显式传入；
+  该策略只解释确定性数值表达式，不执行任意 Python。决策必须在上一批计算完成并下载到本地之后
+  单独执行，不得与计算提交或 worker 生命周期绑定；
 - 论文中的 `predictive_unc_based`、`epistemic_unc_based`、`aleatoric_unc_based` 和
   `random_selection` 是兼容别名；新增策略时必须保留稳定策略名和版本。
 

@@ -2,6 +2,8 @@
 
 `tricycle-reactionopt` 从一个严格校验的 mapped reaction SMILES 生成 ReactionOpt profile：输入解析后分出三个独立分支，分别采样反应物构象、产物构象，并将 mapped reaction connectivity 交给 RitS pipeline 生成、过滤、聚类和筛选 TS 构象。
 
+它也提供 `reactionopt.enumerate-da`，可从多组 ene/diene 底物生成完整原子映射的 Diels–Alder reaction SMILES 候选，并写入 `mapped-reactions.csv`。默认保留输入已标注的 E/Z 约束并枚举未指定的非可翻转产品立体中心；可翻转原子在产品中不指定立体标记，也不作为独立立体异构体枚举。此步骤只生成候选列表，不会自动创建或提交计算任务。使用方式见 [reactionopt-enumerate-da skill](../../.agents/skills/reactionopt-enumerate-da/SKILL.md) 和 `configs/example-reactionopt-da-enumerate-request.toml`。
+
 RitS 是 reaction-level 的 TS 生成器，直接消费 mapped reaction connectivity。反应物构象、产物构象和 RitS TS 是三个独立分支，只有最终组合 profile 时才汇总三者。实现也不会使用原 ReactionOpt 的 product-backward、`4+2` 拉伸或其它旧 TS 初猜策略。
 
 ## 输入约定

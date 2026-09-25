@@ -1,6 +1,7 @@
 from .contracts import (
     RITS_EXPORT_API_CONTRACT,
     RXNRESID_EXPORT_API_CONTRACT,
+    ReactionDatabaseApiRequest,
     ReactionDatabaseMcpToolCall,
 )
 from .mcp_adapter import (
@@ -11,6 +12,7 @@ from .mcp_adapter import (
 )
 from .models import (
     CYCLOADDITION_RXN_SMARTS,
+    RXNRESID_GROUND_TRUTH_PROJECT_ID,
     CalculationLogBatchManifest,
     CalculationLogBatchSpec,
     ReactionBatchImportRequest,
@@ -41,9 +43,11 @@ __all__ = [
     "ReactionDatabaseAdapter",
     "ReactionDatabaseMcpConfig",
     "ReactionDatabaseMcpError",
+    "ReactionDatabaseApiRequest",
     "ReactionDatabaseMcpToolCall",
     "RITS_EXPORT_API_CONTRACT",
     "RXNRESID_EXPORT_API_CONTRACT",
+    "RXNRESID_GROUND_TRUTH_PROJECT_ID",
     "ReactionDatabaseImportReceipt",
     "ReactionDatabaseProjectSpec",
     "ReactionDatabasePlugin",

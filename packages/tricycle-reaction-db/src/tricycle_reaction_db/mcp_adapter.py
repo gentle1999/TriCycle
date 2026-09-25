@@ -12,12 +12,13 @@ from __future__ import annotations
 import base64
 import csv
 import json
+import math
 import os
 import ssl
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from http.client import IncompleteRead, RemoteDisconnected
@@ -57,6 +58,8 @@ _DEFAULT_UPLOAD_MODE = "batch"
 _UPLOAD_MODES = frozenset({"batch", "mcp"})
 _BATCH_MAX_FILES = 64
 _BATCH_MAX_BYTES = 64 * 1024 * 1024
+_RITS_MCP_GEOMETRY_PAGE_SIZE = 64
+_RXNRESID_THERMO_ALIAS_BATCH_SIZE = 24
 _QUEUE_ACCEPTED_STATUSES = frozenset(
     {
         "queued",
@@ -74,6 +77,7 @@ _MCP_ENV_KEYS = frozenset(
     {
         "TRICYCLE_REACTION_DB_MCP_URL",
         "TRICYCLE_REACTION_DB_MCP_TOKEN",
+        "TRICYCLE_REACTION_DB_REST_TOKEN",
         "TRICYCLE_REACTION_DB_ORGANIZATION_ID",
         "TRICYCLE_REACTION_DB_MCP_APP_NAME",
         "TRICYCLE_REACTION_DB_MCP_VERIFY_TLS",
@@ -154,6 +158,7 @@ class ReactionDatabaseMcpConfig:
     timeout_seconds: float = 60.0
     page_size: int = 200
     upload_mode: str = _DEFAULT_UPLOAD_MODE
+    rest_token: str | None = None
 
     def __post_init__(self) -> None:
         endpoint = str(self.endpoint_url).strip().rstrip("/")
@@ -172,6 +177,14 @@ class ReactionDatabaseMcpConfig:
             raise IntegrationNotConfiguredError(
                 "TRICYCLE_REACTION_DB_MCP_TOKEN is required for live database operations"
             )
+        rest_token = self.rest_token
+        if rest_token is not None:
+            rest_token = str(rest_token).strip() or None
+            if rest_token is not None and rest_token.startswith("mcp_"):
+                raise InvalidRequestError(
+                    "TRICYCLE_REACTION_DB_REST_TOKEN must be a REST/OIDC bearer token; "
+                    "MCP access tokens are restricted to /mcp/"
+                )
         app_name = str(self.app_name).strip()
         if not app_name:
             raise InvalidRequestError("TRICYCLE_REACTION_DB_MCP_APP_NAME must not be empty")
@@ -194,6 +207,7 @@ class ReactionDatabaseMcpConfig:
             raise InvalidRequestError(f"database CA bundle does not exist: {ca_bundle}")
         object.__setattr__(self, "endpoint_url", endpoint)
         object.__setattr__(self, "token", token)
+        object.__setattr__(self, "rest_token", rest_token)
         object.__setattr__(self, "organization_id", organization_id)
         object.__setattr__(self, "app_name", app_name)
         object.__setattr__(self, "ca_bundle", ca_bundle)
@@ -213,6 +227,7 @@ class ReactionDatabaseMcpConfig:
             load_dotenv(env_file, environ=values, keys=_MCP_ENV_KEYS)
         raw_endpoint = values.get("TRICYCLE_REACTION_DB_MCP_URL", "").strip()
         token = values.get("TRICYCLE_REACTION_DB_MCP_TOKEN", "").strip()
+        rest_token = values.get("TRICYCLE_REACTION_DB_REST_TOKEN", "").strip() or None
         if not raw_endpoint:
             raise IntegrationNotConfiguredError(
                 "TRICYCLE_REACTION_DB_MCP_URL is required for live database operations"
@@ -225,6 +240,7 @@ class ReactionDatabaseMcpConfig:
         return cls(
             endpoint_url=raw_endpoint,
             token=token,
+            rest_token=rest_token,
             organization_id=values.get("TRICYCLE_REACTION_DB_ORGANIZATION_ID"),
             app_name=values.get("TRICYCLE_REACTION_DB_MCP_APP_NAME", _DEFAULT_APP_NAME),
             verify_tls=_env_bool(
@@ -1063,6 +1079,15 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             (endpoint.scheme, endpoint.netloc, joined_path, requested.query, "")
         )
 
+    def _require_rest_token(self) -> str:
+        token = self.config.rest_token
+        if token is None:
+            raise IntegrationNotConfiguredError(
+                "TRICYCLE_REACTION_DB_REST_TOKEN is required for REST API operations; "
+                "a TRICYCLE_REACTION_DB_MCP_TOKEN cannot authenticate REST requests"
+            )
+        return token
+
     def _rest_json(self, method: str, path: str, payload: object | None = None) -> Any:
         body = (
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -1090,7 +1115,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
     ) -> tuple[bytes, Mapping[str, str]]:
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {self.config.token}",
+            "Authorization": f"Bearer {self._require_rest_token()}",
             "User-Agent": "TriCycle-reaction-db-upload-batch/0.1",
         }
         if content_type is not None:
@@ -1242,15 +1267,35 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         )
 
     def export_rits_dataset(self, request: RitsDatasetExportRequest) -> ReactionSpaceExportReceipt:
-        summaries, page_count = self._iter_mapped_reactions(
-            request.project_id,
-            request.reaction_smarts,
-        )
+        if request.structure_format != "xyz":
+            raise InvalidRequestError(
+                "MCP RitS export currently supports structure_format=xyz only"
+            )
         destination = request.destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
         row_count = 0
+        reaction_page_count = 0
+        selected_reaction_count = 0
+        geometry_page_count = 0
+        geometry_record_count = 0
+        exported_reactions: set[str] = set()
+        selected_reactions: set[str] = set()
         try:
+            for summaries in self._iter_mapped_reaction_pages(
+                request.project_id,
+                request.reaction_smarts,
+            ):
+                reaction_page_count += 1
+                selected_reaction_count += len(summaries)
+                for summary in summaries:
+                    selected_reactions.add(
+                        self._required_text(
+                            summary.get("mapped_reaction_smiles"),
+                            "mapped_reaction_smiles",
+                        )
+                    )
+
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -1263,31 +1308,22 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 temporary_path = Path(handle.name)
                 writer = csv.writer(handle, lineterminator="\n")
                 writer.writerow(("mapped_reaction_smiles", "ts_structure"))
-                for summary in summaries:
-                    mapped_reaction_id = self._required_identifier(
-                        summary, "mapped reaction", ("id", "mapped_reaction_id")
-                    )
-                    detail = self._query_mapped_reaction_detail(
-                        request.project_id,
-                        mapped_reaction_id,
-                    )
-                    geometry_id = self._transition_state_geometry_id(detail)
-                    geometry = self._query_geometry(request.project_id, geometry_id)
-                    if request.structure_format != "xyz":
-                        raise InvalidRequestError(
-                            "MCP RitS export currently supports structure_format=xyz only"
-                        )
-                    writer.writerow(
-                        (
-                            self._required_text(
-                                detail.get("mapped_reaction_smiles")
-                                or summary.get("mapped_reaction_smiles"),
-                                "mapped_reaction_smiles",
-                            ),
-                            self._geometry_xyz(geometry, geometry_id),
-                        )
-                    )
-                    row_count += 1
+                for records in self._iter_mapped_reaction_geometry_pages(request.project_id):
+                    geometry_page_count += 1
+                    geometry_record_count += len(records)
+                    for record in records:
+                        mapped_smiles, xyz = self._mapped_geometry_record_xyz(record)
+                        if mapped_smiles not in selected_reactions:
+                            continue
+                        writer.writerow((mapped_smiles, xyz))
+                        exported_reactions.add(mapped_smiles)
+                        row_count += 1
+            missing_reactions = selected_reactions - exported_reactions
+            if missing_reactions:
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry export omitted "
+                    f"{len(missing_reactions)} reaction(s) selected by the database reaction_smarts"
+                )
             assert temporary_path is not None
             os.replace(temporary_path, destination)
         except Exception:
@@ -1299,19 +1335,18 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 "MappedReactionQueryService.list_mapped_reactions",
                 request.project_id,
                 request.reaction_smarts,
-                page_count=page_count,
+                page_count=reaction_page_count,
+                selected_reaction_count=selected_reaction_count,
             ),
-            self._mcp_descriptor(
-                "MappedReactionQueryService.get_mapped_reaction",
-                request.project_id,
-                request.reaction_smarts,
-                row_count=row_count,
-            ),
-            self._mcp_descriptor(
-                "GeometryQueryService.get_geometry",
-                request.project_id,
-                request.reaction_smarts,
-                row_count=row_count,
+            ReactionDatabaseMcpToolCall(
+                "export_mapped_reaction_transition_state_geometries",
+                {
+                    "project_id": request.project_id,
+                    "limit": _RITS_MCP_GEOMETRY_PAGE_SIZE,
+                    "page_count": geometry_page_count,
+                    "record_count": geometry_record_count,
+                    "matched_record_count": row_count,
+                },
             ),
         )
         return ReactionSpaceExportReceipt(
@@ -1321,10 +1356,20 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             mcp_tool_calls=calls,
             metadata={
                 "transport": "mcp",
-                "mcp_tool": "compose_query",
+                "mcp_tool": "export_mapped_reaction_transition_state_geometries",
                 "mcp_app_name": self.config.app_name,
                 "structure_format": request.structure_format,
-                "database_authority": "mapped-reaction-and-geometry-query-services",
+                "database_authority": "mapped-reaction-query-and-streaming-geometry-export",
+                "coordinate_atom_order": "ascending-reaction-atom-map-number",
+                "streaming": {
+                    "mode": "paged-mcp-cursor",
+                    "geometry_page_size": _RITS_MCP_GEOMETRY_PAGE_SIZE,
+                    "filtered_reaction_pages": reaction_page_count,
+                    "geometry_pages": geometry_page_count,
+                    "geometry_records_scanned": geometry_record_count,
+                    "selected_reactions": selected_reaction_count,
+                    "exported_rows": row_count,
+                },
             },
         )
 
@@ -1332,55 +1377,35 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         self,
         request: RxnResidDatasetExportRequest,
     ) -> ReactionSpaceExportReceipt:
-        summaries, page_count = self._iter_mapped_reactions(
-            request.project_id,
-            request.reaction_smarts,
-        )
-        rows: list[tuple[object, ...]] = []
-        for summary in summaries:
-            mapped_reaction_id = self._required_identifier(
-                summary, "mapped reaction", ("id", "mapped_reaction_id")
-            )
-            thermodynamics = self._query_thermodynamics(
-                request.project_id,
-                mapped_reaction_id,
-            )
-            profiles = thermodynamics.get("profiles")
-            if not isinstance(profiles, list) or not profiles:
-                raise ReactionDatabaseMcpError(
-                    f"mapped reaction {mapped_reaction_id} has no materialized thermodynamic profile",
-                    tool_name="compose_query",
-                )
-            profile = profiles[0]
-            if not isinstance(profile, Mapping):
-                raise ReactionDatabaseMcpError(
-                    f"mapped reaction {mapped_reaction_id} returned an invalid thermodynamic profile",
-                    tool_name="compose_query",
-                )
-            reaction = profile.get("reaction", {})
-            activation = profile.get("activation", {})
-            if not isinstance(reaction, Mapping) or not isinstance(activation, Mapping):
-                raise ReactionDatabaseMcpError(
-                    f"mapped reaction {mapped_reaction_id} returned incomplete thermodynamics",
-                    tool_name="compose_query",
-                )
-            rows.append(
-                (
-                    self._required_text(
-                        summary.get("mapped_reaction_smiles"),
-                        "mapped_reaction_smiles",
-                    ),
-                    reaction.get("gibbs_free_energy_kcal_mol"),
-                    activation.get("gibbs_free_energy_kcal_mol"),
-                    profile.get("reactants_running_time_seconds"),
-                    profile.get("transition_state_running_time_seconds"),
-                    profile.get("products_running_time_seconds"),
-                )
-            )
+        if not request.cleaned_only:
+            raise InvalidRequestError("RxnResid thermodynamics export requires cleaned_only=true")
+
         destination = request.destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
+        mapped_reaction_pages = 0
+        summaries: list[Mapping[str, Any]] = []
+        row_count = 0
+        batch_count = 0
+        excluded_reasons: dict[str, int] = {}
         try:
+            for page in self._iter_mapped_reaction_pages(
+                request.project_id,
+                request.reaction_smarts,
+            ):
+                mapped_reaction_pages += 1
+                for summary in page:
+                    self._required_identifier(
+                        summary,
+                        "mapped reaction",
+                        ("id", "mapped_reaction_id"),
+                    )
+                    self._required_text(
+                        summary.get("mapped_reaction_smiles"),
+                        "mapped_reaction_smiles",
+                    )
+                    summaries.append(summary)
+
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
@@ -1402,41 +1427,165 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                         "product_compute_seconds",
                     )
                 )
-                writer.writerows(rows)
+                for start in range(0, len(summaries), _RXNRESID_THERMO_ALIAS_BATCH_SIZE):
+                    batch = summaries[start : start + _RXNRESID_THERMO_ALIAS_BATCH_SIZE]
+                    batch_count += 1
+                    mapped_reaction_ids = tuple(
+                        self._required_identifier(
+                            summary,
+                            "mapped reaction",
+                            ("id", "mapped_reaction_id"),
+                        )
+                        for summary in batch
+                    )
+                    data = self._transport.compose_query(
+                        self.config.app_name,
+                        self._thermodynamics_batch_query(
+                            request.project_id,
+                            mapped_reaction_ids,
+                        ),
+                    )
+                    service = data.get("ReactionEnergyQueryService")
+                    if not isinstance(service, Mapping):
+                        raise ReactionDatabaseMcpError(
+                            "MCP result has no ReactionEnergyQueryService data"
+                        )
+                    for index, (summary, mapped_reaction_id) in enumerate(
+                        zip(batch, mapped_reaction_ids)
+                    ):
+                        result = service.get(f"thermodynamics_{index}")
+                        if not isinstance(result, Mapping):
+                            raise ReactionDatabaseMcpError(
+                                "mapped-reaction thermodynamics result is missing or invalid "
+                                f"for reaction {mapped_reaction_id}"
+                            )
+                        returned_id = str(result.get("mapped_reaction_id", "")).strip()
+                        if returned_id != mapped_reaction_id:
+                            raise ReactionDatabaseMcpError(
+                                "mapped-reaction thermodynamics result does not match the "
+                                f"requested project-scoped ID {mapped_reaction_id}"
+                            )
+                        profiles = result.get("profiles")
+                        if not isinstance(profiles, list) or not profiles:
+                            raise ReactionDatabaseMcpError(
+                                "mapped reaction has no materialized thermodynamics profile: "
+                                f"{mapped_reaction_id}"
+                            )
+                        profile = profiles[0]
+                        if not isinstance(profile, Mapping):
+                            raise ReactionDatabaseMcpError(
+                                "mapped reaction has an invalid materialized thermodynamics "
+                                f"profile: {mapped_reaction_id}"
+                            )
+                        exclusion_reason = self._thermodynamics_exclusion_reason(profile)
+                        if exclusion_reason is not None:
+                            excluded_reasons[exclusion_reason] = (
+                                excluded_reasons.get(exclusion_reason, 0) + 1
+                            )
+                            continue
+
+                        reaction_profile = profile["reaction"]
+                        activation_profile = profile["activation"]
+                        writer.writerow(
+                            (
+                                self._required_text(
+                                    summary.get("mapped_reaction_smiles"),
+                                    "mapped_reaction_smiles",
+                                ),
+                                self._profile_number(
+                                    reaction_profile["gibbs_free_energy_kcal_mol"],
+                                    "reaction.gibbs_free_energy_kcal_mol",
+                                ),
+                                self._profile_number(
+                                    activation_profile["gibbs_free_energy_kcal_mol"],
+                                    "activation.gibbs_free_energy_kcal_mol",
+                                ),
+                                self._optional_profile_number(
+                                    profile.get("reactants_running_time_seconds"),
+                                    "reactants_running_time_seconds",
+                                ),
+                                self._optional_profile_number(
+                                    profile.get("transition_state_running_time_seconds"),
+                                    "transition_state_running_time_seconds",
+                                ),
+                                self._optional_profile_number(
+                                    profile.get("products_running_time_seconds"),
+                                    "products_running_time_seconds",
+                                ),
+                            )
+                        )
+                        row_count += 1
             assert temporary_path is not None
             os.replace(temporary_path, destination)
         except Exception:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise
-        calls = (
-            self._mcp_descriptor(
-                "MappedReactionQueryService.list_mapped_reactions",
-                request.project_id,
-                request.reaction_smarts,
-                page_count=page_count,
-            ),
-            self._mcp_descriptor(
-                "ReactionEnergyQueryService.get_mapped_reaction_thermodynamics",
-                request.project_id,
-                request.reaction_smarts,
-                row_count=len(rows),
-            ),
+
+        excluded_count = sum(excluded_reasons.values())
+        filter_call = self._mcp_descriptor(
+            "MappedReactionQueryService.list_mapped_reactions",
+            request.project_id,
+            request.reaction_smarts,
+            cleaned_only=True,
+            page_count=mapped_reaction_pages,
+            page_size=self.config.page_size,
+            mapped_reaction_count=len(summaries),
         )
-        return ReactionSpaceExportReceipt(
+        thermo_call = self._mcp_descriptor(
+            "ReactionEnergyQueryService.get_mapped_reaction_thermodynamics",
+            request.project_id,
+            request.reaction_smarts,
+            batch_count=batch_count,
+            queried_reaction_count=len(summaries),
+            max_aliases_per_query=_RXNRESID_THERMO_ALIAS_BATCH_SIZE,
+            profile_policy="profiles[0]",
+        )
+        receipt_path = destination.parent / "receipt.json"
+        receipt = ReactionSpaceExportReceipt(
             destination=destination,
-            row_count=len(rows),
+            row_count=row_count,
             api_contract=RXNRESID_EXPORT_API_CONTRACT,
-            mcp_tool_calls=calls,
+            mcp_tool_calls=(filter_call, thermo_call),
             metadata={
                 "transport": "mcp",
-                "mcp_tool": "compose_query",
                 "mcp_app_name": self.config.app_name,
-                "energy_unit": request.energy_unit,
-                "timing_unit": request.timing_unit,
-                "database_authority": "mapped-reaction-and-thermodynamics-query-services",
+                "project_id": request.project_id,
+                "reaction_smarts": request.reaction_smarts,
+                "cleaned_only": request.cleaned_only,
+                "energy_unit": "kcal/mol",
+                "timing_unit": "seconds",
+                "mapped_reaction_pages": mapped_reaction_pages,
+                "mapped_reaction_count": len(summaries),
+                "exported_rows": row_count,
+                "excluded_incomplete_thermodynamics_count": excluded_count,
+                "excluded_reasons": excluded_reasons,
+                "thermodynamics_profile_policy": "profiles[0]",
+                "database_authority": "mapped-reaction-query-and-thermodynamics-materialization",
+                "receipt_path": str(receipt_path),
             },
         )
+        receipt_temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=receipt_path.parent,
+                prefix=f".{receipt_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                receipt_temporary_path = Path(handle.name)
+                json.dump(receipt.to_dict(), handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            assert receipt_temporary_path is not None
+            os.replace(receipt_temporary_path, receipt_path)
+        except Exception:
+            if receipt_temporary_path is not None:
+                receipt_temporary_path.unlink(missing_ok=True)
+            raise
+        return receipt
 
     def _build_upload_files(
         self,
@@ -1499,14 +1648,12 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
     def _is_file_upload_error(error: ReactionDatabaseMcpError) -> bool:
         return error.tool_name == "upload_calculation_log" and error.status_code is None
 
-    def _iter_mapped_reactions(
+    def _iter_mapped_reaction_pages(
         self,
         project_id: str,
         reaction_smarts: str,
-    ) -> tuple[list[Mapping[str, Any]], int]:
+    ) -> Iterator[tuple[Mapping[str, Any], ...]]:
         offset = 0
-        page_count = 0
-        result: list[Mapping[str, Any]] = []
         while True:
             query = self._mapped_reaction_list_query(
                 project_id,
@@ -1516,21 +1663,277 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             )
             data = self._transport.compose_query(self.config.app_name, query)
             page = self._service_method(data, "MappedReactionQueryService", "list_mapped_reactions")
-            items = page.get("items", [])
+            items = page.get("items")
             if not isinstance(items, list):
                 raise ReactionDatabaseMcpError("mapped reaction MCP result items must be a list")
-            result.extend(item for item in items if isinstance(item, Mapping))
-            page_count += 1
-            if not items or len(items) < self.config.page_size:
+            summaries = tuple(item for item in items if isinstance(item, Mapping))
+            if len(summaries) != len(items):
+                raise ReactionDatabaseMcpError(
+                    "mapped reaction MCP result contains an invalid summary"
+                )
+            page_info = page.get("page")
+            if not isinstance(page_info, Mapping):
+                raise ReactionDatabaseMcpError("mapped reaction MCP result has no page metadata")
+            returned_offset = self._nonnegative_int(page_info.get("offset"))
+            if returned_offset != offset:
+                raise ReactionDatabaseMcpError(
+                    "mapped reaction MCP pagination returned an unexpected offset"
+                )
+            total = self._nonnegative_int(page_info.get("total"))
+            yield summaries
+            if not items or (total and offset + len(items) >= total):
                 break
-            page_info = page.get("page", {})
-            total = self._nonnegative_int(
-                page_info.get("total") if isinstance(page_info, Mapping) else None
-            )
+            if len(items) < self.config.page_size and not total:
+                break
             offset += len(items)
-            if total and offset >= total:
+
+    def _iter_mapped_reaction_geometry_pages(
+        self,
+        project_id: str,
+    ) -> Iterator[tuple[Mapping[str, Any], ...]]:
+        tool_name = "export_mapped_reaction_transition_state_geometries"
+        self._transport.ensure_tool(tool_name)
+        after_binding_id: str | None = None
+        while True:
+            page = self._transport.call_tool(
+                tool_name,
+                {
+                    "project_id": project_id,
+                    "after_binding_id": after_binding_id,
+                    "limit": _RITS_MCP_GEOMETRY_PAGE_SIZE,
+                },
+            )
+            returned_project_id = str(page.get("project_id", "")).strip()
+            if returned_project_id != project_id:
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry MCP page does not match the requested project_id",
+                    tool_name=tool_name,
+                )
+            raw_records = page.get("records")
+            if not isinstance(raw_records, list):
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry MCP page has no records list",
+                    tool_name=tool_name,
+                )
+            if len(raw_records) > _RITS_MCP_GEOMETRY_PAGE_SIZE:
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry MCP page exceeded the requested limit",
+                    tool_name=tool_name,
+                )
+            records = tuple(record for record in raw_records if isinstance(record, Mapping))
+            if len(records) != len(raw_records):
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry MCP page contains an invalid record",
+                    tool_name=tool_name,
+                )
+            has_more = page.get("has_more")
+            if not isinstance(has_more, bool):
+                raise ReactionDatabaseMcpError(
+                    "mapped-reaction geometry MCP page has no boolean has_more field",
+                    tool_name=tool_name,
+                )
+            next_after_binding_id = page.get("next_after_binding_id")
+            if has_more:
+                next_cursor = self._required_text(
+                    next_after_binding_id,
+                    "next_after_binding_id",
+                )
+                if next_cursor == after_binding_id or not records:
+                    raise ReactionDatabaseMcpError(
+                        "mapped-reaction geometry MCP pagination did not advance",
+                        tool_name=tool_name,
+                    )
+            else:
+                next_cursor = None
+            yield records
+            if not has_more:
                 break
-        return result, page_count
+            after_binding_id = next_cursor
+
+    @classmethod
+    def _mapped_geometry_record_xyz(
+        cls,
+        record: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        if record.get("schema") not in {
+            "mapped-reaction-ts-geometry-v1",
+            "mapped-reaction-ts-geometry-v2",
+        }:
+            raise ReactionDatabaseMcpError(
+                "mapped-reaction geometry MCP record has an unsupported schema",
+                tool_name="export_mapped_reaction_transition_state_geometries",
+            )
+        mapped_smiles = cls._required_text(record.get("key"), "mapped reaction SMILES")
+        value = record.get("value")
+        geometry = value.get("geometry") if isinstance(value, Mapping) else None
+        if not isinstance(geometry, Mapping):
+            raise ReactionDatabaseMcpError(
+                "mapped-reaction geometry MCP record has no geometry object",
+                tool_name="export_mapped_reaction_transition_state_geometries",
+            )
+        geometry_id = cls._required_text(geometry.get("geometry_id"), "geometry_id")
+        if str(geometry.get("coordinate_units", "")).casefold() != "angstrom":
+            raise ReactionDatabaseMcpError(
+                f"geometry {geometry_id} coordinates must be in angstrom",
+                tool_name="export_mapped_reaction_transition_state_geometries",
+            )
+        atoms = geometry.get("atoms")
+        if not isinstance(atoms, list) or not atoms:
+            raise ReactionDatabaseMcpError(
+                f"geometry {geometry_id} has no atom coordinates",
+                tool_name="export_mapped_reaction_transition_state_geometries",
+            )
+        mapped_atoms: list[tuple[int, str, float, float, float]] = []
+        for atom in atoms:
+            if not isinstance(atom, Mapping):
+                raise ReactionDatabaseMcpError(
+                    f"geometry {geometry_id} returned an invalid atom",
+                    tool_name="export_mapped_reaction_transition_state_geometries",
+                )
+            map_number = atom.get("atom_map_number")
+            element = cls._required_text(atom.get("element"), "atom element")
+            coordinates = atom.get("coordinates_angstrom")
+            if (
+                isinstance(map_number, bool)
+                or not isinstance(map_number, int)
+                or map_number < 1
+                or not isinstance(coordinates, list)
+                or len(coordinates) != 3
+            ):
+                raise ReactionDatabaseMcpError(
+                    f"geometry {geometry_id} returned incomplete mapped coordinates",
+                    tool_name="export_mapped_reaction_transition_state_geometries",
+                )
+            numeric_coordinates: list[float] = []
+            for coordinate in coordinates:
+                if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+                    raise ReactionDatabaseMcpError(
+                        f"geometry {geometry_id} returned non-numeric coordinates",
+                        tool_name="export_mapped_reaction_transition_state_geometries",
+                    )
+                converted = float(coordinate)
+                if not math.isfinite(converted):
+                    raise ReactionDatabaseMcpError(
+                        f"geometry {geometry_id} returned non-finite coordinates",
+                        tool_name="export_mapped_reaction_transition_state_geometries",
+                    )
+                numeric_coordinates.append(converted)
+            mapped_atoms.append(
+                (
+                    map_number,
+                    element,
+                    numeric_coordinates[0],
+                    numeric_coordinates[1],
+                    numeric_coordinates[2],
+                )
+            )
+        mapped_atoms.sort(key=lambda atom: atom[0])
+        expected_map_numbers = list(range(1, len(mapped_atoms) + 1))
+        actual_map_numbers = [atom[0] for atom in mapped_atoms]
+        if actual_map_numbers != expected_map_numbers:
+            raise ReactionDatabaseMcpError(
+                f"geometry {geometry_id} atom-map numbers must be the complete 1-based sequence",
+                tool_name="export_mapped_reaction_transition_state_geometries",
+            )
+        binding_id = str(geometry.get("geometry_binding_id", "")).strip()
+        comment = f"geometry_id={geometry_id}"
+        if binding_id:
+            comment += f" geometry_binding_id={binding_id}"
+        lines = [str(len(mapped_atoms)), comment]
+        lines.extend(
+            f"{element} {x:.15g} {y:.15g} {z:.15g}"
+            for _map_number, element, x, y, z in mapped_atoms
+        )
+        return mapped_smiles, "\n".join(lines) + "\n"
+
+    def _query_mapped_reaction_detail_batch(
+        self,
+        project_id: str,
+        mapped_reaction_ids: tuple[str, ...],
+    ) -> dict[str, Mapping[str, Any]]:
+        if not mapped_reaction_ids:
+            return {}
+        if len(mapped_reaction_ids) == 1:
+            mapped_reaction_id = mapped_reaction_ids[0]
+            return {
+                mapped_reaction_id: self._query_mapped_reaction_detail(
+                    project_id,
+                    mapped_reaction_id,
+                )
+            }
+        fields = " ".join(
+            f"reaction_{index}: get_mapped_reaction("
+            f"project_id: {json.dumps(project_id)} "
+            f"mapped_reaction_id: {json.dumps(mapped_reaction_id)}"
+            ") { id mapped_reaction_smiles nodes { id role "
+            "geometries { geometry_id is_primary mappings { "
+            "geometry_atom_map_numbers mapped_smiles verified } } "
+            "} edges { transition_state_node_id } }"
+            for index, mapped_reaction_id in enumerate(mapped_reaction_ids)
+        )
+        data = self._transport.compose_query(
+            self.config.app_name,
+            f"{{ MappedReactionQueryService {{ {fields} }} }}",
+        )
+        service = data.get("MappedReactionQueryService")
+        if not isinstance(service, Mapping):
+            raise ReactionDatabaseMcpError(
+                "MCP result has no MappedReactionQueryService alias data"
+            )
+        details: dict[str, Mapping[str, Any]] = {}
+        for index, mapped_reaction_id in enumerate(mapped_reaction_ids):
+            detail = service.get(f"reaction_{index}")
+            if not isinstance(detail, Mapping):
+                raise ReactionDatabaseMcpError(
+                    f"mapped reaction {mapped_reaction_id} was not returned by the database"
+                )
+            returned_id = str(detail.get("id", "")).strip()
+            if returned_id and returned_id != mapped_reaction_id:
+                raise ReactionDatabaseMcpError(
+                    f"database returned mapped reaction {returned_id} for "
+                    f"requested ID {mapped_reaction_id}"
+                )
+            details[mapped_reaction_id] = detail
+        return details
+
+    def _query_geometry_batch(
+        self,
+        project_id: str,
+        geometry_ids: tuple[str, ...],
+    ) -> dict[str, Mapping[str, Any]]:
+        if not geometry_ids:
+            return {}
+        if len(geometry_ids) == 1:
+            geometry_id = geometry_ids[0]
+            return {geometry_id: self._query_geometry(project_id, geometry_id)}
+        fields = " ".join(
+            f"geometry_{index}: get_geometry("
+            f"project_id: {json.dumps(project_id)} "
+            f"geometry_id: {json.dumps(geometry_id)}"
+            ") { id coordinates { atom_index element x_angstrom y_angstrom z_angstrom } }"
+            for index, geometry_id in enumerate(geometry_ids)
+        )
+        data = self._transport.compose_query(
+            self.config.app_name,
+            f"{{ GeometryQueryService {{ {fields} }} }}",
+        )
+        service = data.get("GeometryQueryService")
+        if not isinstance(service, Mapping):
+            raise ReactionDatabaseMcpError("MCP result has no GeometryQueryService alias data")
+        geometries: dict[str, Mapping[str, Any]] = {}
+        for index, geometry_id in enumerate(geometry_ids):
+            geometry = service.get(f"geometry_{index}")
+            if not isinstance(geometry, Mapping):
+                raise ReactionDatabaseMcpError(
+                    f"geometry {geometry_id} was not returned by the database"
+                )
+            returned_id = str(geometry.get("id", "")).strip()
+            if returned_id and returned_id != geometry_id:
+                raise ReactionDatabaseMcpError(
+                    f"database returned geometry {returned_id} for requested ID {geometry_id}"
+                )
+            geometries[geometry_id] = geometry
+        return geometries
 
     def _query_mapped_reaction_detail(
         self,
@@ -1589,6 +1992,60 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             )
         return result
 
+    @classmethod
+    def _thermodynamics_exclusion_reason(
+        cls,
+        profile: Mapping[str, Any],
+    ) -> str | None:
+        missing_profiles: list[str] = []
+        for field_name in ("reaction", "activation"):
+            value = profile.get(field_name)
+            if value is None:
+                missing_profiles.append(field_name)
+            elif not isinstance(value, Mapping):
+                raise ReactionDatabaseMcpError(
+                    f"thermodynamics profile field {field_name} must be an object"
+                )
+        if len(missing_profiles) == 2:
+            return "missing_reaction_and_activation_profiles"
+        if missing_profiles:
+            return f"missing_{missing_profiles[0]}_profile"
+
+        missing_energies: list[str] = []
+        for profile_name in ("reaction", "activation"):
+            energy = profile[profile_name].get("gibbs_free_energy_kcal_mol")
+            if energy is None:
+                missing_energies.append(profile_name)
+            else:
+                cls._profile_number(
+                    energy,
+                    f"{profile_name}.gibbs_free_energy_kcal_mol",
+                )
+        if len(missing_energies) == 2:
+            return "missing_reaction_and_activation_free_energies"
+        if missing_energies:
+            return f"missing_{missing_energies[0]}_free_energy"
+        return None
+
+    @staticmethod
+    def _profile_number(value: object, field_name: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ReactionDatabaseMcpError(
+                f"thermodynamics profile field {field_name} must be numeric"
+            )
+        converted = float(value)
+        if not math.isfinite(converted):
+            raise ReactionDatabaseMcpError(
+                f"thermodynamics profile field {field_name} must be finite"
+            )
+        return converted
+
+    @classmethod
+    def _optional_profile_number(cls, value: object, field_name: str) -> float | None:
+        if value is None:
+            return None
+        return cls._profile_number(value, field_name)
+
     @staticmethod
     def _mapped_reaction_list_query(
         project_id: str,
@@ -1614,7 +2071,8 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             f"project_id: {json.dumps(project_id)} "
             f"mapped_reaction_id: {json.dumps(mapped_reaction_id)}"
             ") { id mapped_reaction_smiles "
-            "nodes { id role geometries { geometry_id is_primary } } "
+            "nodes { id role geometries { geometry_id is_primary mappings { "
+            "geometry_atom_map_numbers mapped_smiles verified } } } "
             "edges { transition_state_node_id } } } }"
         )
 
@@ -1644,6 +2102,31 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             "products_running_time_seconds total_running_time_seconds } } } }"
         )
 
+    @staticmethod
+    def _thermodynamics_batch_query(
+        project_id: str,
+        mapped_reaction_ids: tuple[str, ...],
+    ) -> str:
+        if not 1 <= len(mapped_reaction_ids) <= _RXNRESID_THERMO_ALIAS_BATCH_SIZE:
+            raise InvalidRequestError(
+                "RxnResid thermodynamics query batches must contain 1 to 24 mapped reactions"
+            )
+        profile_fields = (
+            "mapped_reaction_id profiles { "
+            "activation { gibbs_free_energy_kcal_mol } "
+            "reaction { gibbs_free_energy_kcal_mol } "
+            "reactants_running_time_seconds transition_state_running_time_seconds "
+            "products_running_time_seconds }"
+        )
+        aliases = " ".join(
+            "thermodynamics_{}: get_mapped_reaction_thermodynamics(".format(index)
+            + f"project_id: {json.dumps(project_id)} "
+            + f"mapped_reaction_id: {json.dumps(mapped_reaction_id)}"
+            + f") {{ {profile_fields} }}"
+            for index, mapped_reaction_id in enumerate(mapped_reaction_ids)
+        )
+        return "{ ReactionEnergyQueryService { " + aliases + " } }"
+
     def _mcp_descriptor(
         self,
         operation: str,
@@ -1663,13 +2146,15 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
         )
 
     @staticmethod
-    def _transition_state_geometry_id(detail: Mapping[str, Any]) -> str:
+    def _transition_state_geometry_mapping(
+        detail: Mapping[str, Any],
+    ) -> tuple[str, tuple[int, ...]]:
         transition_state_node_ids = {
             str(edge.get("transition_state_node_id"))
             for edge in detail.get("edges", [])
             if isinstance(edge, Mapping) and edge.get("transition_state_node_id")
         }
-        candidates: list[tuple[int, str]] = []
+        candidates: list[tuple[int, str, tuple[int, ...]]] = []
         for node in detail.get("nodes", []):
             if not isinstance(node, Mapping):
                 continue
@@ -1683,21 +2168,45 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             for geometry in node.get("geometries", []):
                 if not isinstance(geometry, Mapping) or not geometry.get("geometry_id"):
                     continue
-                score = 8 if node_is_ts else 0
-                if geometry.get("is_primary"):
-                    score += 2
-                candidates.append((score, str(geometry["geometry_id"])))
+                mappings = geometry.get("mappings")
+                if not isinstance(mappings, list):
+                    continue
+                for mapping in mappings:
+                    if not isinstance(mapping, Mapping) or mapping.get("verified") is not True:
+                        continue
+                    raw_map_numbers = mapping.get("geometry_atom_map_numbers")
+                    if not isinstance(raw_map_numbers, list) or not raw_map_numbers:
+                        continue
+                    if any(
+                        isinstance(number, bool) or not isinstance(number, int) or number < 1
+                        for number in raw_map_numbers
+                    ):
+                        continue
+                    map_numbers = tuple(raw_map_numbers)
+                    if len(set(map_numbers)) != len(map_numbers):
+                        continue
+                    score = 8 if node_is_ts else 0
+                    if geometry.get("is_primary"):
+                        score += 2
+                    candidates.append((score, str(geometry["geometry_id"]), map_numbers))
         if not candidates:
-            raise ReactionDatabaseMcpError("mapped reaction has no transition-state geometry")
-        candidates.sort(reverse=True)
+            raise ReactionDatabaseMcpError(
+                "mapped reaction has no verified transition-state geometry atom mapping"
+            )
+        candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
         if candidates[0][0] == 0:
             raise ReactionDatabaseMcpError(
                 "mapped reaction has geometries but none is identified as a transition state"
             )
-        return candidates[0][1]
+        return candidates[0][1], candidates[0][2]
 
     @staticmethod
-    def _geometry_xyz(geometry: Mapping[str, Any], geometry_id: str) -> str:
+    def _geometry_xyz(
+        geometry: Mapping[str, Any],
+        geometry_id: str,
+        *,
+        atom_map_numbers: tuple[int, ...] | None = None,
+    ) -> str:
         coordinates = geometry.get("coordinates")
         if not isinstance(coordinates, list) or not coordinates:
             raise ReactionDatabaseMcpError(f"geometry {geometry_id} has no coordinates")
@@ -1717,6 +2226,18 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 ) from exc
             rows.append((atom_index, element, x, y, z))
         rows.sort(key=lambda row: row[0])
+        if atom_map_numbers is not None:
+            if len(atom_map_numbers) != len(rows):
+                raise ReactionDatabaseMcpError(
+                    f"geometry {geometry_id} atom mapping does not match its coordinate count"
+                )
+            expected_map_numbers = tuple(range(1, len(rows) + 1))
+            if tuple(sorted(atom_map_numbers)) != expected_map_numbers:
+                raise ReactionDatabaseMcpError(
+                    f"geometry {geometry_id} atom mapping must contain the complete "
+                    "1-based reaction atom-map sequence required by RitS"
+                )
+            rows = [row for _map_number, row in sorted(zip(atom_map_numbers, rows, strict=True))]
         lines = [str(len(rows)), f"geometry_id={geometry_id}"]
         lines.extend(f"{element} {x} {y} {z}" for _, element, x, y, z in rows)
         return "\n".join(lines) + "\n"

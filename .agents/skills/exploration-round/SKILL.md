@@ -16,6 +16,8 @@ RitS 训练决定时使用。
 - 完整 `candidates`、`budget`、策略名和随机 `seed`；
 - `space`，描述本轮搜索空间及其版本；
 - uncertainty 策略必须提供 `model_snapshot.snapshot_id` 和 checkpoint hash；
+- 使用 `agent-authored-acquisition` 时，先完成上一批 worker 状态检查并下载所有结果到本地，
+  再按 [`agent-authored-acquisition` skill](../agent-authored-acquisition/SKILL.md) 生成请求；
 - `range_policy`：`fixed` 保持当前范围，`explicit` 使用请求中的 `next_space`；
 - `training_policy`：`never`、`always`、`every_n_rounds`、`new_labels`、
   `every_n_or_new_labels`、`dataset_changed` 或 `manual`。
@@ -39,6 +41,7 @@ uv run --package tricycle-agent tricycle-agent run \
 - `space.toml`：空间定义及 hash；
 - `candidate-pool.tsv`：完整候选池和排除原因；
 - `model-scores.tsv`：分数来源、模型快照和 checkpoint hash；
+- `acquisition-function.toml`：仅智能体采集策略生成，记录逐轮公式、上下文、成本统计和证据；
 - `selection-decisions.tsv`：排名、稳定 tie-break、选中与否及理由；
 - `range-decision.toml`：下一轮空间的策略、输入依据和结果；
 - `training-decision.toml`：RitS train/finetune/skip 决定及理由；
@@ -57,4 +60,5 @@ CLI 的 `resume.next_action` 保留为可复用本轮的 `exploration.round`；�
 
 - 不要把范围变化或训练 gate 写成未版本化的临时代码；策略 ID、版本、参数和输入 hash 必须写入请求。
 - 完整候选池和模型分数是复现采样结果的必要输入，不能只保存 top-N。
+- 智能体采集策略只能在已有计算任务完成且结果下载到本地后独立运行；本能力不会提交计算任务。
 - `resume = true` 只复用请求 hash 一致的既有 round；不覆盖既有 artifact。

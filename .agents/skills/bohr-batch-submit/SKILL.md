@@ -21,7 +21,7 @@ description: "Submit a prepared Bohr batch run through the configured Bohr adapt
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
-  bohr.batch.submit request.toml --run-dir runs/<id> --run-id <id>
+  bohr.batch.submit request.toml --run-dir 'runs/<date>/<timestamp>/<id>' --run-id <id>
 ```
 
 得到明确授权后再加 `--live`，必要时用 `--bohr-config configs/example-bohr.toml` 指定 adapter 策略。

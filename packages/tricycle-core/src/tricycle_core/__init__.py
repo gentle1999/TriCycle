@@ -21,6 +21,7 @@ from .models import (
 from .plugin import PluginBase
 from .protocols import Component, Plugin
 from .registry import PluginRegistry
+from .run_paths import timestamped_run_directory
 from .run_state import RUN_SCHEMA, RunStore
 from .trace import (
     TRACE_SCHEMA,
@@ -58,6 +59,7 @@ __all__ = [
     "TaskStatus",
     "TriCycleError",
     "RunStore",
+    "timestamped_run_directory",
     "TRACE_SCHEMA",
     "TraceEvent",
     "TraceSink",

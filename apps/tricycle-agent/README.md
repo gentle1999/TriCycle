@@ -22,6 +22,8 @@
 公开 capability 到 plugin operation 的映射集中在 `capabilities.py`，调用方不需要直接导入
 具体组件的内部类。
 
+`reactionopt.enumerate-da` 接受一组 ene/diene 底物对，生成全原子映射反应 SMILES 候选，并将列表写到本地 CSV；它不调用 Bohr 或其它外部服务。
+
 ## CLI
 
 ```bash
@@ -74,11 +76,15 @@ Reaction DB 的 live capability 会在执行阶段自动注入
 
 ```bash
 uv run --package tricycle-agent tricycle-agent inspect \
-  --run-dir runs/example
+  --run-dir 'runs/<date>/<timestamp>/example'
 
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/example --live
+  --run-dir 'runs/<date>/<timestamp>/example' --live
 ```
+
+未指定 `--run-dir` 时，CLI 会将记录创建在
+`runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`；日期和时间使用本机时区。执行结果会打印
+实际目录。恢复时使用该路径；显式指定 `--run-dir` 或请求中的 `out_dir` 会按指定位置写入。
 
 恢复动作来自 `run.toml.resume.next_action`。如果运行目录已有状态，`run` 不会覆盖它，应该
 使用 `resume` 继续，避免重复提交远程任务。

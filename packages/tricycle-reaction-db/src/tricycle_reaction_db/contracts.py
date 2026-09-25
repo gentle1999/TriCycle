@@ -8,6 +8,41 @@ RITS_EXPORT_API_CONTRACT = "reaction-db.mcp.mapped-reaction-geometry.v1"
 
 
 @dataclass(frozen=True, slots=True)
+class ReactionDatabaseApiRequest:
+    """Redacted proof of one REST request used to build an export artifact."""
+
+    method: str
+    route: str
+    body: Mapping[str, object]
+    response_content_type: str
+
+    def __post_init__(self) -> None:
+        method = str(self.method).strip().upper()
+        route = str(self.route).strip()
+        content_type = str(self.response_content_type).strip()
+        if not method:
+            raise ValueError("database API request method must not be empty")
+        if not route.startswith("/"):
+            raise ValueError("database API request route must be an absolute path")
+        if not isinstance(self.body, Mapping):
+            raise TypeError("database API request body must be a mapping")
+        if not content_type:
+            raise ValueError("database API response content type must not be empty")
+        object.__setattr__(self, "method", method)
+        object.__setattr__(self, "route", route)
+        object.__setattr__(self, "body", dict(self.body))
+        object.__setattr__(self, "response_content_type", content_type)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "method": self.method,
+            "route": self.route,
+            "body": dict(self.body),
+            "response_content_type": self.response_content_type,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ReactionDatabaseMcpToolCall:
     """Redacted provenance for one database MCP tool operation.
 

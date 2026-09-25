@@ -2,7 +2,6 @@
 # then use the RitS candidate-generation, clustering, and g-xTB TS pipeline.
 reaction_id = "reactionopt-profile-demo"
 reaction_smiles = "[C:1]([H:5])([H:6])=[C:2]([H:7])[H:8].[C:3]([H:9])([H:10])=[C:4]([H:11])[H:12]>>[C:1]1([H:5])([H:6])[C:2]([H:7])([H:8])[C:3]([H:9])([H:10])[C:4]1([H:11])[H:12]"
-output_dir = "runs/reactionopt-profile-demo/profile"
 
 [sampling]
 target_conformers = 4
@@ -32,7 +31,7 @@ device = "cuda:0"
 # These two fields identify the default model/checkpoint source. Record the
 # fork repository and commit separately when executing the custom pipeline.
 source_repository = "https://github.com/gentle1999/RitS"
-source_revision = "6d8aa0704c21d2798326a7e070491abf438ca292"
+source_revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
 
 [rits.pipeline]
 script = "scripts/run_ts_pipeline.py"

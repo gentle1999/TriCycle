@@ -1,0 +1,107 @@
+exploration_id = "cycloaddition-adaptive-sampling"
+round_index = 1
+strategy = "agent-authored-acquisition"
+budget = 2
+seed = 42
+
+[space]
+space_id = "cycloaddition-space-v1"
+version = "1.0.0"
+definition = { reaction_class = "cycloaddition", ene_set = "ene-v1", diene_set = "diene-v1" }
+
+[model_snapshot]
+snapshot_id = "sar-checkpoint-round-0000"
+checkpoint_hash = "sha256:replace-with-real-checkpoint-hash"
+score_artifact = "sha256:replace-with-model-score-artifact-hash"
+source_run_id = "sar-bootstrap"
+
+[observed_metrics]
+validation_mae = 0.21
+validation_rmse = 0.34
+
+[training_policy]
+policy_id = "rits-training-gate-v1"
+version = "1.0.0"
+mode = "never"
+
+[[candidates]]
+candidate_id = "ene-001+diene-001"
+
+[candidates.payload]
+mapped_reaction_smiles = "[CH2:1]=[CH2:2].[CH2:3]=[CH:4][CH:5]=[CH2:6]>>[CH2:1]1[CH2:2][CH2:3][CH:4]=[CH:5][CH2:6]1"
+epistemic_variance = 0.42
+product_count = 3
+mean_product_atom_count = 26.0
+sampled_novelty = 0.25 # copied from this round's RDKit structure-features.csv
+pool_local_density = 0.74 # copied from this round's RDKit structure-features.csv
+product_ring_count = 1
+reaction_edit_count = 6
+
+[[candidates]]
+candidate_id = "ene-001+diene-002"
+
+[candidates.payload]
+mapped_reaction_smiles = "[CH3:7][CH:1]=[CH2:2].[CH2:3]=[CH:4][CH:5]=[CH2:6]>>[CH3:7][CH:1]1[CH2:2][CH2:3][CH:4]=[CH:5][CH2:6]1"
+epistemic_variance = 0.81
+product_count = 2
+mean_product_atom_count = 31.0
+sampled_novelty = 0.82 # copied from this round's RDKit structure-features.csv
+pool_local_density = 0.31 # copied from this round's RDKit structure-features.csv
+product_ring_count = 1
+reaction_edit_count = 6
+
+[[candidates]]
+candidate_id = "ene-002+diene-001"
+
+[candidates.payload]
+mapped_reaction_smiles = "[CH2:1]=[CH2:2].[CH3:7][CH:3]=[CH:4][CH:5]=[CH2:6]>>[CH2:1]1[CH2:2][CH:3]([CH3:7])[CH:4]=[CH:5][CH2:6]1"
+epistemic_variance = 0.59
+product_count = 5
+mean_product_atom_count = 19.0
+sampled_novelty = 0.51 # copied from this round's RDKit structure-features.csv
+pool_local_density = 0.56 # copied from this round's RDKit structure-features.csv
+product_ring_count = 1
+reaction_edit_count = 6
+
+[metadata.agent_acquisition]
+schema = "tricycle.agent-acquisition/v1"
+function_id = "adaptive-round-0001"
+version = "1.0.0"
+authored_by = "agent-authored-acquisition"
+expression = "(epistemic_variance * (0.5 + sampled_novelty) + context.model_metrics.validation_mae * (1 - pool_local_density) * context.sampled_distribution.coverage_gap) / estimated_cost"
+# Transparent linear workload proxy. Replace with a historically calibrated expression when data exists.
+cost_expression = "product_count * mean_product_atom_count"
+rationale = "Example only: combine model uncertainty with RDKit reaction novelty and candidate-pool sparsity, normalized by the declared linear product-atom workload proxy."
+author_notes = "Example only. In a real round, record RDKit version and structure-analysis artifact hashes, summarize validation errors by supported structural groups, cite representative candidate IDs and structures, and explain why the selected structural signals affect this round's ranking."
+
+[metadata.agent_acquisition.context.sampled_distribution]
+sampled_count = 12
+coverage_gap = 0.35
+novelty_definition = "1-minus-max-mean-reactant-product-Morgan-Tanimoto-radius2-2048-chiral-v1"
+summary_source = "sha256:replace-with-sampled-set-summary-hash"
+
+[metadata.agent_acquisition.context.model_metrics]
+validation_mae = 0.21
+validation_rmse = 0.34
+metric_source = "sha256:replace-with-model-evaluation-artifact-hash"
+
+[metadata.agent_acquisition.evidence]
+sampled_set = "sha256:replace-with-sampled-set-artifact-hash"
+candidate_space = "sha256:replace-with-candidate-space-artifact-hash"
+model_evaluation = "sha256:replace-with-model-evaluation-artifact-hash"
+
+[metadata.agent_acquisition.evidence.structure_analysis]
+feature_table_path = "/replace/with/structure-analysis/structure-features.csv"
+feature_table_sha256 = "sha256:replace-with-structure-features-hash"
+analysis_report_path = "/replace/with/structure-analysis/structure-analysis.json"
+analysis_report_sha256 = "sha256:replace-with-structure-analysis-report-hash"
+
+[metadata.agent_acquisition.evidence.calculation_status]
+# Must show terminal worker results; RUNNING, PENDING, and QUERY_FAILED block a decision.
+manifest_path = "/replace/with/local/run/status.tsv"
+sha256 = "sha256:replace-with-status-tsv-hash"
+
+[metadata.agent_acquisition.evidence.downloaded_results]
+# Must be the existing Bohr batch download report, after every worker is marked DOWNLOADED.
+manifest_path = "/replace/with/local/run/download-results.tsv"
+sha256 = "sha256:replace-with-download-results-tsv-hash"

@@ -19,7 +19,7 @@ description: "Prepare a DPA-Berny or Gaussian rescue run from an existing run di
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
-  dpa-berny.rescue request.toml --run-id <id> --run-dir runs/<id>
+  dpa-berny.rescue request.toml --run-id <id> --run-dir 'runs/<date>/<timestamp>/<id>'
 ```
 
 先检查救援计划和被跳过的成功任务，再使用 `bohr.batch.submit`。源目录不会被覆盖。

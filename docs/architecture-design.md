@@ -80,7 +80,7 @@ flowchart TB
     C --> A2["Reaction repository"]
     C --> A3["ReactionOpt / model adapter"]
 
-    X --> R["runs/<run-id>/run.toml"]
+    X --> R["runs/<date>/<timestamp>/<run-id>/run.toml"]
     C --> F["Artifacts / logs / TSV reports"]
     R --> Z["inspect / resume / next action"]
     F --> Z
@@ -248,7 +248,7 @@ Codex 的长期任务不能把状态只放在当前对话、进程内存或临�
 ### 6.1 目标目录结构
 
 ```text
-runs/<run-id>/
+runs/<YYYY-MM-DD>/<HH-MM-SS.ffffff±ZZZZ>/<run-id>/
   request.toml              # 不可变的本轮请求副本
   run.toml                  # 通用生命周期状态，权威状态源
   batch.toml                # Bohr batch 领域配置，迁移期间保留
@@ -261,6 +261,9 @@ runs/<run-id>/
   artifacts/                # 结果、checkpoint、输入和报告
   logs/                     # 本地编排日志
 ```
+
+默认目录使用本机时区生成，时间戳精确到微秒。请求显式给出 `run_dir` 或 `out_dir` 时按该路径创建；
+`resume` 始终接收已存在记录的完整路径。
 
 `batch.toml` 是当前 `tricycle-bohrsubmit` 的领域配置；目标架构增加 `run.toml` 作为所有能力共享的生命周期外壳。TSV 是批量结果表，不是配置文件。
 
@@ -292,8 +295,8 @@ next_action = "bohr.job.status"
 last_successful_action = "bohr.batch.submit"
 
 [artifacts]
-run_directory = "runs/dpa-demo"
-status_file = "runs/dpa-demo/status.tsv"
+run_directory = "runs/2026-08-26/18-00-00.000000+0800/dpa-demo"
+status_file = "runs/2026-08-26/18-00-00.000000+0800/dpa-demo/status.tsv"
 ```
 
 要求：
@@ -391,7 +394,7 @@ description: "Prepare a local Bohr batch run from a TOML request without submitt
 ## 输入与输出
 
 - 输入：`request.toml`、可访问的任务文件和可选镜像参数；
-- 输出：`runs/<run-id>/run.toml`、`batch.toml`、worker 目录和提交计划。
+- 输出：`runs/<date>/<timestamp>/<run-id>/run.toml`、`batch.toml`、worker 目录和提交计划。
 
 ## 执行
 
@@ -408,8 +411,8 @@ description: "Prepare a local Bohr batch run from a TOML request without submitt
 tricycle-agent capabilities
 tricycle-agent plan <capability-id> <request.toml> --run-id <id>
 tricycle-agent run <capability-id> <request.toml> --run-id <id>
-tricycle-agent inspect --run-dir runs/<id>
-tricycle-agent resume --run-dir runs/<id>
+tricycle-agent inspect --run-dir 'runs/<date>/<timestamp>/<id>'
+tricycle-agent resume --run-dir 'runs/<date>/<timestamp>/<id>'
 ```
 
 目标行为：
@@ -434,9 +437,9 @@ tricycle-agent resume --run-dir runs/<id>
 
 - `configs/*-request.toml`：能力请求；
 - `configs/example-bohr.toml`：Bohr adapter 的重试和命令策略；
-- `runs/<run-id>/request.toml`：请求副本；
-- `runs/<run-id>/run.toml`：通用状态；
-- `runs/<run-id>/batch.toml`：Bohr batch 领域配置。
+- `runs/<date>/<timestamp>/<run-id>/request.toml`：请求副本；
+- `runs/<date>/<timestamp>/<run-id>/run.toml`：通用状态；
+- `runs/<date>/<timestamp>/<run-id>/batch.toml`：Bohr batch 领域配置。
 
 具体任务的模型配置、数据清单和引擎输入不属于上述 TriCycle 配置边界，而是随任务
 上传的 artifact。其格式由任务决定；例如 RitS 可以直接读取自己的 Hydra YAML 配置。

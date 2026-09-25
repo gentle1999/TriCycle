@@ -30,6 +30,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import timestamped_run_directory
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RXNRESID_REPOSITORY = "https://github.com/gentle1999/RxnResid"
 RXNRESID_REVISION = "9be807a5b2fa0726aacb7d40f57fe973d6dcadc3"
@@ -587,7 +589,11 @@ def load_experiment_spec(config_path: Path, *, repo_root: Path | None = None) ->
     return ExperimentSpec(
         config_path=config_path,
         repo_root=base,
-        output_root=_resolve_path(raw.get("output_root", "runs/rxnresid-active-learning"), base=base),
+        output_root=(
+            _resolve_path(raw["output_root"], base=base)
+            if raw.get("output_root")
+            else timestamped_run_directory(base / "runs", "rxnresid-active-learning")
+        ),
         ground_truth_collection=_resolve_path(dataset.get("ground_truth_collection", ""), base=base),
         ground_truth_resources=_optional_path(dataset.get("ground_truth_resources"), base=base),
         projects=tuple(projects),

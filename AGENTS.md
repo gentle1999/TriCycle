@@ -6,6 +6,7 @@
 - 包管理使用 `uv` workspace；根目录的 `Makefile` 提供不依赖 uv 的基础 smoke test。
 - 公共跨插件类型放在 `packages/tricycle-core`，不要让 core 反向依赖具体插件。
 - 外部服务必须通过 protocol/adapter 注入。不要在 dry-run 默认路径中读取凭据、发起网络请求或提交真实任务。
+- 默认 run 记录写入 `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`，日期与时间使用本机时区；显式 `run_dir` / `out_dir` 和恢复时的既有路径按请求保留。
 - 插件的智能体操作说明放在 `skills/<skill-name>/SKILL.md`，代码接口与 skill 必须同步更新。
 
 ## 常用命令
@@ -28,4 +29,3 @@ uv run ruff check .
 5. 添加对应 `skills/<name>/SKILL.md`、示例配置和 smoke test。
 
 具体边界见 `docs/plugin-contract.md`。业务规则不明确时保留 TODO 和扩展点，不猜测真实平台 API。
-

@@ -11,6 +11,7 @@ from tricycle_core import (
 )
 from tricycle_core.errors import InvalidRequestError
 
+from .acquisition import AgentAuthoredAcquisitionSamplingStrategy
 from .models import SamplingRequest, SamplingResult
 from .strategies import (
     STRATEGY_ALIASES,
@@ -35,8 +36,8 @@ class SamplingPlugin(PluginBase):
         version="0.2.0",
         kind=PluginKind.SAMPLING,
         description=(
-            "Select the next reaction candidates with random, first-n, or uncertainty-aware "
-            "strategies."
+            "Select the next reaction candidates with registered baselines or a validated, "
+            "agent-authored adaptive acquisition expression."
         ),
         capabilities=("candidate.validate", "candidate.select", "strategy.register"),
     )
@@ -52,6 +53,7 @@ class SamplingPlugin(PluginBase):
             PairCoreSetSamplingStrategy(),
             DensityWeightedUncertaintySamplingStrategy(),
             UncertaintyDiversitySamplingStrategy(),
+            AgentAuthoredAcquisitionSamplingStrategy(),
         ):
             self._strategies[strategy.name] = strategy
         for strategy in strategies:
@@ -93,9 +95,13 @@ class SamplingPlugin(PluginBase):
 
     def plan_select(self, request: SamplingRequest, context: ExecutionContext) -> TaskPlan:
         strategy = self._resolve_strategy(request.strategy)
+        contextual_planner = getattr(strategy, "plan_with_context", None)
         validator = getattr(strategy, "validate", None)
         if callable(validator):
             validator(request.candidates, request.budget)
+        contextual_validator = getattr(strategy, "validate_with_context", None)
+        if callable(contextual_validator) and not callable(contextual_planner):
+            contextual_validator(request.candidates, request.budget, request.metadata)
 
         parameters: dict[str, Any] = {
             "strategy": request.strategy,
@@ -108,7 +114,26 @@ class SamplingPlugin(PluginBase):
             "dry_run": context.dry_run,
             "strategy_version": getattr(strategy, "version", self.manifest.version),
         }
-        if isinstance(strategy, UncertaintySamplingStrategy):
+        if callable(contextual_planner):
+            contextual_parameters = contextual_planner(
+                request.candidates,
+                request.budget,
+                request.metadata,
+            )
+            parameters.update(contextual_parameters)
+            acquisition = contextual_parameters.get("acquisition_function", {})
+            metadata.update(
+                {
+                    "strategy_version": strategy.version,
+                    "selection": "highest-score",
+                    "acquisition_function_hash": (
+                        acquisition.get("function_hash", "")
+                        if isinstance(acquisition, dict)
+                        else ""
+                    ),
+                }
+            )
+        elif isinstance(strategy, UncertaintySamplingStrategy):
             score_fields = [
                 get_uncertainty_field(candidate, strategy.uncertainty_kind)
                 for candidate in request.candidates

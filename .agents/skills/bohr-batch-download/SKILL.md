@@ -20,7 +20,7 @@ description: "Download submitted worker artifacts, including partial outputs fro
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/<id> --live
+  --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
 
 下载会写入 run 目录的 `downloads/` 和 `download-results.tsv`，可能同时产生本地文件副作用；

@@ -269,16 +269,25 @@ def _execute_capability(
             )
 
         dispatcher = CapabilityDispatcher(catalog)
-        bohr_capability = capability_id.startswith(("bohr.", "sar.", "rits."))
+        ssh_capability = capability_id.startswith("rits.ssh.")
+        bohr_capability = capability_id.startswith(("bohr.", "sar.", "rits.")) and not ssh_capability
         # Local preparation and pure planning may use Bohr-shaped request
         # models, but they do not need credentials or a live adapter.
-        if live and bohr_capability and manifest.requires_auth:
-            dispatcher = dispatcher.with_bohr_cli(bohr_config)
+        if live and manifest.requires_auth:
+            if ssh_capability:
+                dispatcher = dispatcher.with_rits_ssh()
+            elif bohr_capability:
+                dispatcher = dispatcher.with_bohr_cli(bohr_config)
 
         planning_context = ExecutionContext(
             run_id,
             workdir,
             dry_run,
+            metadata=(
+                {"run_dir": str(target_dir)}
+                if capability_id == "reactionopt.enumerate-da"
+                else {}
+            ),
             trace_sink=trace,
         )
         plan = dispatcher.plan(capability_id, effective_request, planning_context)

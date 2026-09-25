@@ -1,8 +1,9 @@
 # tricycle-rits
 
 `tricycle-rits` 是 RitS 模型任务组件：它为训练、微调和推理请求构造可审计的 Bohr job，
-并固定模型来源、revision、入口和协议 provenance。它本身不把 Bohr 网络访问或模型执行写死
-在 package 内，实际提交仍由共享 Bohr adapter 注入。
+并固定模型来源、revision、入口和协议 provenance。Bohr 提交由共享 Bohr adapter 注入；
+内网执行则由独立的 SSH protocol/gateway 负责 staging 与任务管理，训练实际运行在用户指定的
+Docker GPU 容器内。
 
 ## 能力
 
@@ -14,6 +15,9 @@
 | `rits.finetune` | 从 checkpoint 微调/继续训练 |
 | `rits.infer` | 规划原生 RitS TS candidate inference |
 | `rits.bohr-submit` | 复用共享 Bohr 模型任务提交边界 |
+| `rits.ssh.finetune` | 上传 bundle 并在远端 Docker GPU 容器中启动微调 |
+| `rits.ssh.status` / `rits.ssh.logs` | 查询容器任务状态和训练日志 |
+| `rits.ssh.terminate` / `rits.ssh.download` | 停止任务或下载明确指定的训练产物 |
 
 训练、微调和推理都继承 [`tricycle-bohr`](../tricycle-bohr/README.md) 的
 `BohrModelJobRequest`，要求明确的代码 artifact、输入目录和实际启动命令。
@@ -96,6 +100,43 @@ uv run --package tricycle-agent tricycle-agent plan \
 真实执行需要显式 `--live`、有效的输入 artifact/checkpoint 和注入的 Bohr adapter。模型任务
 通常由上传目录中的 `bash run.sh` 安装当前代码并调用命令构造器产生的 argv；镜像不会被当作
 代码版本的替代品。
+
+## 内网 Docker/SSH fine-tuning
+
+`OpenSshRitsGateway` 使用 `docker context create remote --docker host=ssh://...` 注册 SSH-backed
+Docker endpoint，并用 OpenSSH/scp 传输文件；`docker --context remote info/run/inspect/logs/stop`
+负责远端容器生命周期。训练容器使用 `docker run --gpus ...` 在请求指定的镜像内运行 command。
+远端 GPU 主机需具备 Docker daemon
+和 NVIDIA Container Toolkit，SSH 登录用户还必须有访问 Docker socket 的权限；镜像必须兼容宿主机 NVIDIA driver，且应包含匹配的 PyTorch、
+CUDA、Python 与 RitS 依赖。SSH 认证使用本机已有 agent/config，不接受密码或私钥内容；
+known_hosts 和 SSH config 必须配置为无交互认证与严格 host-key 校验。已存在但指向其他
+endpoint 的 Docker context 不会被覆盖。
+
+默认 plan 不读密钥或 SSH config，不访问网络/远程 Docker，也不会上传数据；只有显式
+`--live` 才注入 OpenSSH/Docker context adapter 并执行。容器保持 detached 状态以便远程
+inspect，Docker logs 提供训练 stdout/stderr；容器固定设置 `WANDB_MODE=disabled` 和
+`WANDB_DISABLED=true`。微调请求示例：
+
+训练镜像在 `docker/cu130/`：基于远端已有的 Python 3.12/CUDA 12.8 runtime，将 PyTorch
+升级为官方 2.12.0+cu130，再安装 RitS 运行依赖，源码不进入镜像。构建命令：
+
+    docker --context remote build -t tricycle/rits-training:torch2.12.0-cu130 packages/tricycle-rits/docker/cu130
+
+构建完成后，fine-tune bundle 仍挂载到 `/workspace/job`；镜像内的 `RITS_DEPS_IN_IMAGE=1` 让挂载源码安装脚本跳过
+重复下载依赖，但保留 GPU/版本校验和 editable 安装，便于直接更新训练代码。
+
+    uv run --package tricycle-agent tricycle-agent plan \\
+      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \\
+      --run-id rits-internal-smoke
+
+    uv run --package tricycle-agent tricycle-agent run \\
+      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \\
+      --run-id rits-internal-smoke --live
+
+任务状态、日志、停止与选定输出下载由 `rits.ssh.status`、`rits.ssh.logs`、
+`rits.ssh.terminate`、`rits.ssh.download` 提供。停止是 destructive capability，需要
+`--confirm`；下载只允许配置显式的远端相对路径，避免拉回整个数据 bundle。CLI 请求及安全
+边界见 `.agents/skills/rits-ssh-finetune/SKILL.md`。
 
 ## 验证
 

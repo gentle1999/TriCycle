@@ -155,7 +155,7 @@ tricycle-reactionopt ─> tricycle-rits ─> tricycle-bohr ─> tricycle-core
 | `tricycle.bohr.submit` | Bohr 批量及化学计算工作流 | `bohr.batch.*`、`dpa-berny.prepare`、`dpa-berny.rescue` | [`tricycle-bohrsubmit`](packages/tricycle-bohrsubmit/README.md) |
 | `tricycle.reaction-database` | 按批次导入计算日志、数据库筛选和训练数据导出 | `reaction-db.ingest`、`reaction-db.batch-import`、`reaction-db.filter`、`reaction-db.export-rits`、`reaction-db.export-rxnresid` | [`tricycle-reaction-db`](packages/tricycle-reaction-db/README.md) |
 | `tricycle.sar` | RxnResid 训练/微调/推理任务（兼容 sar.* 命名） | `sar.train`、`sar.finetune`、`sar.infer` | [`tricycle-sar`](packages/tricycle-sar/README.md) |
-| `tricycle.rits` | RitS 训练/微调/推理任务 | `rits.train`、`rits.finetune`、`rits.infer` | [`tricycle-rits`](packages/tricycle-rits/README.md) |
+| `tricycle.rits` | RitS 训练/微调/推理任务（Bohr 或内网 SSH/Docker） | `rits.train`、`rits.finetune`、`rits.infer`、`rits.ssh.*` | [`tricycle-rits`](packages/tricycle-rits/README.md) |
 | `tricycle.sampling` | 候选选择 | `candidate.select`；内置随机、first-n 和三种 uncertainty 策略 | [`tricycle-sampling`](packages/tricycle-sampling/README.md) |
 | `tricycle.exploration` | 可复现探索轮次与快照迁移记录 | `exploration.round`；记录候选空间、采样轨迹、下一范围、RitS train/skip 和下一快照 replay key | [`tricycle-exploration`](packages/tricycle-exploration/README.md) |
 | `tricycle.reactionopt` | 生成版本化配置，以及独立构象/TS 分支的 mapped reaction profile | `reactionopt.generate`、`reactionopt.export`、`reactionopt.profile` | [`tricycle-reactionopt`](packages/tricycle-reactionopt/README.md) |
@@ -479,7 +479,7 @@ uv run --package tricycle-agent tricycle-agent plan \
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   dpa-berny.prepare configs/example-dpa-berny-request.toml \
-  --run-id dpa-demo --run-dir runs/dpa-demo
+  --run-id dpa-demo
 ```
 
 通用批量任务使用同一个入口：
@@ -487,7 +487,7 @@ uv run --package tricycle-agent tricycle-agent run \
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   bohr.batch.prepare configs/my-batch-request.toml \
-  --run-id batch-demo --run-dir runs/batch-demo
+  --run-id batch-demo
 ```
 
 旧的三参数入口仍保留用于迁移脚本：
@@ -508,22 +508,25 @@ uv run --package tricycle-agent tricycle-agent prepare \
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   reactionopt.generate configs/example-reactionopt-request.toml \
-  --run-id reactionopt-demo --run-dir runs/reactionopt-demo
+  --run-id reactionopt-demo
 
 uv run --package tricycle-agent tricycle-agent inspect \
-  --run-dir runs/reactionopt-demo
+  --run-dir 'runs/<date>/<timestamp>/reactionopt-demo'
 
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/<id>
+  --run-dir 'runs/<date>/<timestamp>/<id>'
 ```
 
 `run` 会在运行目录保存不可变的 `request.toml` 和原子更新的 `run.toml`。`resume` 只依据
 `run.toml` 的 `resume.next_action` 选择下一项能力，不依赖当前聊天记录。默认仍是 dry-run；
 Bohr 提交、状态查询和下载只有在明确加 `--live` 后才会读取认证环境并调用 adapter：
 
+未指定运行目录时，记录自动写入 `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`；时间使用本机
+时区，CLI 输出中会给出实际目录。显式传入 `--run-dir` 或请求里的 `out_dir` 时按指定路径写入。
+
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
-  --run-dir runs/<id> --live \
+  --run-dir 'runs/<date>/<timestamp>/<id>' --live \
   --bohr-config configs/example-bohr.toml
 ```
 
@@ -550,7 +553,7 @@ download(...)
 准备后的目录通常包含：
 
 ```text
-runs/<run-id>/
+runs/<YYYY-MM-DD>/<HH-MM-SS.ffffff±ZZZZ>/<run-id>/
   run.toml              # 通用生命周期状态，权威恢复入口
   request.toml          # 不可变的本轮请求副本
   batch.toml            # Bohr batch 领域配置

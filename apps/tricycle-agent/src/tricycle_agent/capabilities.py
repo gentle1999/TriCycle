@@ -67,6 +67,19 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
         outputs=("reaction-config",),
     ),
     _definition(
+        "reactionopt.enumerate-da",
+        "Enumerate Diels–Alder reactions",
+        (
+            "Expand ene/diene substrate pairs into atom-mapped Diels–Alder reaction "
+            "candidates and write a local CSV without contacting external services."
+        ),
+        component_id="tricycle.reactionopt",
+        operation="enumerate-da",
+        input_kind="reactionopt.enumerate-da.request",
+        outputs=("mapped-reactions.csv",),
+        side_effect=SideEffectLevel.LOCAL_WRITE,
+    ),
+    _definition(
         "reactionopt.export",
         "Export ReactionOpt configuration",
         "Export a generated ReactionOpt configuration through an explicitly injected adapter.",
@@ -108,7 +121,8 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
         "Record an exploration round",
         (
             "Materialize the complete candidate pool, model scores, selection decisions, "
-            "next-space policy, and the RitS train-or-skip decision for one round."
+            "next-space policy, and the RitS train-or-skip decision for one round. Adaptive "
+            "sampling also records the agent-authored acquisition function and local download evidence."
         ),
         component_id="tricycle.exploration",
         operation="round",
@@ -120,6 +134,7 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
             "model-scores.tsv",
             "selection-decisions.tsv",
             "selected-candidates.tsv",
+            "acquisition-function.toml",
             "range-decision.toml",
             "training-decision.toml",
             "snapshot-transition.toml",
@@ -421,6 +436,69 @@ CAPABILITY_DEFINITIONS: tuple[CapabilityDefinition, ...] = (
         requires_auth=True,
         resumable=True,
         dependencies=("bohr.compute.submit",),
+    ),
+    _definition(
+        "rits.ssh.finetune",
+        "Submit RitS fine-tuning over SSH",
+        (
+            "Transfer a local RitS training bundle to an internal GPU host using OpenSSH/scp, "
+            "then launch the requested command in a detached GPU Docker container through a named context."
+        ),
+        component_id="tricycle.rits.ssh",
+        operation="submit",
+        input_kind="rits.ssh.finetune.request",
+        outputs=("ssh-job-id", "remote-directory"),
+        side_effect=SideEffectLevel.REMOTE_MUTATE,
+        requires_auth=True,
+        resumable=True,
+    ),
+    _definition(
+        "rits.ssh.status",
+        "Inspect a RitS SSH job",
+        "Read the state file and process liveness for a detached RitS job on an internal host.",
+        component_id="tricycle.rits.ssh",
+        operation="status",
+        input_kind="rits.ssh.job-reference",
+        outputs=("ssh-job-status",),
+        side_effect=SideEffectLevel.REMOTE_READ,
+        requires_auth=True,
+        resumable=True,
+    ),
+    _definition(
+        "rits.ssh.logs",
+        "Read RitS SSH training logs",
+        "Read the configured tail of a remote RitS training log over OpenSSH.",
+        component_id="tricycle.rits.ssh",
+        operation="logs",
+        input_kind="rits.ssh.job-reference",
+        outputs=("training-log-tail",),
+        side_effect=SideEffectLevel.REMOTE_READ,
+        requires_auth=True,
+        resumable=True,
+    ),
+    _definition(
+        "rits.ssh.terminate",
+        "Terminate a RitS SSH job",
+        "Send SIGTERM to the detached remote training process after explicit confirmation.",
+        component_id="tricycle.rits.ssh",
+        operation="terminate",
+        input_kind="rits.ssh.job-reference",
+        outputs=("termination-state",),
+        side_effect=SideEffectLevel.DESTRUCTIVE,
+        requires_auth=True,
+        resumable=True,
+    ),
+    _definition(
+        "rits.ssh.download",
+        "Download RitS SSH outputs",
+        "Download explicitly selected output paths from a remote RitS run using scp.",
+        component_id="tricycle.rits.ssh",
+        operation="download",
+        input_kind="rits.ssh.download.request",
+        outputs=("local-training-outputs",),
+        side_effect=SideEffectLevel.REMOTE_READ,
+        requires_auth=True,
+        resumable=True,
     ),
 )
 

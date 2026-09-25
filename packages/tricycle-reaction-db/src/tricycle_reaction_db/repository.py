@@ -9,6 +9,7 @@ from tricycle_core import ReactionRecord
 from tricycle_core.errors import InvalidRequestError
 
 from .contracts import (
+    ReactionDatabaseApiRequest,
     ReactionDatabaseMcpToolCall,
 )
 from .models import (
@@ -63,8 +64,8 @@ class ReactionSpaceExportReceipt:
     A successful receipt must identify the standard database API contract and
     the canonical request shapes used by the adapter.  This prevents a
     unproven local query-and-compose implementation from being reported as a
-    successful standard export must carry explicit MCP provenance for the
-    database queries that produced the artifact.
+    successful export. The relevant REST or MCP request proof is recorded with
+    the artifact.
     """
 
     destination: Path
@@ -73,6 +74,7 @@ class ReactionSpaceExportReceipt:
     metadata: Mapping[str, object] = field(default_factory=dict)
     api_contract: str | None = None
     mcp_tool_calls: tuple[ReactionDatabaseMcpToolCall, ...] = ()
+    api_request: ReactionDatabaseApiRequest | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.destination, Path):
@@ -90,6 +92,10 @@ class ReactionSpaceExportReceipt:
                 "reaction-space export mcp_tool_calls must use the standard MCP call type"
             )
         object.__setattr__(self, "mcp_tool_calls", mcp_tool_calls)
+        if self.api_request is not None and not isinstance(
+            self.api_request, ReactionDatabaseApiRequest
+        ):
+            raise TypeError("reaction-space export api_request must use the standard API type")
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     def to_dict(self) -> dict[str, object]:
@@ -100,6 +106,7 @@ class ReactionSpaceExportReceipt:
             "metadata": dict(self.metadata),
             "api_contract": self.api_contract,
             "mcp_tool_calls": [call.to_dict() for call in self.mcp_tool_calls],
+            "api_request": self.api_request.to_dict() if self.api_request is not None else None,
         }
 
 
@@ -107,7 +114,7 @@ def validate_export_receipt(
     request: RitsDatasetExportRequest | RxnResidDatasetExportRequest,
     receipt: ReactionSpaceExportReceipt,
 ) -> None:
-    """Reject a successful export without the required database MCP proof."""
+    """Reject a successful export without proof for its standard database API."""
 
     if receipt.status.casefold().strip() not in {"succeeded", "success", "completed"}:
         return
@@ -117,61 +124,165 @@ def validate_export_receipt(
             "successful reaction-space export must declare the request's standard database "
             f"API contract ({request.api_contract})"
         )
+    if isinstance(request, RxnResidDatasetExportRequest):
+        _validate_rxnresid_mcp_receipt(request, receipt)
+        return
     if not receipt.mcp_tool_calls:
         raise InvalidRequestError(
-            "successful reaction-space export must return database MCP request provenance"
+            "successful RitS export must return database MCP request provenance"
         )
-    _validate_mcp_export_receipt(request, receipt.mcp_tool_calls)
+    _validate_mcp_export_receipt(request, receipt)
+
+
+def _validate_rxnresid_mcp_receipt(
+    request: RxnResidDatasetExportRequest,
+    receipt: ReactionSpaceExportReceipt,
+) -> None:
+    """Validate project-scoped MCP provenance and the profile materialization policy."""
+
+    if receipt.api_request is not None:
+        raise InvalidRequestError("RxnResid MCP export must not claim REST request provenance")
+    calls = receipt.mcp_tool_calls
+    if len(calls) != 2 or any(call.tool_name != "compose_query" for call in calls):
+        raise InvalidRequestError(
+            "successful RxnResid export must include mapped-reaction and thermodynamics "
+            "compose_query provenance"
+        )
+    by_operation = {call.arguments.get("operation"): call for call in calls}
+    list_operation = "MappedReactionQueryService.list_mapped_reactions"
+    thermo_operation = "ReactionEnergyQueryService.get_mapped_reaction_thermodynamics"
+    if set(by_operation) != {list_operation, thermo_operation}:
+        raise InvalidRequestError("RxnResid MCP export provenance has unexpected query methods")
+    for call in calls:
+        if call.arguments.get("project_id") != request.project_id:
+            raise InvalidRequestError(
+                "RxnResid MCP export must stay scoped to the requested project_id"
+            )
+        if call.arguments.get("reaction_smarts") != request.reaction_smarts:
+            raise InvalidRequestError(
+                "RxnResid MCP export provenance must preserve the configured reaction_smarts"
+            )
+        if not str(call.arguments.get("app_name", "")).strip():
+            raise InvalidRequestError("RxnResid MCP export provenance must include app_name")
+
+    list_call = by_operation[list_operation]
+    thermo_call = by_operation[thermo_operation]
+    if list_call.arguments.get("cleaned_only") is not True:
+        raise InvalidRequestError("RxnResid MCP query provenance must record cleaned_only=true")
+    page_count = list_call.arguments.get("page_count")
+    mapped_count = list_call.arguments.get("mapped_reaction_count")
+    batch_count = thermo_call.arguments.get("batch_count")
+    queried_count = thermo_call.arguments.get("queried_reaction_count")
+    max_aliases = thermo_call.arguments.get("max_aliases_per_query")
+    for name, value in (
+        ("page_count", page_count),
+        ("mapped_reaction_count", mapped_count),
+        ("batch_count", batch_count),
+        ("queried_reaction_count", queried_count),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise InvalidRequestError(f"RxnResid MCP provenance has invalid {name}")
+    if max_aliases != 24 or queried_count != mapped_count:
+        raise InvalidRequestError(
+            "RxnResid thermodynamics queries do not match the MCP batch contract"
+        )
+    if batch_count != (mapped_count + 23) // 24:
+        raise InvalidRequestError("RxnResid thermodynamics batch count is inconsistent")
+
+    metadata = receipt.metadata
+    if metadata.get("transport") != "mcp":
+        raise InvalidRequestError("RxnResid export metadata must record transport=mcp")
+    if metadata.get("mcp_app_name") != list_call.arguments.get("app_name"):
+        raise InvalidRequestError("RxnResid export metadata must record the MCP app name")
+    if metadata.get("project_id") != request.project_id:
+        raise InvalidRequestError("RxnResid export metadata must record the requested project_id")
+    if metadata.get("reaction_smarts") != request.reaction_smarts:
+        raise InvalidRequestError("RxnResid export metadata must preserve reaction_smarts")
+    if metadata.get("cleaned_only") is not True:
+        raise InvalidRequestError("RxnResid export metadata must record cleaned_only=true")
+    if metadata.get("energy_unit") != "kcal/mol":
+        raise InvalidRequestError("RxnResid export metadata must record energy_unit=kcal/mol")
+    if metadata.get("timing_unit") != "seconds":
+        raise InvalidRequestError("RxnResid export metadata must record timing_unit=seconds")
+    if metadata.get("mapped_reaction_pages") != page_count:
+        raise InvalidRequestError(
+            "RxnResid export metadata has inconsistent mapped-reaction page count"
+        )
+    if metadata.get("mapped_reaction_count") != mapped_count:
+        raise InvalidRequestError("RxnResid export metadata has inconsistent mapped-reaction count")
+    if metadata.get("exported_rows") != receipt.row_count or receipt.row_count is None:
+        raise InvalidRequestError("RxnResid export must record its exported row count")
+    excluded = metadata.get("excluded_incomplete_thermodynamics_count")
+    reasons = metadata.get("excluded_reasons")
+    if isinstance(excluded, bool) or not isinstance(excluded, int) or excluded < 0:
+        raise InvalidRequestError("RxnResid export must record its incomplete-thermodynamics count")
+    if (
+        not isinstance(reasons, Mapping)
+        or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in reasons.values())
+        or sum(reasons.values()) != excluded
+    ):
+        raise InvalidRequestError("RxnResid export must record exclusion counts by reason")
 
 
 def _validate_mcp_export_receipt(
-    request: RitsDatasetExportRequest | RxnResidDatasetExportRequest,
-    calls: tuple[ReactionDatabaseMcpToolCall, ...],
+    request: RitsDatasetExportRequest,
+    receipt: ReactionSpaceExportReceipt,
 ) -> None:
-    """Validate the MCP compose-query boundary for a successful export."""
+    """Validate database reaction filtering plus the paged geometry MCP tool."""
 
-    if any(call.tool_name != "compose_query" for call in calls):
-        raise InvalidRequestError("database MCP exports must use the compose_query tool")
+    filter_calls = [call for call in receipt.mcp_tool_calls if call.tool_name == "compose_query"]
+    geometry_calls = [
+        call
+        for call in receipt.mcp_tool_calls
+        if call.tool_name == "export_mapped_reaction_transition_state_geometries"
+    ]
+    if len(filter_calls) != 1 or len(geometry_calls) != 1 or len(receipt.mcp_tool_calls) != 2:
+        raise InvalidRequestError(
+            "RitS MCP export provenance must include database reaction filtering and the "
+            "mapped-reaction geometry MCP export"
+        )
 
-    operations: set[str] = set()
-    for call in calls:
-        app_name = str(call.arguments.get("app_name", "")).strip()
-        if not app_name:
-            raise InvalidRequestError("database MCP export provenance must include app_name")
-        operation = str(call.arguments.get("operation", "")).strip()
-        if operation:
-            operations.add(operation)
+    for call in receipt.mcp_tool_calls:
         if call.arguments.get("project_id") != request.project_id:
             raise InvalidRequestError(
                 "database MCP export provenance must stay scoped to the requested project_id"
             )
-        if call.arguments.get("reaction_smarts") not in {None, request.reaction_smarts}:
-            raise InvalidRequestError(
-                "database MCP export provenance must preserve the configured reaction_smarts"
-            )
 
-    if isinstance(request, RxnResidDatasetExportRequest):
-        expected = {
-            "MappedReactionQueryService.list_mapped_reactions",
-            "ReactionEnergyQueryService.get_mapped_reaction_thermodynamics",
-        }
-        if not expected.issubset(operations):
-            raise InvalidRequestError(
-                "RxnResid MCP export must query filtered mapped reactions and their "
-                "database thermodynamics"
-            )
-        return
-
-    expected = {
-        "MappedReactionQueryService.list_mapped_reactions",
-        "MappedReactionQueryService.get_mapped_reaction",
-        "GeometryQueryService.get_geometry",
-    }
-    if not expected.issubset(operations):
+    filter_call = filter_calls[0]
+    if not str(filter_call.arguments.get("app_name", "")).strip():
+        raise InvalidRequestError("database MCP filter provenance must include app_name")
+    if (
+        filter_call.arguments.get("operation")
+        != "MappedReactionQueryService.list_mapped_reactions"
+    ):
+        raise InvalidRequestError("RitS MCP export must use the database reaction_smarts filter")
+    if filter_call.arguments.get("reaction_smarts") != request.reaction_smarts:
         raise InvalidRequestError(
-            "RitS MCP export must query filtered mapped reactions, mapped-reaction details, "
-            "and database geometry coordinates"
+            "database MCP export provenance must preserve the configured reaction_smarts"
         )
+
+    geometry_call = geometry_calls[0]
+    page_size = geometry_call.arguments.get("limit")
+    page_count = geometry_call.arguments.get("page_count")
+    record_count = geometry_call.arguments.get("record_count")
+    matched_record_count = geometry_call.arguments.get("matched_record_count")
+    if (
+        isinstance(page_size, bool)
+        or not isinstance(page_size, int)
+        or page_size < 1
+        or isinstance(page_count, bool)
+        or not isinstance(page_count, int)
+        or page_count < 0
+        or isinstance(record_count, bool)
+        or not isinstance(record_count, int)
+        or record_count < 0
+        or isinstance(matched_record_count, bool)
+        or not isinstance(matched_record_count, int)
+        or matched_record_count < 0
+    ):
+        raise InvalidRequestError("RitS MCP geometry export provenance has invalid page counts")
+    if matched_record_count != receipt.row_count:
+        raise InvalidRequestError("RitS MCP geometry export provenance has inconsistent row counts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,10 +327,8 @@ class ReactionDatabaseAdapter(Protocol):
     translated into a ``reaction_class`` query.
 
     Export implementations must use the request builders in ``contracts.py``.
-    RxnResid uses the database's standard thermodynamics CSV POST route;
-    RitS uses the standard mapped-reaction/detail/geometry resource routes
-    because the database currently has no combined RitS CSV route.  A
-    successful export receipt without matching API provenance is rejected by
+    RxnResid and RitS query the database through the injected MCP adapter.
+    A successful export receipt without matching request provenance is rejected by
     ``validate_export_receipt``.
     """
 

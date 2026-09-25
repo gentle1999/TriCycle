@@ -9,7 +9,7 @@ description: "Apply the database-authoritative reaction rxn-SMARTS predicate to 
 `reaction_smarts`：
 
 ```text
-[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1
+[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1
 ```
 
 `reaction_filter = "cycloaddition"` 仅是本地兼容标签。TriCycle 不在本地重建反应关系或复制

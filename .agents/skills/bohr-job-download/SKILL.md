@@ -18,7 +18,7 @@ uv run --package tricycle-agent tricycle-agent run \
   bohr.job.download request.toml --run-id <id> --live
 ```
 
-批量 run 优先使用 `resume --run-dir runs/<id> --live`，让状态文件选择下载阶段。下载是远程读取加本地写入，
+批量 run 优先使用 `resume --run-dir 'runs/<date>/<timestamp>/<id>' --live`，让状态文件选择下载阶段。下载是远程读取加本地写入，
 必须检查目标目录、保留下载报告，并且不把凭据写入 `run.toml`。
 
 ## 失败与恢复

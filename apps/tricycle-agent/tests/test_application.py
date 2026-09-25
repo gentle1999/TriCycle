@@ -14,6 +14,7 @@ EXPECTED_COMPONENTS = {
     "tricycle.reaction-database",
     "tricycle.sar",
     "tricycle.rits",
+    "tricycle.rits.ssh",
     "tricycle.sampling",
     "tricycle.reactionopt",
     "tricycle.exploration",

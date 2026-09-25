@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import tomllib
 import unittest
@@ -181,6 +182,130 @@ class PolicyTests(unittest.TestCase):
 
 
 class ExplorationRoundTests(unittest.TestCase):
+    def test_agent_authored_function_is_part_of_round_artifacts_and_resume_check(self) -> None:
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            output_dir = root / "adaptive-round"
+            downloaded_dir = output_dir / "downloads" / "worker-001"
+            downloaded_dir.mkdir(parents=True)
+            (downloaded_dir / "result.tsv").write_text("completed\n", encoding="utf-8")
+            (downloaded_dir / "download-manifest.txt").write_text("result.tsv\n", encoding="utf-8")
+            download_report = output_dir / "download-results.tsv"
+            download_report.write_text(
+                "worker\ttasks\tjob_id\tjob_name\tstatus\tdownload_dir\n"
+                f"worker-001\t1\tbohr-1\tjob-1\tDOWNLOADED\t{downloaded_dir}\n",
+                encoding="utf-8",
+            )
+            status_report = output_dir / "status.tsv"
+            status_report.write_text(
+                "worker\ttasks\tjob_id\tjob_name\tsubmit_status\tjob_status\tterminal\tresult\tinput_dir\tchecked_at\n"
+                "worker-001\t1\tbohr-1\tjob-1\tSUBMITTED\tCOMPLETED\tyes\tSUCCEEDED\tinputs\t2026-09-24\n",
+                encoding="utf-8",
+            )
+            request = {
+                "exploration_id": "adaptive",
+                "round_index": 1,
+                "strategy": "agent-authored-acquisition",
+                "budget": 1,
+                "seed": 9,
+                "output_dir": str(output_dir),
+                "space": {"space_id": "adaptive-space", "definition": {"reaction_class": "DA"}},
+                "model_snapshot": {
+                    "snapshot_id": "sar-model-1",
+                    "checkpoint_hash": "sha256:model-checkpoint",
+                    "score_artifact": "scores.tsv",
+                },
+                "observed_metrics": {"validation_mae": 0.2},
+                "candidates": [
+                    {
+                        "candidate_id": "rxn-a",
+                        "payload": {
+                        "epistemic_variance": 0.9,
+                        "product_count": 2,
+                        "mean_product_atom_count": 10,
+                        "sampled_novelty": 0.9,
+                        },
+                    },
+                    {
+                        "candidate_id": "rxn-b",
+                        "payload": {
+                        "epistemic_variance": 0.8,
+                        "product_count": 4,
+                        "mean_product_atom_count": 5,
+                        "sampled_novelty": 0.3,
+                        },
+                    },
+                ],
+                "metadata": {
+                    "agent_acquisition": {
+                        "schema": "tricycle.agent-acquisition/v1",
+                        "function_id": "adaptive-round-0001",
+                        "version": "1.0.0",
+                        "authored_by": "agent-authored-acquisition",
+                        "expression": (
+                            "epistemic_variance / estimated_cost + context.model_metrics.validation_mae "
+                            "* (sampled_novelty + context.sampled_distribution.coverage_gap) / estimated_cost"
+                        ),
+                        "cost_expression": "product_count * mean_product_atom_count",
+                        "rationale": "Balance uncertainty and under-sampled regions against estimated cost.",
+                        "context": {
+                            "sampled_distribution": {
+                                "coverage_gap": 0.3,
+                                "sampled_count": 5,
+                                "novelty_definition": "nearest-labeled-pair-distance-normalized-v1",
+                            },
+                            "model_metrics": {"validation_mae": 0.2},
+                        },
+                        "evidence": {
+                            "sampled_set": "sha256:sampled-set",
+                            "candidate_space": "sha256:candidate-space",
+                            "model_evaluation": "sha256:model-evaluation",
+                            "calculation_status": {
+                                "manifest_path": str(status_report.resolve()),
+                                "sha256": hashlib.sha256(status_report.read_bytes()).hexdigest(),
+                            },
+                            "downloaded_results": {
+                                "manifest_path": str(download_report.resolve()),
+                                "sha256": hashlib.sha256(download_report.read_bytes()).hexdigest(),
+                            },
+                        },
+                    }
+                },
+            }
+            trace = TraceStore(output_dir, run_id="adaptive-run")
+            context = ExecutionContext(
+                run_id="adaptive-run",
+                workdir=root,
+                metadata={"run_dir": str(output_dir)},
+                trace_sink=trace,
+            )
+
+            result = ExplorationPlugin().execute_round(request, context)
+
+            self.assertEqual(result.metadata["selected_ids"], ["rxn-a"])
+            round_dir = output_dir / "rounds" / "0001"
+            function_path = round_dir / "acquisition-function.toml"
+            function = tomllib.loads(function_path.read_text(encoding="utf-8"))
+            self.assertEqual(function["function_id"], "adaptive-round-0001")
+            self.assertEqual(len(function["function_hash"]), 64)
+            self.assertIn("acquisition-function.toml", function_path.name)
+
+            manifest = tomllib.loads(
+                (round_dir / "artifacts" / "manifest.toml").read_text(encoding="utf-8")
+            )
+            artifact_paths = {
+                manifest[f"artifact_{index:03d}"]["path"]
+                for index in range(manifest["count"])
+            }
+            self.assertIn("rounds/0001/acquisition-function.toml", artifact_paths)
+            self.assertIn(
+                "acquisition.function.authored",
+                [event["event_type"] for event in trace.read()],
+            )
+
+            reused = ExplorationPlugin().execute_round({**request, "resume": True}, context)
+            self.assertEqual(reused.metadata["acquisition_function_id"], "adaptive-round-0001")
+
     def test_round_materializes_strict_trajectory_and_is_reusable(self) -> None:
         with TemporaryDirectory() as temp:
             root = Path(temp)

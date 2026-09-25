@@ -14,12 +14,26 @@ from .commands import (
 )
 from .models import RitsJobRequest
 from .plugin import RitsPlugin
+from .ssh import (
+    InMemoryRitsSshGateway,
+    OpenSshRitsGateway,
+    RitsSshError,
+    RitsSshFinetuneRequest,
+    RitsSshGateway,
+)
+from .ssh_plugin import RitsSshPlugin
 
 __all__ = [
     "DEFAULT_MODEL_MANIFEST",
     "RitsModelAsset",
     "RitsJobRequest",
     "RitsPlugin",
+    "RitsSshPlugin",
+    "RitsSshFinetuneRequest",
+    "RitsSshGateway",
+    "OpenSshRitsGateway",
+    "InMemoryRitsSshGateway",
+    "RitsSshError",
     "build_inference_command",
     "build_ts_pipeline_command",
     "build_fine_tuning_command",

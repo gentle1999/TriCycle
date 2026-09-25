@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ from typing import Any
 
 from tricycle_core import Artifact, ReactionRecord
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.run_paths import timestamped_run_directory
 
 from .contracts import RITS_EXPORT_API_CONTRACT, RXNRESID_EXPORT_API_CONTRACT
 
@@ -18,9 +20,16 @@ _PROJECT_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # space.  Keep this value explicit in the request so the adapter forwards the
 # exact predicate instead of silently falling back to a reaction-class label.
 CYCLOADDITION_RXN_SMARTS = (
-    "[C,N]=[C,N].[C,N]=[C,N]-[C,N]=[C,N]>>"
-    "[C,N]1[C,N][C,N][C,N]=[C,N][C,N]1"
+    "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>"
+    "[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1"
 )
+RXNRESID_GROUND_TRUTH_PROJECT_ID = "00000000-0000-7000-8000-000000000201"
+
+
+def _default_rxnresid_destination() -> Path:
+    run_root = Path(os.environ.get("TRICYCLE_RUN_ROOT", "runs"))
+    record_directory = timestamped_run_directory(run_root, "record")
+    return record_directory / "mapped-reaction-energy-time.csv"
 
 
 def _required_text(value: object, field_name: str) -> str:
@@ -523,16 +532,21 @@ class RxnResidDatasetExportRequest:
     """Export energetic and phase-resolved timing rows for RxnResid."""
 
     project_id: str
-    destination: Path = Path("reaction-space-rxnresid.csv")
+    destination: Path = field(default_factory=_default_rxnresid_destination)
     reaction_filter: str = "cycloaddition"
     cleaned_only: bool = True
     reaction_smarts: str = CYCLOADDITION_RXN_SMARTS
     consumer: str = "RxnResid"
-    energy_unit: str = "database-native"
+    energy_unit: str = "kcal/mol"
     timing_unit: str = "seconds"
 
     def __post_init__(self) -> None:
         project_id = _validate_project_id(self.project_id)
+        if project_id != RXNRESID_GROUND_TRUTH_PROJECT_ID:
+            raise InvalidRequestError(
+                "RxnResid thermodynamics export is restricted to the ground-truth project "
+                f"({RXNRESID_GROUND_TRUTH_PROJECT_ID})"
+            )
         _validate_database_filter(
             self.reaction_filter,
             self.cleaned_only,
@@ -546,6 +560,10 @@ class RxnResidDatasetExportRequest:
         if _required_text(self.consumer, "consumer").casefold() != "rxnresid":
             raise InvalidRequestError("this dataset export consumer must be RxnResid")
         energy_unit = _required_text(self.energy_unit, "energy_unit")
+        if energy_unit.casefold().replace(" ", "") not in {"kcal/mol", "kcalmol-1"}:
+            raise InvalidRequestError(
+                "energy_unit must be kcal/mol because the database export columns are in kcal/mol"
+            )
         if _required_text(self.timing_unit, "timing_unit").casefold() != "seconds":
             raise InvalidRequestError("timing_unit must be seconds")
         object.__setattr__(self, "project_id", project_id)
@@ -558,7 +576,7 @@ class RxnResidDatasetExportRequest:
 
     @property
     def api_contract(self) -> str:
-        """The standard database thermodynamics CSV API contract."""
+        """The standard database MCP thermodynamics export contract."""
 
         return RXNRESID_EXPORT_API_CONTRACT
 
@@ -567,9 +585,10 @@ class RxnResidDatasetExportRequest:
         _reject_reaction_class(payload)
         return cls(
             project_id=str(payload.get("project_id", "")),
-            destination=_required_path(
-                payload.get("destination", payload.get("output", "")),
-                "destination",
+            destination=(
+                _required_path(payload.get("destination", payload.get("output")), "destination")
+                if payload.get("destination", payload.get("output"))
+                else _default_rxnresid_destination()
             ),
             reaction_filter=str(
                 payload.get("reaction_filter", payload.get("filter", "cycloaddition"))
@@ -582,7 +601,7 @@ class RxnResidDatasetExportRequest:
                 )
             ),
             consumer=str(payload.get("consumer", "RxnResid")),
-            energy_unit=str(payload.get("energy_unit", "database-native")),
+            energy_unit=str(payload.get("energy_unit", "kcal/mol")),
             timing_unit=str(payload.get("timing_unit", "seconds")),
         )
 

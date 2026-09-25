@@ -5,6 +5,10 @@ description: "Record a strict, replayable exploration round and its next model s
 
 # 探索轮次轨迹
 
+当 `strategy = "agent-authored-acquisition"` 时，遵循仓库 canonical skill：
+[`agent-authored-acquisition`](../../.agents/skills/agent-authored-acquisition/SKILL.md)。
+这要求上一批计算先完成并将结果下载到本地；本轮只做本地决策，不在同一计算任务中提交下一批。
+
 当主动学习循环需要保存完整候选空间、采样选择、下一轮范围、RitS train/skip 决策及模型快照
 迁移时使用 `exploration.round`。
 

@@ -4,7 +4,7 @@ from tricycle_core import CapabilityCatalog, PluginRegistry
 from tricycle_exploration import ExplorationPlugin
 from tricycle_reaction_db import ReactionDatabasePlugin
 from tricycle_reactionopt import ReactionOptPlugin
-from tricycle_rits import RitsPlugin
+from tricycle_rits import RitsPlugin, RitsSshPlugin
 from tricycle_sampling import SamplingPlugin
 from tricycle_sar import SarPlugin
 
@@ -17,6 +17,7 @@ def create_registry() -> PluginRegistry:
         ReactionDatabasePlugin(),
         SarPlugin(),
         RitsPlugin(),
+        RitsSshPlugin(),
         SamplingPlugin(),
         ReactionOptPlugin(),
         ExplorationPlugin(),

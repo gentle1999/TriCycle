@@ -1,3 +1,9 @@
+from .acquisition import (
+    AGENT_ACQUISITION_SCHEMA,
+    AGENT_ACQUISITION_STRATEGY,
+    AgentAuthoredAcquisitionSamplingStrategy,
+    evaluate_numeric_expression,
+)
 from .models import Candidate, SamplingRequest, SamplingResult
 from .plugin import SamplingPlugin
 from .strategies import (
@@ -24,6 +30,9 @@ from .strategies import (
 __all__ = [
     "Candidate",
     "AleatoricUncertaintySamplingStrategy",
+    "AGENT_ACQUISITION_SCHEMA",
+    "AGENT_ACQUISITION_STRATEGY",
+    "AgentAuthoredAcquisitionSamplingStrategy",
     "DensityWeightedUncertaintySamplingStrategy",
     "EpistemicUncertaintySamplingStrategy",
     "FirstNSamplingStrategy",
@@ -41,6 +50,7 @@ __all__ = [
     "UncertaintyDiversitySamplingStrategy",
     "binary_entropy",
     "decompose_binary_uncertainty",
+    "evaluate_numeric_expression",
     "get_uncertainty_field",
     "get_uncertainty_score",
     "get_uncertainty_scores",

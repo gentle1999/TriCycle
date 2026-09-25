@@ -30,11 +30,19 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-DEFAULT_GROUND_TRUTH = Path("runs/ground-truth-export")
+from tricycle_core import timestamped_run_directory
+
+def _latest_run_record(record_name: str) -> Path:
+    root = Path("runs")
+    records = sorted(root.glob(f"*/*/{record_name}"))
+    return records[-1] if records else root / record_name
+
+
+DEFAULT_GROUND_TRUTH = _latest_run_record("ground-truth-export")
 DEFAULT_PROJECTS = {
-    "autode": Path("runs/autode-export"),
-    "dpa-fined-rits-da": Path("runs/dpa-fined-rits-da-export"),
-    "rits-zero-shot-da": Path("runs/rits-zero-shot-da-export-preview"),
+    "autode": _latest_run_record("autode-export"),
+    "dpa-fined-rits-da": _latest_run_record("dpa-fined-rits-da-export"),
+    "rits-zero-shot-da": _latest_run_record("rits-zero-shot-da-export-preview"),
 }
 
 
@@ -628,7 +636,7 @@ def _parse_project(value: str) -> tuple[str, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ground-truth", type=Path, default=DEFAULT_GROUND_TRUTH)
-    parser.add_argument("--output-dir", type=Path, default=Path("runs/reaction-collection-distribution"))
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--expected-pairs", type=int, default=1600)
     parser.add_argument(
         "--project",
@@ -638,14 +646,17 @@ def main() -> None:
         help="project export; may be repeated (defaults to the three collections)",
     )
     args = parser.parse_args()
+    output_dir = args.output_dir or timestamped_run_directory(
+        Path("runs"), "reaction-collection-distribution"
+    )
     projects = dict(args.project) if args.project else DEFAULT_PROJECTS
     analyze(
         ground_truth_dir=args.ground_truth,
         projects=projects,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
         expected_pair_count=args.expected_pairs,
     )
-    print(f"wrote distribution report to {args.output_dir}")
+    print(f"wrote distribution report to {output_dir}")
 
 
 if __name__ == "__main__":
