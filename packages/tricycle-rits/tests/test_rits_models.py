@@ -14,19 +14,19 @@ from tricycle_rits import (
     build_resume_command,
     build_training_command,
     build_ts_pipeline_command,
-    load_default_model_asset,
+    load_model_asset,
 )
 
 
 class RitsModelTests(unittest.TestCase):
     def test_default_model_asset_pins_source_and_checkpoint_location(self) -> None:
-        asset = load_default_model_asset()
+        asset = load_model_asset()
 
         self.assertEqual(asset.model_name, "rits-rgd1-chembl-extended")
         self.assertEqual(asset.repository, "https://github.com/gentle1999/RitS")
         self.assertEqual(
             asset.revision,
-            "b4fc883a0e97d8946731c4df12e3585cd4e98fd5",
+            "07e48da98c4d4f10d0dc1a1cc6b2acad40341c04",
         )
         self.assertEqual(asset.checkpoint_name, "rits.ckpt")
         self.assertEqual(asset.resolve_checkpoint(), Path("artifacts/rits/rits.ckpt"))
@@ -40,7 +40,7 @@ class RitsModelTests(unittest.TestCase):
         )
 
     def test_missing_default_checkpoint_has_actionable_message(self) -> None:
-        asset = load_default_model_asset()
+        asset = load_model_asset()
 
         with self.assertRaisesRegex(InvalidRequestError, "artifacts/rits/rits.ckpt"):
             asset.require_checkpoint("/tmp/tricycle-rits-no-checkpoint")

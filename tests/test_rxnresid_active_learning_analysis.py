@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.rxnresid_active_learning_analysis import _correct_trajectory
+from analysis.sampling.rxnresid_active_learning_analysis import _correct_trajectory
 
 
 def test_correct_trajectory_uses_materialized_hours_and_keeps_missing_pairs() -> None:

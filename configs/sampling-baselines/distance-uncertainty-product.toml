@@ -1,0 +1,24 @@
+# Shrestha et al., Nature Communications 2024, DOI: 10.1038/s41467-024-49011-8
+# Nearest-reference aggregation and pair-level predictive variance are adaptations.
+strategy = "distance-uncertainty-product"
+budget = 2
+seed = 42
+
+[metadata.baseline]
+feature_field = "design_features"
+variance_field = "predictive_variance"
+
+[metadata.baseline.reference_features]
+already-labeled-pair = [0.0, 0.0]
+
+[[candidates]]
+candidate_id = "rxn-001"
+payload = { design_features = [0.1, 0.2], predictive_variance = 0.9 }
+
+[[candidates]]
+candidate_id = "rxn-002"
+payload = { design_features = [0.5, 0.7], predictive_variance = 0.5 }
+
+[[candidates]]
+candidate_id = "rxn-003"
+payload = { design_features = [0.9, 0.9], predictive_variance = 0.3 }

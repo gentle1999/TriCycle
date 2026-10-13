@@ -9,7 +9,7 @@ __all__ = ["dump_toml", "flatten_sections", "load_toml"]
 
 
 def flatten_sections(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Flatten one level of run TOML sections for legacy-shaped consumers."""
+    """Flatten run TOML sections for lifecycle job construction."""
 
     result: dict[str, Any] = {}
     for key, item in value.items():

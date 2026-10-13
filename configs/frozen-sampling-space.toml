@@ -1,0 +1,5 @@
+# Fixed sampling space; paths resolve relative to this file.
+[snapshot]
+id = "sampling-space-v4-runtime-20261010"
+manifest = "../runs/2026-10-10/15-35-27.987040+0800/sampling-space-v4-runtime-20261010/frozen-space.json"
+manifest_sha256 = "967d34d78d88d91b3d2c2089081d5b519c6fe922798d895476f30cf8da340c82"

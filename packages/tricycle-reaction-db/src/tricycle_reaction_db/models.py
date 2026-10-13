@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -11,6 +11,7 @@ from typing import Any
 from tricycle_core import Artifact, ReactionRecord
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.run_paths import timestamped_run_directory
+from tricycle_core.validation import validate_fields
 
 from .contracts import RITS_EXPORT_API_CONTRACT, RXNRESID_EXPORT_API_CONTRACT
 
@@ -58,19 +59,6 @@ def _mapping(value: object, field_name: str) -> Mapping[str, Any]:
     return value
 
 
-def _mapping_items(value: object, field_name: str) -> tuple[Mapping[str, Any], ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise InvalidRequestError(f"{field_name} must be a list")
-    items: list[Mapping[str, Any]] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, Mapping):
-            raise InvalidRequestError(f"{field_name}[{index}] must be an object")
-        items.append(item)
-    return tuple(items)
-
-
 def _validate_project_slug(slug: str) -> None:
     if not _PROJECT_SLUG.fullmatch(slug):
         raise InvalidRequestError(
@@ -112,9 +100,10 @@ class ReactionDatabaseProjectSpec:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionDatabaseProjectSpec:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            slug=str(payload.get("slug", payload.get("project_slug", ""))),
-            name=str(payload.get("name", payload.get("project_name", ""))),
+            slug=str(payload.get("slug", "")),
+            name=str(payload.get("name", "")),
             organization_id=payload.get("organization_id"),
         )
 
@@ -152,9 +141,10 @@ class CalculationLogBatchSpec:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> CalculationLogBatchSpec:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            batch_id=str(payload.get("batch_id", payload.get("id", ""))),
-            root=_required_path(payload.get("root", payload.get("path", "")), "batch.root"),
+            batch_id=str(payload.get("batch_id", "")),
+            root=_required_path(payload.get("root", ""), "batch.root"),
             logs_dir=Path(str(payload.get("logs_dir", "downloads"))),
             metadata=dict(_mapping(payload.get("metadata", {}), "batch.metadata")),
         )
@@ -194,7 +184,9 @@ class CalculationLogBatchSpec:
             try:
                 resolved.relative_to(root)
             except ValueError as exc:
-                raise InvalidRequestError(f"calculation log escapes batch root: {candidate}") from exc
+                raise InvalidRequestError(
+                    f"calculation log escapes batch root: {candidate}"
+                ) from exc
             if not resolved.is_file():
                 raise InvalidRequestError(f"calculation log is not a regular file: {candidate}")
             files.append(resolved)
@@ -269,9 +261,7 @@ class CalculationLogBatchManifest:
         if include_files:
             result["files"] = [str(path) for path in self.files]
         else:
-            result["sample_files"] = [
-                str(path.relative_to(self.root)) for path in self.files[:3]
-            ]
+            result["sample_files"] = [str(path.relative_to(self.root)) for path in self.files[:3]]
         return result
 
 
@@ -312,13 +302,8 @@ class ReactionBatchImportRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionBatchImportRequest:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         project_payload = payload.get("project")
-        if project_payload is None:
-            project_payload = {
-                "slug": payload.get("project_slug", ""),
-                "name": payload.get("project_name", ""),
-                "organization_id": payload.get("organization_id"),
-            }
         if not isinstance(project_payload, Mapping):
             raise InvalidRequestError("project must be an object")
         if "project_id" in payload or "project_id" in project_payload:
@@ -326,13 +311,6 @@ class ReactionBatchImportRequest:
                 "batch import creates a new internal project; project_id is not accepted"
             )
         raw_batch = payload.get("batch")
-        if raw_batch is None:
-            raw_batches = _mapping_items(payload.get("batches"), "batches")
-            if len(raw_batches) != 1:
-                raise InvalidRequestError(
-                    "one import request must contain exactly one batch; create one project per batch"
-                )
-            raw_batch = raw_batches[0]
         if not isinstance(raw_batch, Mapping):
             raise InvalidRequestError("batch must be an object")
         return cls(
@@ -377,34 +355,28 @@ class ReactionFilterRequest:
     """
 
     project_id: str
-    reaction_filter: str = "cycloaddition"
     cleaned_only: bool = True
     reaction_smarts: str = CYCLOADDITION_RXN_SMARTS
 
     def __post_init__(self) -> None:
         _validate_project_id(self.project_id)
         _validate_database_filter(
-            self.reaction_filter,
             self.cleaned_only,
             self.reaction_smarts,
         )
         object.__setattr__(self, "project_id", str(self.project_id).strip())
-        object.__setattr__(self, "reaction_filter", "cycloaddition")
         object.__setattr__(self, "reaction_smarts", CYCLOADDITION_RXN_SMARTS)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionFilterRequest:
-        _reject_reaction_class(payload)
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
             project_id=str(payload.get("project_id", "")),
-            reaction_filter=str(
-                payload.get("reaction_filter", payload.get("filter", "cycloaddition"))
-            ),
             cleaned_only=_required_bool(payload.get("cleaned_only", True), "cleaned_only"),
             reaction_smarts=str(
                 payload.get(
                     "reaction_smarts",
-                    payload.get("rxn_smarts", CYCLOADDITION_RXN_SMARTS),
+                    CYCLOADDITION_RXN_SMARTS,
                 )
             ),
         )
@@ -412,7 +384,6 @@ class ReactionFilterRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
-            "reaction_filter": self.reaction_filter,
             "cleaned_only": self.cleaned_only,
             "reaction_smarts": self.reaction_smarts,
         }
@@ -423,26 +394,14 @@ def _validate_project_id(project_id: object) -> str:
 
 
 def _validate_database_filter(
-    reaction_filter: object,
     cleaned_only: bool,
     reaction_smarts: object,
 ) -> None:
-    if _required_text(reaction_filter, "reaction_filter").casefold() != "cycloaddition":
-        raise InvalidRequestError(
-            "reaction database operations must use the authoritative cycloaddition rxn-SMARTS filter"
-        )
     if _required_bool(cleaned_only, "cleaned_only") is not True:
         raise InvalidRequestError("reaction database operations require cleaned_only=true")
     if _required_text(reaction_smarts, "reaction_smarts") != CYCLOADDITION_RXN_SMARTS:
         raise InvalidRequestError(
             "reaction_smarts must be the configured cycloaddition rxn-SMARTS predicate"
-        )
-
-
-def _reject_reaction_class(payload: Mapping[str, Any]) -> None:
-    if "reaction_class" in payload:
-        raise InvalidRequestError(
-            "reaction_class is not supported; use the configured reaction_smarts predicate"
         )
 
 
@@ -452,7 +411,6 @@ class RitsDatasetExportRequest:
 
     project_id: str
     destination: Path = Path("reaction-space-rits.csv")
-    reaction_filter: str = "cycloaddition"
     cleaned_only: bool = True
     reaction_smarts: str = CYCLOADDITION_RXN_SMARTS
     structure_format: str = "xyz"
@@ -461,7 +419,6 @@ class RitsDatasetExportRequest:
     def __post_init__(self) -> None:
         project_id = _validate_project_id(self.project_id)
         _validate_database_filter(
-            self.reaction_filter,
             self.cleaned_only,
             self.reaction_smarts,
         )
@@ -474,11 +431,8 @@ class RitsDatasetExportRequest:
             raise InvalidRequestError("this dataset export consumer must be RitS")
         structure_format = _required_text(self.structure_format, "structure_format").casefold()
         if structure_format not in {"xyz", "sdf", "database-reference"}:
-            raise InvalidRequestError(
-                "structure_format must be xyz, sdf, or database-reference"
-            )
+            raise InvalidRequestError("structure_format must be xyz, sdf, or database-reference")
         object.__setattr__(self, "project_id", project_id)
-        object.__setattr__(self, "reaction_filter", "cycloaddition")
         object.__setattr__(self, "reaction_smarts", CYCLOADDITION_RXN_SMARTS)
         object.__setattr__(self, "destination", destination)
         object.__setattr__(self, "structure_format", structure_format)
@@ -492,21 +446,18 @@ class RitsDatasetExportRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> RitsDatasetExportRequest:
-        _reject_reaction_class(payload)
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
             project_id=str(payload.get("project_id", "")),
             destination=_required_path(
-                payload.get("destination", payload.get("output", "")),
+                payload.get("destination", ""),
                 "destination",
-            ),
-            reaction_filter=str(
-                payload.get("reaction_filter", payload.get("filter", "cycloaddition"))
             ),
             cleaned_only=_required_bool(payload.get("cleaned_only", True), "cleaned_only"),
             reaction_smarts=str(
                 payload.get(
                     "reaction_smarts",
-                    payload.get("rxn_smarts", CYCLOADDITION_RXN_SMARTS),
+                    CYCLOADDITION_RXN_SMARTS,
                 )
             ),
             structure_format=str(payload.get("structure_format", "xyz")),
@@ -516,7 +467,6 @@ class RitsDatasetExportRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
-            "reaction_filter": self.reaction_filter,
             "cleaned_only": self.cleaned_only,
             "reaction_smarts": self.reaction_smarts,
             "destination": str(self.destination),
@@ -533,7 +483,6 @@ class RxnResidDatasetExportRequest:
 
     project_id: str
     destination: Path = field(default_factory=_default_rxnresid_destination)
-    reaction_filter: str = "cycloaddition"
     cleaned_only: bool = True
     reaction_smarts: str = CYCLOADDITION_RXN_SMARTS
     consumer: str = "RxnResid"
@@ -548,7 +497,6 @@ class RxnResidDatasetExportRequest:
                 f"({RXNRESID_GROUND_TRUTH_PROJECT_ID})"
             )
         _validate_database_filter(
-            self.reaction_filter,
             self.cleaned_only,
             self.reaction_smarts,
         )
@@ -567,7 +515,6 @@ class RxnResidDatasetExportRequest:
         if _required_text(self.timing_unit, "timing_unit").casefold() != "seconds":
             raise InvalidRequestError("timing_unit must be seconds")
         object.__setattr__(self, "project_id", project_id)
-        object.__setattr__(self, "reaction_filter", "cycloaddition")
         object.__setattr__(self, "reaction_smarts", CYCLOADDITION_RXN_SMARTS)
         object.__setattr__(self, "destination", destination)
         object.__setattr__(self, "consumer", "RxnResid")
@@ -582,22 +529,19 @@ class RxnResidDatasetExportRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> RxnResidDatasetExportRequest:
-        _reject_reaction_class(payload)
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
             project_id=str(payload.get("project_id", "")),
             destination=(
-                _required_path(payload.get("destination", payload.get("output")), "destination")
-                if payload.get("destination", payload.get("output"))
+                _required_path(payload.get("destination", None), "destination")
+                if payload.get("destination", None)
                 else _default_rxnresid_destination()
-            ),
-            reaction_filter=str(
-                payload.get("reaction_filter", payload.get("filter", "cycloaddition"))
             ),
             cleaned_only=_required_bool(payload.get("cleaned_only", True), "cleaned_only"),
             reaction_smarts=str(
                 payload.get(
                     "reaction_smarts",
-                    payload.get("rxn_smarts", CYCLOADDITION_RXN_SMARTS),
+                    CYCLOADDITION_RXN_SMARTS,
                 )
             ),
             consumer=str(payload.get("consumer", "RxnResid")),
@@ -608,7 +552,6 @@ class RxnResidDatasetExportRequest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
-            "reaction_filter": self.reaction_filter,
             "cleaned_only": self.cleaned_only,
             "reaction_smarts": self.reaction_smarts,
             "destination": str(self.destination),
@@ -625,12 +568,6 @@ class RxnResidDatasetExportRequest:
                 "product_compute_seconds",
             ],
         }
-
-
-# Preserve the former public name while making the new RxnResid contract
-# explicit.  An alias also keeps positional construction unambiguous:
-# ``(project_id, destination, ...)``.
-ReactionSpaceExportRequest = RxnResidDatasetExportRequest
 
 
 def record_from_mapping(payload: Mapping[str, Any]) -> ReactionRecord:
@@ -664,7 +601,8 @@ class ReactionIngestRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionIngestRequest:
-        raw_record = payload.get("record", payload)
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
+        raw_record = payload.get("record")
         if not isinstance(raw_record, Mapping):
             raise InvalidRequestError("record must be an object")
         return cls(

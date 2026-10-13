@@ -14,6 +14,7 @@ from tricycle_core import (
 )
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.protocols import BohrGateway
+from tricycle_core.validation import validate_fields
 
 from .executor import BohrJobExecutor
 from .models import BohrComputeRequest
@@ -40,7 +41,8 @@ class BohrComputePlugin(PluginBase):
         context: ExecutionContext,
     ) -> TaskPlan:
         if operation == "status":
-            external_id = str(request.get("external_id", request.get("job_id", "")))
+            validate_fields(request, {"external_id"}, context="Bohr status")
+            external_id = str(request.get("external_id", ""))
             if not external_id.strip():
                 raise InvalidRequestError("external_id is required for Bohr status")
             return TaskPlan(
@@ -51,8 +53,9 @@ class BohrComputePlugin(PluginBase):
                 metadata={"dry_run": context.dry_run},
             )
         if operation == "download":
-            external_id = str(request.get("external_id", request.get("job_id", "")))
-            destination = str(request.get("destination", request.get("out", "")))
+            validate_fields(request, {"external_id", "destination"}, context="Bohr download")
+            external_id = str(request.get("external_id", ""))
+            destination = str(request.get("destination", ""))
             if not external_id.strip() or not destination.strip():
                 raise InvalidRequestError(
                     "external_id and destination are required for Bohr download"

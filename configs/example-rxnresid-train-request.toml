@@ -1,5 +1,6 @@
 # TriCycle metadata is TOML; configs/rxnresid.yaml remains an RxnResid-native artifact.
 model_name = "rxnresid-smoke"
+machine_type = "c6_m60_1 * NVIDIA 4090"
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 
 # The task directory must be a checkout of the pinned gentle1999/RxnResid commit.
@@ -7,9 +8,8 @@ input_directory = "/path/to/RxnResid"
 code_artifact = { artifact_id = "rxnresid-source", location = "/path/to/RxnResid", kind = "directory" }
 dataset = { artifact_id = "rxnresid-dataset", location = "/path/to/RxnResid/data/new_full_df_exact_balanced_40ene_40diene.csv" }
 
-# run.sh is uploaded inside input_directory and performs editable installation
-# from pyproject.toml before running the command built below.
-command = ["bash", "run.sh"]
+# Use the shared command builder. SAR stages and initializes the verified runtime.
+command = ["python3.12", "train.py", "--config", "configs/rxnresid.yaml", "--fold-index", "0", "--output", "outputs/rxnresid-smoke"]
 
 output_artifacts = [
   { artifact_id = "rxnresid-training-output", location = "outputs/rxnresid-smoke", kind = "directory" },
@@ -18,7 +18,7 @@ output_artifacts = [
 [parameters]
 task = "train"
 source_repository = "https://github.com/gentle1999/RxnResid"
-source_revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
+source_revision = "a615f4161cb612f5ad98136d4965685009c62bab"
 source_manifest = "packages/tricycle-sar/src/tricycle_sar/assets/rxnresid-model.toml"
 config_path = "configs/rxnresid.yaml"
 fold_index = 0

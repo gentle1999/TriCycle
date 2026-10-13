@@ -10,18 +10,17 @@ description: "Plan or explicitly submit a RitS training job to Bohr from a TOML 
 
 这里的 `request.toml` 是 TriCycle 的任务请求；RitS 自己的模型配置（例如 Hydra YAML）
 属于随代码和数据上传的任务输入 artifact，格式由 RitS 决定，不需要改写成 TriCycle TOML。
-Bohr worker 直接执行随 `input_directory` 上传的 bash entrypoint（例如 `bash run.sh`）。该脚本
-使用系统 Python 按 `pyproject.toml` 执行可编辑安装，再运行 RitS 入口，不创建虚拟环境。
+Bohr worker 执行请求的 `command`；使用 `bash run.sh` 时，入口必须已随 `input_directory` 交付。
+解释器、依赖初始化与源码安装使用所选任务配置和镜像配方，不能照搬技能中的临时 pip 安装命令。
 
 请求使用 `model_name`、`image`、`code_artifact`、dataset artifact、`input_directory`、实际任务
 `command` 和训练参数。`input_directory` 是 Bohr CLI 上传的本地任务目录，通常同时包含最新
-RitS 代码、数据和任务原生配置；command 通常为 `bash run.sh`。
+RitS 配置指定版本的代码、数据和任务原生配置；command 必须能在上传目录内直接执行。
 RitS 官方训练入口为 `scripts/train.py`，仓库提供的 `build_training_command` 可生成基础命令。
-当前使用的官方代码提交和默认预训练模型记录在
-`packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml`。若从预训练模型继续训练，
-将 `artifacts/rits/rits.ckpt` 复制到任务目录的 `data/rits.ckpt`，并在任务原生参数中使用该路径。
-当前上游为 `https://github.com/gentle1999/RitS`，commit 为
-`6d8aa0704c21d2798326a7e070491abf438ca292`。
+源码来源与预期版本读取[模型资产配置](../../../packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)的
+`model.repository`、`model.revision`，请求记录完整 revision，不从技能中取固定值。
+若从预训练模型继续训练，按配置的 `checkpoint_path`、`task_checkpoint_path` 交付权重，
+用 `checkpoint_sha256` 校验，并在任务原生参数中使用任务内路径。
 先规划并检查生成的 Bohr job：
 
 ```bash

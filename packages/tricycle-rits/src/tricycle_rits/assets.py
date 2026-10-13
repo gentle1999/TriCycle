@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from hashlib import sha256
 from pathlib import Path
 
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 DEFAULT_MODEL_MANIFEST = Path(__file__).with_name("assets") / "rits-model.toml"
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -37,6 +38,8 @@ class RitsModelAsset:
     inference_entrypoint: str = "scripts/sample_transition_state.py"
     finetune_protocol: str = "finetune_from"
     resume_protocol: str = "resume"
+    revision_kind: str = "git-commit"
+    checkpoint_dataset: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -54,6 +57,12 @@ class RitsModelAsset:
         ):
             if not getattr(self, field_name).strip():
                 raise InvalidRequestError(f"RitS model manifest {field_name} must not be empty")
+        if self.revision_kind != "git-commit":
+            raise InvalidRequestError("RitS model revision_kind must be git-commit")
+        if self.checkpoint_dataset is not None and (
+            not isinstance(self.checkpoint_dataset, str) or not self.checkpoint_dataset.strip()
+        ):
+            raise InvalidRequestError("RitS model checkpoint_dataset must be non-empty text")
         if not _COMMIT_PATTERN.fullmatch(self.revision):
             raise InvalidRequestError("RitS model revision must be a 40-character git commit")
         if self.checkpoint_sha256 is not None and not _SHA256_PATTERN.fullmatch(
@@ -63,6 +72,7 @@ class RitsModelAsset:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> RitsModelAsset:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         checksum = payload.get("checkpoint_sha256")
         if checksum is not None and not isinstance(checksum, str):
             raise InvalidRequestError("checkpoint_sha256 must be a string when provided")
@@ -81,6 +91,11 @@ class RitsModelAsset:
             ),
             finetune_protocol=str(payload.get("finetune_protocol", "finetune_from")),
             resume_protocol=str(payload.get("resume_protocol", "resume")),
+            revision_kind=str(payload.get("revision_kind", "git-commit")),
+            checkpoint_dataset=(
+                _required_text(payload, "checkpoint_dataset")
+                if payload.get("checkpoint_dataset") is not None else None
+            ),
         )
 
     def resolve_checkpoint(self, root: str | Path = ".") -> Path:
@@ -123,13 +138,10 @@ def load_model_asset(manifest: str | Path = DEFAULT_MODEL_MANIFEST) -> RitsModel
     except tomllib.TOMLDecodeError as exc:
         raise InvalidRequestError(f"invalid RitS model manifest: {manifest_path}") from exc
 
-    payload = document.get("model", document)
+    validate_fields(document, {"schema", "model"}, context="RitS model manifest")
+    if document.get("schema") != "tricycle.rits-model/v1":
+        raise InvalidRequestError("RitS model manifest requires schema tricycle.rits-model/v1")
+    payload = document.get("model")
     if not isinstance(payload, Mapping):
         raise InvalidRequestError("RitS model manifest must contain a [model] table")
     return RitsModelAsset.from_mapping(payload)
-
-
-def load_default_model_asset() -> RitsModelAsset:
-    """Load the component's pinned default RitS checkpoint metadata."""
-
-    return load_model_asset()

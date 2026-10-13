@@ -199,7 +199,6 @@ class ReactionOptPlugin(PluginBase):
                 "schema_version": "tricycle.reactionopt/profile-v1",
                 "reactant_product_conformer_sampling": "independent",
                 "ts_sampling": "rits.run_ts_pipeline",
-                "legacy_product_backward_strategy": False,
                 "ts_pipeline": rits.pipeline.to_dict(),
                 "rits_job_count": len(rits_jobs),
                 "dry_run": context.dry_run,

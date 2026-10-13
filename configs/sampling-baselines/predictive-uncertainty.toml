@@ -1,0 +1,17 @@
+# Zhong et al., Nature Communications 2025, DOI: 10.1038/s41467-025-59812-0
+# Regression variance adaptation of the paper's predictive-entropy ranking.
+strategy = "predictive-uncertainty"
+budget = 2
+seed = 42
+
+[[candidates]]
+candidate_id = "rxn-001"
+payload = { predictive_variance = 0.1 }
+
+[[candidates]]
+candidate_id = "rxn-002"
+payload = { predictive_variance = 0.9 }
+
+[[candidates]]
+candidate_id = "rxn-003"
+payload = { predictive_variance = 0.5 }

@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import csv
-import shlex
 from pathlib import Path
 
 from tricycle_core import timestamped_run_directory
 from tricycle_core.errors import InvalidRequestError
 
 from .config import dump_toml, flatten_sections, load_toml
+from .lifecycle import validate_prepared_chemistry_resources
 from .models import RescueRequest
 from .staging import (
     StagedRun,
     _assert_empty_output,
+    _chemistry_worker,
     _copy_path,
     _prepared_results,
-    _write_env,
     _write_tsv,
 )
 from .utils import compact_name, posix_cksum, worker_label
@@ -25,19 +25,6 @@ def _read_tsv(path: Path) -> list[dict[str, str]]:
         raise InvalidRequestError(f"TSV file not found: {path}")
     with path.open(encoding="utf-8", newline="") as handle:
         return [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
-
-
-def _read_env(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        raise InvalidRequestError(f"environment file not found: {path}")
-    result: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
-            continue
-        key, raw = line.split("=", 1)
-        parsed = shlex.split(raw, comments=False, posix=True)
-        result[key.strip()] = parsed[0] if parsed else ""
-    return result
 
 
 def _summary_statuses(download_dir: Path | None, source_worker: Path) -> dict[str, str]:
@@ -76,16 +63,17 @@ def _download_rows(downloads: Path) -> dict[str, Path]:
     return result
 
 
-def _copy_worker_support(source: Path, target: Path, batch_env: dict[str, str]) -> None:
+def _copy_worker_support(source: Path, target: Path, workflow: dict[str, object]) -> None:
     target.mkdir(parents=True, exist_ok=True)
     (target / "results").mkdir(exist_ok=True)
-    for name in ("work.sh", "run_worker.sh", "dpa-berny.env", "checkpoint"):
+    (target / "work.sh").write_text(_chemistry_worker(str(workflow["engine"])), encoding="utf-8")
+    (target / "work.sh").chmod(0o755)
+    for name in ("dpa-berny.env", "checkpoint"):
         source_file = source / name
         if source_file.is_file():
             _copy_path(source_file, target / name)
-            if name in {"work.sh", "run_worker.sh"}:
-                (target / name).chmod(0o755)
-    for name in (batch_env.get("model_name", ""), batch_env.get("frozen_model", "")):
+    for value in (workflow.get("model_name", ""), workflow.get("frozen_model", "")):
+        name = str(value) if value is not None else ""
         if name and (source / name).is_file() and not (target / name).exists():
             _copy_path(source / name, target / name)
     source_common = source / "common"
@@ -101,12 +89,9 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
     source_run = request.source_run.resolve()
     if not source_run.is_dir():
         raise InvalidRequestError(f"source run directory not found: {source_run}")
-    source_config = load_toml(source_run / "batch.toml") if (source_run / "batch.toml").is_file() else None
-    source_env: dict[str, object] = (
-        flatten_sections(source_config)
-        if source_config is not None
-        else _read_env(source_run / "batch.env")
-    )
+    validate_prepared_chemistry_resources(source_run)
+    source_config = load_toml(source_run / "batch.toml")
+    source_env = flatten_sections(source_config)
     source_submit_plan = _read_tsv(source_run / "submit-plan.tsv")
     source_tasks = _read_tsv(source_run / "tasks.tsv")
     if not source_tasks or "gjf" not in source_tasks[0]:
@@ -223,54 +208,7 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
             }
         )
 
-    new_env = {
-        key: value
-        for key, value in source_env.items()
-        if not isinstance(value, (dict, list, tuple))
-    }
-    new_env.update(
-        {
-            "run_id": run_id,
-            "workers": request.workers,
-            "job_prefix": job_prefix,
-            "job_group_name": group_name,
-            "job_group_id": request.job_group_id or "",
-            "auto_job_group": int(request.auto_job_group),
-        }
-    )
-    _write_env(output / "batch.env", new_env)
-    if source_config is None:
-        source_dataset_paths = []
-        dataset_file = source_run / "dataset-paths.txt"
-        if dataset_file.is_file():
-            source_dataset_paths = [
-                line for line in dataset_file.read_text(encoding="utf-8").splitlines() if line
-            ]
-        source_extra_args = []
-        extra_file = source_run / "submit-extra-args.txt"
-        if extra_file.is_file():
-            source_extra_args = [
-                line for line in extra_file.read_text(encoding="utf-8").splitlines() if line
-            ]
-        new_config: dict[str, object] = {
-            "run": {},
-            "bohr": {
-                "image": source_env.get("image", ""),
-                "project_id": source_env.get("project_id", ""),
-                "machine_type": source_env.get("machine_type", ""),
-                "backward_files": source_env.get("backward_files", ""),
-                "log_file": source_env.get("log_file", "worker.log"),
-                "result_path": source_env.get("result_path", ""),
-                "max_reschedule_times": source_env.get("max_reschedule_times", ""),
-                "max_run_time": source_env.get("max_run_time", ""),
-                "nnode": source_env.get("nnode", ""),
-                "dataset_paths": source_dataset_paths,
-                "extra_submit_args": source_extra_args,
-            },
-            "workflow": {"kind": "dpa-berny-rescue"},
-        }
-    else:
-        new_config = dict(source_config)
+    new_config = dict(source_config)
     run_config = new_config.get("run")
     run_section = dict(run_config) if isinstance(run_config, dict) else {}
     run_section.update(

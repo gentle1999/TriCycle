@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 from tricycle_core import InvalidRequestError, sha256_value
+from tricycle_core.validation import validate_fields
 from tricycle_sampling import Candidate
 
 
@@ -30,6 +31,8 @@ def _strings(value: object, *, field_name: str) -> tuple[str, ...]:
 
 def _integer(value: object, *, field_name: str, default: int) -> int:
     try:
+        if value is not None and not isinstance(value, (str, int, float)):
+            raise TypeError("expected a numeric value")
         return int(default if value is None else value)
     except (TypeError, ValueError) as exc:
         raise InvalidRequestError(f"{field_name} must be an integer") from exc
@@ -67,21 +70,18 @@ class SpaceDefinition:
     @classmethod
     def from_mapping(cls, value: object, *, default_id: str) -> SpaceDefinition:
         raw = _mapping(value, field_name="space")
-        space_id = str(raw.get("space_id", raw.get("id", default_id)))
+        validate_fields(raw, (item.name for item in fields(cls)), context=cls.__name__)
+        space_id = str(raw.get("space_id", default_id))
         version = str(raw.get("version", "1.0.0"))
         definition_value = raw.get("definition")
-        if definition_value is None:
-            definition_value = {
-                key: item
-                for key, item in raw.items()
-                if key not in {"space_id", "id", "version", "source_artifacts"}
-            }
         definition = _mapping(definition_value, field_name="space.definition")
         return cls(
             space_id=space_id,
             version=version,
             definition=definition,
-            source_artifacts=_strings(raw.get("source_artifacts"), field_name="space.source_artifacts"),
+            source_artifacts=_strings(
+                raw.get("source_artifacts"), field_name="space.source_artifacts"
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -114,11 +114,12 @@ class ModelSnapshot:
     @classmethod
     def from_mapping(cls, value: object) -> ModelSnapshot:
         raw = _mapping(value, field_name="model_snapshot")
+        validate_fields(raw, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            snapshot_id=str(raw.get("snapshot_id", raw.get("id", "unspecified"))),
-            checkpoint_hash=str(raw.get("checkpoint_hash", raw.get("sha256", ""))),
+            snapshot_id=str(raw.get("snapshot_id", "unspecified")),
+            checkpoint_hash=str(raw.get("checkpoint_hash", "")),
             score_artifact=str(raw.get("score_artifact", "")),
-            source_run_id=str(raw.get("source_run_id", raw.get("run_id", ""))),
+            source_run_id=str(raw.get("source_run_id", "")),
             metadata=_mapping(raw.get("metadata"), field_name="model_snapshot.metadata"),
         )
 
@@ -153,9 +154,7 @@ class SnapshotTransition:
 
     def __post_init__(self) -> None:
         if self.action not in {"skip", "train", "finetune"}:
-            raise InvalidRequestError(
-                "snapshot transition action must be skip, train, or finetune"
-            )
+            raise InvalidRequestError("snapshot transition action must be skip, train, or finetune")
         if self.status not in {"carried_forward", "planned", "realized"}:
             raise InvalidRequestError(
                 "snapshot transition status must be carried_forward, planned, or realized"
@@ -207,12 +206,13 @@ class RangePolicyConfig:
     @classmethod
     def from_mapping(cls, value: object) -> RangePolicyConfig:
         raw = _mapping(value, field_name="range_policy")
+        validate_fields(raw, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            policy_id=str(raw.get("policy_id", raw.get("id", "fixed-space"))),
+            policy_id=str(raw.get("policy_id", "fixed-space")),
             version=str(raw.get("version", "1.0.0")),
             mode=str(raw.get("mode", "fixed")),
             parameters=_mapping(raw.get("parameters"), field_name="range_policy.parameters"),
-            rationale=str(raw.get("rationale", raw.get("reason", ""))),
+            rationale=str(raw.get("rationale", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -276,11 +276,14 @@ class TrainingPolicyConfig:
     @classmethod
     def from_mapping(cls, value: object) -> TrainingPolicyConfig:
         raw = _mapping(value, field_name="training_policy")
+        validate_fields(raw, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            policy_id=str(raw.get("policy_id", raw.get("id", "rits-training-gate"))),
+            policy_id=str(raw.get("policy_id", "rits-training-gate")),
             version=str(raw.get("version", "1.0.0")),
             mode=str(raw.get("mode", "never")),
-            interval=_integer(raw.get("interval"), field_name="training_policy.interval", default=0),
+            interval=_integer(
+                raw.get("interval"), field_name="training_policy.interval", default=0
+            ),
             min_new_labels=_integer(
                 raw.get("min_new_labels"), field_name="training_policy.min_new_labels", default=0
             ),
@@ -347,9 +350,7 @@ class ExplorationRoundRequest:
     parent_round_id: str = ""
     next_space: SpaceDefinition | None = None
     range_policy: RangePolicyConfig = field(default_factory=RangePolicyConfig)
-    model_snapshot: ModelSnapshot = field(
-        default_factory=lambda: ModelSnapshot("unspecified")
-    )
+    model_snapshot: ModelSnapshot = field(default_factory=lambda: ModelSnapshot("unspecified"))
     next_model_snapshot: ModelSnapshot | None = None
     training_policy: TrainingPolicyConfig = field(default_factory=TrainingPolicyConfig)
     last_training_round: int = -1
@@ -387,7 +388,34 @@ class ExplorationRoundRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ExplorationRoundRequest:
-        exploration_id = str(payload.get("exploration_id", payload.get("experiment_id", "")))
+        validate_fields(
+            payload,
+            {
+                "exploration_id",
+                "round_index",
+                "candidates",
+                "budget",
+                "strategy",
+                "seed",
+                "space",
+                "parent_round_id",
+                "next_space",
+                "range_policy",
+                "model_snapshot",
+                "next_model_snapshot",
+                "training_policy",
+                "training_context",
+                "training_spec",
+                "observed_metrics",
+                "excluded_candidates",
+                "history",
+                "metadata",
+                "output_dir",
+                "resume",
+            },
+            context="exploration round",
+        )
+        exploration_id = str(payload.get("exploration_id", ""))
         round_index = _integer(payload.get("round_index"), field_name="round_index", default=0)
         raw_candidates = payload.get("candidates", ())
         if not isinstance(raw_candidates, (list, tuple)):
@@ -399,8 +427,11 @@ class ExplorationRoundRequest:
                 continue
             if not isinstance(raw_candidate, Mapping):
                 raise InvalidRequestError(f"candidates[{index}] must be a table")
-            candidate_id = str(raw_candidate.get("candidate_id", raw_candidate.get("id", "")))
-            candidate_payload = _mapping(raw_candidate.get("payload"), field_name="candidate.payload")
+            validate_fields(raw_candidate, {"candidate_id", "payload"}, context="candidate")
+            candidate_id = str(raw_candidate.get("candidate_id", ""))
+            candidate_payload = _mapping(
+                raw_candidate.get("payload"), field_name="candidate.payload"
+            )
             candidates.append(Candidate(candidate_id, candidate_payload))
 
         raw_excluded = payload.get("excluded_candidates", ())
@@ -409,7 +440,8 @@ class ExplorationRoundRequest:
         excluded: dict[str, str] = {}
         for index, item in enumerate(raw_excluded):
             if isinstance(item, Mapping):
-                candidate_id = str(item.get("candidate_id", item.get("id", "")))
+                validate_fields(item, {"candidate_id", "reason"}, context="excluded candidate")
+                candidate_id = str(item.get("candidate_id", ""))
                 reason = str(item.get("reason", "excluded_by_request"))
             else:
                 candidate_id = str(item)
@@ -419,28 +451,39 @@ class ExplorationRoundRequest:
             excluded[candidate_id] = reason
 
         history = _mapping(payload.get("history"), field_name="history")
+        validate_fields(history, {"seen_candidate_ids", "exclude_seen"}, context="history")
         seen = _strings(
-            history.get("seen_candidate_ids", payload.get("seen_candidate_ids")),
+            history.get("seen_candidate_ids"),
             field_name="history.seen_candidate_ids",
         )
         exclude_seen = _boolean(
-            history.get("exclude_seen", payload.get("exclude_seen")),
+            history.get("exclude_seen"),
             field_name="history.exclude_seen",
             default=bool(seen),
         )
         training_context = _mapping(payload.get("training_context"), field_name="training_context")
-        output_value = payload.get("output_dir", payload.get("run_dir", payload.get("out_dir")))
+        validate_fields(
+            training_context,
+            {
+                "last_training_round",
+                "new_label_count",
+                "dataset_before_hash",
+                "dataset_after_hash",
+                "previous_checkpoint",
+                "action",
+            },
+            context="training_context",
+        )
+        output_value = payload.get("output_dir", None)
         output_dir = Path(str(output_value)) if output_value not in (None, "") else None
         model_snapshot = ModelSnapshot.from_mapping(payload.get("model_snapshot"))
-        raw_next_snapshot = payload.get("next_model_snapshot", payload.get("next_snapshot"))
+        raw_next_snapshot = payload.get("next_model_snapshot", None)
         next_model_snapshot = (
-            ModelSnapshot.from_mapping(raw_next_snapshot)
-            if raw_next_snapshot is not None
-            else None
+            ModelSnapshot.from_mapping(raw_next_snapshot) if raw_next_snapshot is not None else None
         )
         training_policy = TrainingPolicyConfig.from_mapping(payload.get("training_policy"))
         training_spec = _mapping(
-            payload.get("training_spec", training_context.get("training_spec")),
+            payload.get("training_spec"),
             field_name="training_spec",
         )
         return cls(
@@ -453,10 +496,11 @@ class ExplorationRoundRequest:
             space=SpaceDefinition.from_mapping(
                 payload.get("space"), default_id=f"{exploration_id}/space/{round_index}"
             ),
-            parent_round_id=str(payload.get("parent_round_id", payload.get("parent_round", ""))),
+            parent_round_id=str(payload.get("parent_round_id", "")),
             next_space=(
                 SpaceDefinition.from_mapping(
-                    payload.get("next_space"), default_id=f"{exploration_id}/space/{round_index + 1}"
+                    payload.get("next_space"),
+                    default_id=f"{exploration_id}/space/{round_index + 1}",
                 )
                 if payload.get("next_space") is not None
                 else None
@@ -466,27 +510,19 @@ class ExplorationRoundRequest:
             next_model_snapshot=next_model_snapshot,
             training_policy=training_policy,
             last_training_round=_integer(
-                training_context.get("last_training_round", payload.get("last_training_round")),
+                training_context.get("last_training_round"),
                 field_name="training_context.last_training_round",
                 default=-1,
             ),
             new_label_count=_integer(
-                training_context.get("new_label_count", payload.get("new_label_count")),
+                training_context.get("new_label_count"),
                 field_name="training_context.new_label_count",
                 default=0,
             ),
-            dataset_before_hash=str(
-                training_context.get("dataset_before_hash", payload.get("dataset_before_hash", ""))
-            ),
-            dataset_after_hash=str(
-                training_context.get("dataset_after_hash", payload.get("dataset_after_hash", ""))
-            ),
-            previous_checkpoint=str(
-                training_context.get("previous_checkpoint", payload.get("previous_checkpoint", ""))
-            ),
-            training_action=str(
-                training_context.get("action", payload.get("training_action", ""))
-            ),
+            dataset_before_hash=str(training_context.get("dataset_before_hash", "")),
+            dataset_after_hash=str(training_context.get("dataset_after_hash", "")),
+            previous_checkpoint=str(training_context.get("previous_checkpoint", "")),
+            training_action=str(training_context.get("action", "")),
             training_spec=training_spec,
             observed_metrics=_mapping(
                 payload.get("observed_metrics"), field_name="observed_metrics"
@@ -503,7 +539,6 @@ class ExplorationRoundRequest:
         return {
             "exploration_id": self.exploration_id,
             "round_index": self.round_index,
-            "round_id": self.round_id,
             "parent_round_id": self.parent_round_id,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "budget": self.budget,
@@ -517,17 +552,24 @@ class ExplorationRoundRequest:
                 self.next_model_snapshot.to_dict() if self.next_model_snapshot else None
             ),
             "training_policy": self.training_policy.to_dict(),
-            "last_training_round": self.last_training_round,
-            "new_label_count": self.new_label_count,
-            "dataset_before_hash": self.dataset_before_hash,
-            "dataset_after_hash": self.dataset_after_hash,
-            "previous_checkpoint": self.previous_checkpoint,
-            "training_action": self.training_action,
+            "training_context": {
+                "last_training_round": self.last_training_round,
+                "new_label_count": self.new_label_count,
+                "dataset_before_hash": self.dataset_before_hash,
+                "dataset_after_hash": self.dataset_after_hash,
+                "previous_checkpoint": self.previous_checkpoint,
+                "action": self.training_action,
+            },
             "training_spec": dict(self.training_spec),
             "observed_metrics": dict(self.observed_metrics),
-            "excluded_candidates": dict(self.excluded_candidates),
-            "seen_candidate_ids": list(self.seen_candidate_ids),
-            "exclude_seen": self.exclude_seen,
+            "excluded_candidates": [
+                {"candidate_id": candidate_id, "reason": reason}
+                for candidate_id, reason in self.excluded_candidates.items()
+            ],
+            "history": {
+                "seen_candidate_ids": list(self.seen_candidate_ids),
+                "exclude_seen": self.exclude_seen,
+            },
             "metadata": dict(self.metadata),
             "output_dir": str(self.output_dir) if self.output_dir else "",
             "resume": self.resume,

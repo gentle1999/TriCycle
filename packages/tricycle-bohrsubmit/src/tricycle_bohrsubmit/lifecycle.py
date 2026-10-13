@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import csv
-import hashlib
-import io
 import json
-import os
-import shlex
 import tempfile
 import time
 import zipfile
-import zlib
-from contextlib import suppress
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from tricycle_core import Artifact, BohrJobSpec
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.io import atomic_write_text as _atomic_write_text
+from tricycle_core.io import file_sha256 as _sha256_file
+from tricycle_core.io import write_delimited
+from tricycle_core.protocols import BohrDownloadGateway, BohrStatusGateway
 
+from .archives import archive_infos as _archive_infos
+from .archives import extract_archive as _safe_extract
+from .archives import safe_member_target as _safe_member_target
+from .archives import validate_archive as _validate_archive
 from .config import flatten_sections, load_toml
 from .gateway import BohrWorkflowGateway
+from .models import validate_chemistry_resources
 
 SUBMIT_FIELDS = ("worker", "tasks", "job_id", "job_name", "status", "input_dir")
 STATUS_FIELDS = (
@@ -35,18 +40,9 @@ STATUS_FIELDS = (
     "checked_at",
 )
 DOWNLOAD_FIELDS = ("worker", "tasks", "job_id", "job_name", "status", "download_dir")
-_BOHR_ID_MAP = "bohr-id-map.tsv"
 _DOWNLOAD_MANIFEST = "download-manifest.txt"
 _DOWNLOAD_MARKER = ".bohr-download-unzipped"
 _DOWNLOAD_STATE_VERSION = 1
-_INTERNAL_ID_FIELDS = ("job_id", "internal_job_id", "internal_id", "id")
-_PUBLIC_ID_FIELDS = (
-    "bohr_id",
-    "bohrId",
-    "bohr_job_id",
-    "bohrJobId",
-    "public_job_id",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,20 +63,8 @@ class LifecycleSummary:
         }
 
 
-def _write_tsv(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t", lineterminator="\n")
-        writer.writeheader()
-        writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
-
-
-def _write_tsv_atomic(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:
-    buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=fields, delimiter="\t", lineterminator="\n")
-    writer.writeheader()
-    writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
-    _atomic_write_text(path, buffer.getvalue())
+def _write_tsv(path: Path, fields: tuple[str, ...], rows: Sequence[Mapping[str, object]]) -> None:
+    write_delimited(path, fields, rows, delimiter="\t")
 
 
 def _read_tsv(path: Path) -> list[dict[str, str]]:
@@ -90,146 +74,43 @@ def _read_tsv(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
 
 
-def _read_env(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        raise InvalidRequestError(f"environment file not found: {path}")
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
-            continue
-        key, raw = line.split("=", 1)
-        try:
-            parsed = shlex.split(raw, comments=False, posix=True)
-        except ValueError as exc:
-            raise InvalidRequestError(f"invalid environment line in {path}: {line}") from exc
-        values[key.strip()] = parsed[0] if parsed else ""
-    return values
-
-
 def read_run_config(run_dir: Path) -> dict[str, object]:
-    """Read declarative run metadata, retaining legacy env compatibility."""
-
-    toml_path = run_dir / "batch.toml"
-    if toml_path.is_file():
-        return flatten_sections(load_toml(toml_path))
-    return _read_env(run_dir / "batch.env")
-
-
-def _job_group_id_for_run(run_dir: Path) -> str | None:
-    """Return the group id used by the Bohr CLI for this prepared run."""
-
-    if not ((run_dir / "batch.toml").is_file() or (run_dir / "batch.env").is_file()):
-        return None
-    config = read_run_config(run_dir)
-    value = config.get("job_group_id")
-    group_id = str(value or "").strip()
-    return group_id or None
-
-
-def _read_job_id_map(run_dir: Path) -> tuple[tuple[str, ...], list[dict[str, str]]]:
-    path = run_dir / _BOHR_ID_MAP
+    """Read the prepared batch TOML metadata."""
+    path = run_dir / "batch.toml"
     if not path.is_file():
-        return (), []
-    try:
-        with path.open(encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle, delimiter="\t")
-            fields = tuple(reader.fieldnames or ())
-            if not fields:
-                raise InvalidRequestError(f"Bohr id map has no header: {path}")
-            return fields, [dict(row) for row in reader]
-    except (OSError, UnicodeError, csv.Error) as exc:
-        raise InvalidRequestError(f"cannot read Bohr id map: {path}") from exc
-
-
-def _first_row_value(row: dict[str, str], fields: tuple[str, ...]) -> str:
-    for field in fields:
-        value = str(row.get(field, "") or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _read_job_id_aliases(run_dir: Path) -> dict[str, str]:
-    _, rows = _read_job_id_map(run_dir)
-    aliases: dict[str, str] = {}
-    for row in rows:
-        internal_id = _first_row_value(row, _INTERNAL_ID_FIELDS)
-        public_id = _first_row_value(row, _PUBLIC_ID_FIELDS)
-        if internal_id and public_id:
-            aliases[internal_id] = public_id
-    return aliases
-
-
-def _persist_job_id_alias(run_dir: Path, internal_id: str, public_id: str) -> None:
-    path = run_dir / _BOHR_ID_MAP
-    fields, rows = _read_job_id_map(run_dir)
-    mutable_fields = list(fields or ("internal_job_id", "bohr_id"))
-    internal_field = next(
-        (field for field in mutable_fields if field in _INTERNAL_ID_FIELDS),
-        "internal_job_id",
-    )
-    public_field = next(
-        (field for field in mutable_fields if field in _PUBLIC_ID_FIELDS),
-        "bohr_id",
-    )
-    for field in (internal_field, public_field):
-        if field not in mutable_fields:
-            mutable_fields.append(field)
-    for row in rows:
-        if _first_row_value(row, (internal_field, *_INTERNAL_ID_FIELDS)) == internal_id:
-            row[public_field] = public_id
-            break
-    else:
-        rows.append({internal_field: internal_id, public_field: public_id})
-    _write_tsv_atomic(path, tuple(mutable_fields), rows)
-
-
-def _resolve_job_id(
-    run_dir: Path,
-    gateway: BohrWorkflowGateway,
-    job_id: str,
-    *,
-    job_group_id: str | None,
-    aliases: dict[str, str] | None = None,
-) -> str:
-    """Resolve legacy platform ids when the injected adapter supports it."""
-
-    identifier = str(job_id).strip()
-    if not identifier:
-        raise InvalidRequestError("job id must not be empty")
-    known_aliases = aliases if aliases is not None else _read_job_id_aliases(run_dir)
-    known = known_aliases.get(identifier)
-    if known:
-        return known
-
-    resolver = getattr(gateway, "resolve_job_id", None)
-    resolved = resolver(identifier, job_group_id=job_group_id) if callable(resolver) else identifier
-    resolved_id = str(resolved).strip()
-    if not resolved_id:
-        raise InvalidRequestError(f"Bohr adapter resolved an empty job id for {identifier}")
-    if resolved_id != identifier:
-        _persist_job_id_alias(run_dir, identifier, resolved_id)
-    known_aliases[identifier] = resolved_id
-    return resolved_id
+        raise InvalidRequestError(f"batch configuration not found: {path}")
+    return flatten_sections(load_toml(path))
 
 
 def read_submit_rows(run_dir: Path) -> list[dict[str, str]]:
+    if (run_dir / "bohr-id-map.tsv").exists():
+        raise InvalidRequestError("Internal-ID migration runs are unsupported; supply public Bohr IDs in a new request")
     return _read_tsv(run_dir / "submit-results.tsv")
 
 
-def _run_list(run_dir: Path, config: dict[str, object], key: str, legacy_name: str) -> list[str]:
+def _run_list(config: dict[str, object], key: str) -> list[str]:
     value = config.get(key)
     if isinstance(value, (list, tuple)):
         return [str(item) for item in value if str(item)]
     if isinstance(value, str) and value:
         return [value]
-    legacy_path = run_dir / legacy_name
-    if legacy_path.is_file():
-        return [line for line in legacy_path.read_text(encoding="utf-8").splitlines() if line]
     return []
 
 
+def validate_prepared_chemistry_resources(run_dir: Path) -> None:
+    config = read_run_config(run_dir)
+    engine = str(config.get("engine", ""))
+    if not engine and not any(run_dir.glob("worker-*/dpa-berny.env")):
+        return
+    validate_chemistry_resources(
+        engine,
+        str(config.get("machine_type", "")),
+        tuple(_run_list(config, "extra_submit_args")),
+    )
+
+
 def job_for_row(run_dir: Path, row: dict[str, str], *, job_group_id: str | None = None) -> BohrJobSpec:
+    validate_prepared_chemistry_resources(run_dir)
     config = read_run_config(run_dir)
     worker = row.get("worker", "")
     input_dir = row.get("input_dir", "")
@@ -238,9 +119,9 @@ def job_for_row(run_dir: Path, row: dict[str, str], *, job_group_id: str | None 
     is_dpa = (run_dir / worker / "work.sh").is_file() and (run_dir / worker / "dpa-berny.env").is_file()
     log_file = str(config.get("log_file", "worker.log"))
     command = f"bash {'work.sh' if is_dpa else 'run_worker.sh'} > {log_file} 2>&1"
-    dataset_paths = _run_list(run_dir, config, "dataset_paths", "dataset-paths.txt")
+    dataset_paths = _run_list(config, "dataset_paths")
     extra_submit_args = _run_list(
-        run_dir, config, "extra_submit_args", "submit-extra-args.txt"
+        config, "extra_submit_args"
     )
     parameters: dict[str, object] = {
         "input_directory": input_dir,
@@ -315,13 +196,11 @@ def classify_status(value: object) -> tuple[bool, str]:
     return False, "UNKNOWN"
 
 
-def status_run(run_dir: Path, gateway: BohrWorkflowGateway) -> tuple[Path, LifecycleSummary]:
+def status_run(run_dir: Path, gateway: BohrStatusGateway) -> tuple[Path, LifecycleSummary]:
     rows: list[dict[str, object]] = []
     query_failed = 0
     succeeded = failed = incomplete = skipped = 0
     checked_at = datetime.now(UTC).isoformat()
-    job_group_id = _job_group_id_for_run(run_dir)
-    job_id_aliases = _read_job_id_aliases(run_dir)
     for source in read_submit_rows(run_dir):
         row: dict[str, object] = {
             "worker": source.get("worker", ""),
@@ -350,14 +229,7 @@ def status_run(run_dir: Path, gateway: BohrWorkflowGateway) -> tuple[Path, Lifec
                 incomplete += 1
         else:
             try:
-                resolved_job_id = _resolve_job_id(
-                    run_dir,
-                    gateway,
-                    job_id,
-                    job_group_id=job_group_id,
-                    aliases=job_id_aliases,
-                )
-                remote = gateway.status(resolved_job_id)
+                remote = gateway.status(job_id)
                 raw_status = remote.get("status", "")
                 terminal, result = classify_status(raw_status)
                 row["job_status"] = raw_status
@@ -383,75 +255,7 @@ def status_run(run_dir: Path, gateway: BohrWorkflowGateway) -> tuple[Path, Lifec
     return output, LifecycleSummary(len(rows), succeeded, failed, incomplete, skipped)
 
 
-def _safe_member_target(destination: Path, member_name: str) -> Path:
-    root = destination.resolve()
-    target = (destination / member_name).resolve()
-    if target != root and root not in target.parents:
-        raise InvalidRequestError(f"unsafe archive member: {member_name}")
-    return target
 
-
-def _archive_infos(zip_path: Path, destination: Path) -> tuple[zipfile.ZipInfo, ...]:
-    try:
-        with zipfile.ZipFile(zip_path) as archive:
-            infos = tuple(archive.infolist())
-            for member in infos:
-                _safe_member_target(destination, member.filename)
-            return infos
-    except (OSError, EOFError, RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
-        raise InvalidRequestError(f"invalid Bohr download archive: {zip_path}") from exc
-
-
-def _validate_archive(
-    zip_path: Path, destination: Path
-) -> tuple[zipfile.ZipInfo, ...]:
-    infos = _archive_infos(zip_path, destination)
-    try:
-        with zipfile.ZipFile(zip_path) as archive:
-            bad_member = archive.testzip()
-    except (OSError, EOFError, RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
-        raise InvalidRequestError(f"invalid Bohr download archive: {zip_path}") from exc
-    if bad_member is not None:
-        raise InvalidRequestError(
-            f"corrupt Bohr download archive {zip_path}: member {bad_member} failed CRC"
-        )
-    return infos
-
-
-def _safe_extract(zip_path: Path, destination: Path) -> tuple[str, ...]:
-    extracted: list[str] = []
-    with zipfile.ZipFile(zip_path) as archive:
-        for member in archive.infolist():
-            target = _safe_member_target(destination, member.filename)
-            archive.extract(member, destination)
-            if not member.is_dir():
-                extracted.append(str(target))
-    return tuple(extracted)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=str(path.parent)
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        with suppress(FileNotFoundError):
-            os.unlink(temporary_name)
-        raise
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _archive_fingerprint(path: Path) -> dict[str, object]:
@@ -469,8 +273,6 @@ def _read_archive_marker(path: Path) -> dict[str, object] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        # Empty markers were written by older TriCycle versions.  They are
-        # migrated after the archive and extracted members pass validation.
         return None
     if not isinstance(value, dict) or value.get("version") != _DOWNLOAD_STATE_VERSION:
         return None
@@ -551,16 +353,7 @@ def _archive_is_current(archive: Path, destination: Path) -> bool:
     marker = archive.parent / _DOWNLOAD_MARKER
     state = _read_archive_marker(marker)
     if state is None:
-        if not marker.exists():
-            return False
-        try:
-            infos = _validate_archive(archive, destination)
-            if _member_stats(destination, infos) is None:
-                return False
-            _write_archive_marker(archive, destination, infos)
-            return True
-        except (InvalidRequestError, OSError):
-            return False
+        return False
 
     try:
         _archive_infos(archive, destination)
@@ -689,7 +482,7 @@ def _install_download(staging: Path, destination: Path) -> None:
 
 
 def _download_worker(
-    gateway: BohrWorkflowGateway,
+    gateway: BohrDownloadGateway,
     external_id: str,
     destination: Path,
     output: Path,
@@ -716,9 +509,8 @@ def _download_worker(
 
 def download_run(
     run_dir: Path,
-    gateway: BohrWorkflowGateway,
+    gateway: BohrDownloadGateway,
     *,
-    only_succeeded: bool = False,
     continue_on_error: bool = False,
     resume: bool = False,
     unzip: bool = True,
@@ -726,22 +518,19 @@ def download_run(
     """Download every submitted worker that has a job ID.
 
     ``FAILED`` is a worker-level status and does not imply that every task in
-    that worker failed.  Keep ``only_succeeded`` as a compatibility argument,
-    but do not use it to discard terminal worker results: partial logs and
-    task outputs are often needed for recovery and diagnosis.
+    that worker failed. Partial logs and task outputs from every submitted
+    worker are needed for recovery and diagnosis.
     """
 
-    del only_succeeded
     output = run_dir / "downloads"
     output.mkdir(parents=True, exist_ok=True)
-    job_group_id = _job_group_id_for_run(run_dir)
     rows: list[dict[str, object]] = []
     succeeded = failed = skipped = 0
-    job_id_aliases = _read_job_id_aliases(run_dir)
     for source in read_submit_rows(run_dir):
         worker = source.get("worker", "")
         job_id = source.get("job_id", "")
-        destination = output / f"{worker}-job-{job_id or 'none'}"
+        # Gateway IDs are opaque identifiers, not directory components.
+        destination = output / f"{quote(worker, safe='')}-job-{quote(job_id or 'none', safe='')}"
         status = ""
         if not job_id:
             status = "SKIPPED_NO_JOB_ID"
@@ -779,16 +568,9 @@ def download_run(
                         "rerun with resume=True to repair it"
                     ) from validation_error
                 else:
-                    resolved_job_id = _resolve_job_id(
-                        run_dir,
-                        gateway,
-                        job_id,
-                        job_group_id=job_group_id,
-                        aliases=job_id_aliases,
-                    )
                     _download_worker(
                         gateway,
-                        resolved_job_id,
+                        job_id,
                         destination,
                         output,
                         unzip=unzip,
@@ -842,8 +624,6 @@ def terminate_run(
         status_file, _ = status_run(run_dir, gateway)
     wanted = {item.upper() for item in wanted_results}
     workers = set(wanted_workers)
-    job_group_id = _job_group_id_for_run(run_dir)
-    job_id_aliases = _read_job_id_aliases(run_dir)
     rows: list[dict[str, object]] = []
     for row in _read_tsv(status_file):
         if not row.get("job_id"):
@@ -857,19 +637,13 @@ def terminate_run(
         action = "TERMINATED"
         exit_code = "0"
         try:
-            resolved_job_id = _resolve_job_id(
-                run_dir,
-                gateway,
-                row["job_id"],
-                job_group_id=job_group_id,
-                aliases=job_id_aliases,
-            )
-            output = gateway.terminate(resolved_job_id)
+            output = gateway.terminate(row["job_id"])
         except Exception as exc:
             action = "FAILED"
             exit_code = "1"
             output = str(exc)
-        output_file = run_dir / "terminate-outputs" / f"{row['worker']}-job-{row['job_id']}.out"
+        output_name = f"{quote(row['worker'], safe='')}-job-{quote(row['job_id'], safe='')}.out"
+        output_file = run_dir / "terminate-outputs" / output_name
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(output, encoding="utf-8")
         rows.append(

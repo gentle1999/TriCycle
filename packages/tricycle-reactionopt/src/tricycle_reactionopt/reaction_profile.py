@@ -25,8 +25,8 @@ from .models import ConformerSamplingConfig
 from .rits import (
     RitsInferenceConfig,
     RitsTransitionStateInput,
+    RitsTransitionStateResult,
     RitsTransitionStateSampler,
-    coerce_sampler_result,
     molecule_to_xyz,
     normalize_transition_state_structures,
 )
@@ -167,11 +167,10 @@ class Species:
     def optimize(
         self,
         config: ConformerSamplingConfig | None = None,
-        **overrides: Any,
     ) -> Species:
         from .conformers import sample_conformer_ensemble
 
-        resolved = _resolve_sampling_config(config, **overrides)
+        resolved = config or ConformerSamplingConfig()
         self.mol = sample_conformer_ensemble(self.mol, resolved, side=self.side)
         return self
 
@@ -570,22 +569,6 @@ class Reaction:
             side="products",
         )
 
-    def sample_endpoint_conformers(
-        self,
-        config: ConformerSamplingConfig | None = None,
-    ) -> tuple[Any, Any]:
-        """Return both endpoint pools as a convenience.
-
-        The profile builder calls the two branch methods directly.  This
-        wrapper is retained for callers that want both independent pools at
-        once.
-        """
-
-        return (
-            self.sample_reactant_conformers(config),
-            self.sample_product_conformers(config),
-        )
-
     def plan_rits_jobs(
         self,
         *,
@@ -630,13 +613,11 @@ class Reaction:
             reactant_smiles=self.reactant_smiles,
             product_smiles=self.product_smiles,
         )
-        if hasattr(sampler, "sample"):
-            sampled = sampler.sample(request)
-        elif callable(sampler):
-            sampled = sampler(request)
-        else:
+        if not callable(getattr(sampler, "sample", None)):
             raise InvalidRequestError("RitS sampler must implement sample(request)")
-        rits_result = coerce_sampler_result(sampled)
+        rits_result = sampler.sample(request)
+        if not isinstance(rits_result, RitsTransitionStateResult):
+            raise InvalidRequestError("RitS sampler must return RitsTransitionStateResult")
         structures = normalize_transition_state_structures(
             rits_result.structures,
             self._merged_reactants,
@@ -662,7 +643,6 @@ class Reaction:
                 "builder_name": "rits-transition-state-sampling",
                 "builder_type": "external-model",
                 "inference_count": 1,
-                "legacy_product_backward_strategy": False,
                 "ts_pipeline": rits_config.pipeline.to_dict(),
                 "pipeline_result": dict(rits_result.metadata),
                 "rits": rits_config.to_dict(),
@@ -696,7 +676,6 @@ class Reaction:
                 "reactant_product_conformer_sampling": "independent",
                 "ts_sampling": "rits.run_ts_pipeline",
                 "ts_pipeline": dict(transition_states.metadata),
-                "legacy_product_backward_strategy": False,
             },
         )
 
@@ -741,8 +720,6 @@ class Reaction:
         }
 
 
-MappedReaction = Reaction
-MappedReactionProfile = ReactionProfile
 
 
 def _combine_species(species: Sequence[Species]) -> Any:
@@ -817,33 +794,6 @@ def _add_zero_order_bonds(molecule: Any, changed_bonds: Any) -> Any:
         # differ in how much sanitization they permit, so keep the graph if the
         # optional normalization rejects it.
     return result.GetMol()
-
-
-def _resolve_sampling_config(
-    config: ConformerSamplingConfig | None = None,
-    **overrides: Any,
-) -> ConformerSamplingConfig:
-    supplied = {key: value for key, value in overrides.items() if value is not None}
-    aliases = {
-        "target_confs": "target_conformers",
-        "force_field": "force_field",
-        "num_threads": "num_threads",
-        "max_steps": "max_iterations",
-        "fmax": "fmax",
-        "add_hs": "add_hs",
-    }
-    unknown = sorted(set(supplied) - set(aliases))
-    if unknown:
-        raise InvalidRequestError("unknown conformer sampling overrides: " + ", ".join(unknown))
-    normalized = {aliases[key]: value for key, value in supplied.items() if key in aliases}
-    if config is None:
-        return ConformerSamplingConfig(**normalized)
-    if normalized:
-        raise InvalidRequestError(
-            "sampling config cannot be combined with target_confs/force_field/"
-            "num_threads/max_steps/fmax/add_hs overrides"
-        )
-    return config
 
 
 def _write_structure(molecule: Any, destination: Path, output_format: str) -> None:
@@ -931,8 +881,6 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 
 __all__ = [
-    "MappedReaction",
-    "MappedReactionProfile",
     "Reaction",
     "ReactionPathContext",
     "ReactionProfile",

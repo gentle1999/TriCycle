@@ -1,0 +1,21 @@
+schema_version = 2
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[models]
+
+[models.molclr]
+repository = "https://github.com/yuyangw/MolCLR"
+revision = "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+mode = "base-venv"
+package = false
+runtime_only = true
+requirements = ["rdkit==2026.3.5"]
+source_paths = []
+modules = ["torch_geometric", "rdkit"]
+require_cuda = true
+local_wheels = [{"path" = "wheels/torch_geometric-2.6.1-py3-none-any.whl", "sha256" = "8faeb353f9655f7dbec44c5e0b44c721773bdfb279994da96b9b8b12fd30f427"}]
+
+[framework]
+bootstrap_build_tools = false
+no_build_isolation = false

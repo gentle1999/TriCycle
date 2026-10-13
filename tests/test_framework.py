@@ -11,7 +11,7 @@ from tricycle_reaction_db import (
 from tricycle_reactionopt import ReactionConfigRequest, ReactionOptPlugin
 from tricycle_rits import RitsPlugin
 from tricycle_sampling import Candidate, SamplingPlugin, SamplingRequest
-from tricycle_sar import SarPlugin
+from tricycle_sar import SarPlugin, build_inference_command, build_training_command, get_backend
 
 
 class FrameworkSmokeTests(unittest.TestCase):
@@ -45,11 +45,11 @@ class FrameworkSmokeTests(unittest.TestCase):
             "train",
             {
                 "model_name": "sar-v1",
-                "image": "sar/image",
+                "image": get_backend("rxnresid").environment["image"],
                 "dataset": dataset,
                 "code_artifact": code,
                 "input_directory": "/workspace/job",
-                "command": ["bash", "run.sh"],
+                "command": list(build_training_command(fold_index=0)),
             },
             self.context,
         )
@@ -57,11 +57,11 @@ class FrameworkSmokeTests(unittest.TestCase):
             "infer",
             {
                 "model_name": "sar-v1",
-                "image": "sar/image",
+                "image": get_backend("rxnresid").environment["image"],
                 "checkpoint": checkpoint,
                 "code_artifact": code,
                 "input_directory": "/workspace/job",
-                "command": ["bash", "run.sh"],
+                "command": list(build_inference_command(checkpoint="runs/model.pt")),
             },
             self.context,
         )
@@ -84,7 +84,7 @@ class FrameworkSmokeTests(unittest.TestCase):
         self.assertEqual(rits_train.parameters["bohr_job"]["operation"], "rits.train")
 
         submit_context = ExecutionContext(run_id="submit-run", dry_run=False)
-        result = sar.submit_to_bohr(sar_train, DryRunBohrGateway(), submit_context)
+        result = rits.submit_to_bohr(rits_train, DryRunBohrGateway(), submit_context)
         self.assertEqual(result.status, TaskStatus.SUBMITTED)
 
     def test_reaction_record_can_be_upserted(self) -> None:

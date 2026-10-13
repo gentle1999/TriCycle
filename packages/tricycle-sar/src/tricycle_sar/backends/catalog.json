@@ -1,0 +1,441 @@
+{
+  "schema": "tricycle.sar.backends/v2",
+  "provider": {
+    "entrypoint": "tricycle_sar.backends.registry:load_registry",
+    "sha256": "c01dd7c4b041ab72f6f9ab092c3b7e49fe8c09daa33aab9b0db745135692d410"
+  },
+  "integrity": {
+    "path": "SHA256SUMS",
+    "sha256": "f65d10d2e79c340d2b2ed219468de4965f53551f6e196f2a25f5d5bc3d7c01e3"
+  },
+  "experiment_defaults": {
+    "models": [
+      "fingerprint_rf",
+      "fingerprint_extra_trees",
+      "fingerprint_ridge",
+      "molclr",
+      "chemprop_cgr",
+      "chemprop_multicomponent",
+      "t5chem",
+      "rxnresid",
+      "uam",
+      "reactiont5",
+      "rxngraphormer"
+    ],
+    "dataset": {
+      "target": "G_T_activate",
+      "target_unit": "kcal/mol",
+      "row_id": "path_id",
+      "smiles_column": "rxn_smiles",
+      "group_columns": [
+        "ene_id",
+        "diene_id"
+      ],
+      "reaction_energy_column": "reaction_free_energy"
+    },
+    "split": {
+      "folds": 5,
+      "seed": 42,
+      "validation_fraction": 0.125
+    }
+  },
+  "environments": {
+    "classical": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c16_m64_cpu",
+      "environment_mode": "system-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_model_envs/recipes.toml": "environments/classical.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "molclr": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_model_envs/recipes.toml": "environments/molclr.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "chemprop": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/chemprop.tar.gz": "sources/chemprop.tar.gz",
+        "common/sar_model_envs/recipes.toml": "environments/chemprop-native.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "t5chem": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/sar_model_envs/recipes.toml": "environments/t5chem-native.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/t5chem.tar.gz": "sources/t5chem.tar.gz",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "rxnresid": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/rxnresid.tar.gz": "sources/rxnresid.tar.gz",
+        "common/sar_model_envs/recipes.toml": "environments/rxnresid-image.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "reactiont5": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/reactiont5.tar.gz": "sources/reactiont5.tar.gz",
+        "common/sar_model_envs/recipes.toml": "environments/reactiont5-native.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "rxngraphormer": {
+      "executor": "internal-ssh-docker",
+      "image": "tricycle/rits-training:torch2.12.0-cu130",
+      "machine_type": "RTX PRO 6000 Blackwell",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/micromamba": {
+          "sha256": "9496f94a8b78c536573c93d946ec9bba74bd9ff79ee55aaa4b546e30db8f511b",
+          "bytes": 17058840
+        },
+        "common/rxngraphormer.tar.gz": "sources/rxngraphormer.tar.gz",
+        "common/sar_model_envs/recipes.toml": "environments/rxngraphormer-internal.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/wheels/README.txt": "runtime/wheels/README.txt",
+        "common/wheels/torch_scatter-2.1.2+pt212cu130-cp312-cp312-linux_x86_64.whl": {
+          "sha256": "3a35d194efa65083f698786a80b09171168abc2466a7be0bc7381acd5f1fc4e4",
+          "bytes": 8321347
+        },
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    },
+    "uam": {
+      "executor": "bohr",
+      "image": "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828",
+      "machine_type": "c6_m60_1 * NVIDIA 4090",
+      "environment_mode": "base-venv",
+      "torch_reinstallation": false,
+      "files": {
+        "common/sar_stage.py": "stage.py",
+        "common/sar_worker_common.sh": "workers/base/sar_worker_common.sh",
+        "common/sar_runtime/io.py": "../../../../tricycle-core/src/tricycle_core/io.py",
+        "common/sar_runtime/toml.py": "../../../../tricycle-core/src/tricycle_core/toml.py",
+        "common/sar_runtime/errors.py": "../../../../tricycle-core/src/tricycle_core/errors.py",
+        "common/sar_runtime/metrics.py": "../../../../tricycle-core/src/tricycle_core/metrics.py",
+        "common/sar_runtime/training_protocol.py": "../../../../tricycle-core/src/tricycle_core/training_protocol.py",
+        "common/sar_execution.py": "execution.py",
+        "common/sar_model_envs/engine.py": "environments/engine.py",
+        "common/sar_model_envs/recipes.toml": "environments/uam.toml",
+        "common/sar_model_envs/verify.py": "../environment/verify.py",
+        "common/sar_runtime/sar_commands.py": "../commands.py",
+        "common/sar_runtime/rxnresid.py": "../rxnresid.py"
+      }
+    }
+  },
+  "runs": {
+    "classical": {
+      "bundle_name": "classical_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "configs/tricycle-classical.template.toml": "configs/tricycle-classical.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_classical.py": "../classical_runner.py"
+      },
+      "config_template": "configs/tricycle-classical.template.toml",
+      "config_name": "configs/tricycle-classical.toml"
+    },
+    "molclr": {
+      "bundle_name": "molecular_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "assets/molclr/LICENSE": "assets/molclr/LICENSE",
+        "assets/molclr/README.md": "assets/molclr/README.md",
+        "assets/molclr/ckpt/pretrained_gin/checkpoints/model.pth": {
+          "sha256": "93bc4f02ea8847cd44fa21ec3f65600ff2f4a7ae6d3a85e8519a5bcc56afc20a",
+          "bytes": 9649766
+        },
+        "assets/molclr/config.yaml": "assets/molclr/config.yaml",
+        "assets/molclr/config_finetune.yaml": "assets/molclr/config_finetune.yaml",
+        "assets/molclr/dataset/dataset.py": "assets/molclr/dataset/dataset.py",
+        "assets/molclr/dataset/dataset_test.py": "assets/molclr/dataset/dataset_test.py",
+        "assets/molclr/models/ginet_finetune.py": "assets/molclr/models/ginet_finetune.py",
+        "assets/molclr/models/ginet_molclr.py": "assets/molclr/models/ginet_molclr.py",
+        "assets/wheels/torch_geometric-2.6.1-py3-none-any.whl": "assets/wheels/torch_geometric-2.6.1-py3-none-any.whl",
+        "configs/tricycle-molclr.template.toml": "configs/tricycle-molclr.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_molecular.py": "../molecular_runner.py"
+      },
+      "config_template": "configs/tricycle-molclr.template.toml",
+      "config_name": "configs/tricycle-molclr.toml"
+    },
+    "chemprop": {
+      "bundle_name": "native_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_native_runner.py": "native_runner.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_model_adapters/__init__.py": "native/scripts/tricycle_model_adapters/__init__.py",
+        "scripts/tricycle_model_adapters/workflow_adapters/__init__.py": "native/scripts/tricycle_model_adapters/workflow_adapters/__init__.py",
+        "scripts/tricycle_model_adapters/workflow_adapters/chemprop.py": "native/scripts/tricycle_model_adapters/workflow_adapters/chemprop.py",
+        "scripts/tricycle_model_adapters/workflow_common.py": "native/scripts/tricycle_model_adapters/workflow_common.py"
+      }
+    },
+    "t5chem": {
+      "bundle_name": "native_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_native_runner.py": "native_runner.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_model_adapters/__init__.py": "native/scripts/tricycle_model_adapters/__init__.py",
+        "scripts/tricycle_model_adapters/workflow_adapters/__init__.py": "native/scripts/tricycle_model_adapters/workflow_adapters/__init__.py",
+        "scripts/tricycle_model_adapters/workflow_adapters/t5chem.py": "native/scripts/tricycle_model_adapters/workflow_adapters/t5chem.py",
+        "scripts/tricycle_model_adapters/workflow_common.py": "native/scripts/tricycle_model_adapters/workflow_common.py"
+      }
+    },
+    "rxnresid": {
+      "bundle_name": "training_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_complete_train_runner.py": "complete_runner.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/sar_additional_probe.py": "../diagnostics/model_probe.py"
+      }
+    },
+    "uam": {
+      "bundle_name": "molecular_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "assets/uam/README.md": "assets/uam/README.md",
+        "assets/uam/config.yaml": "assets/uam/config.yaml",
+        "assets/uam/dataset/__init__.py": "assets/uam/dataset/__init__.py",
+        "assets/uam/dataset/chemdata.py": "assets/uam/dataset/chemdata.py",
+        "assets/uam/dataset/rxndataset.py": "assets/uam/dataset/rxndataset.py",
+        "assets/uam/dataset/utils.py": "assets/uam/dataset/utils.py",
+        "assets/uam/model/__init__.py": "assets/uam/model/__init__.py",
+        "assets/uam/model/encoders.py": "assets/uam/model/encoders.py",
+        "assets/uam/model/mmmodel.py": "assets/uam/model/mmmodel.py",
+        "assets/uam/pretrain.py": "assets/uam/pretrain.py",
+        "assets/uam/sweep.py": "assets/uam/sweep.py",
+        "assets/uam/tokenizer/config.json": "assets/uam/tokenizer/config.json",
+        "assets/uam/tokenizer/special_tokens_map.json": "assets/uam/tokenizer/special_tokens_map.json",
+        "assets/uam/tokenizer/spiece.model": "assets/uam/tokenizer/spiece.model",
+        "assets/uam/tokenizer/tokenizer.json": "assets/uam/tokenizer/tokenizer.json",
+        "assets/uam/tokenizer/tokenizer_config.json": "assets/uam/tokenizer/tokenizer_config.json",
+        "assets/uam/train.py": "assets/uam/train.py",
+        "assets/uam/utils.py": "assets/uam/utils.py",
+        "configs/tricycle-uam.template.toml": "configs/tricycle-uam.toml",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_molecular.py": "../molecular_runner.py"
+      },
+      "config_template": "configs/tricycle-uam.template.toml",
+      "config_name": "configs/tricycle-uam.toml"
+    },
+    "reactiont5": {
+      "bundle_name": "training_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "assets/config.json": "assets/config.json",
+        "assets/pytorch_model.bin": {
+          "sha256": "29f5cc9a91aaa74b768d348d18f1bf0e01914f480102cf94142015a6a52cb3d9",
+          "bytes": 800968726
+        },
+        "assets/special_tokens_map.json": "assets/special_tokens_map.json",
+        "assets/tokenizer.json": "assets/tokenizer.json",
+        "assets/tokenizer_config.json": "assets/tokenizer_config.json",
+        "probe.json": "runtime/training_bundle/probe.json",
+        "reactiont5.json": "runtime/training_bundle/reactiont5.json",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_complete_train_runner.py": "complete_runner.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/tricycle_reactiont5.py": "../reactiont5_runner.py",
+        "scripts/sar_additional_probe.py": "../diagnostics/model_probe.py"
+      }
+    },
+    "rxngraphormer": {
+      "bundle_name": "training_bundle",
+      "worker": "workers/unified.sh",
+      "files": {
+        "accelerator-runtime.toml": "runtime/accelerator-runtime.toml",
+        "assets/model/valid_checkpoint.pt": {
+          "sha256": "db19e1411d5c8ac8be5a8b3add608cb50eb769d0f92d848cd090f1c21ffd64be",
+          "bytes": 60037407
+        },
+        "assets/parameters.json": "assets/parameters.json",
+        "assets/thiol_addition_parameters.json": "assets/thiol_addition_parameters.json",
+        "scripts/sar_accelerator.py": "../accelerator.py",
+        "scripts/sar_accelerator_exec.py": "accelerator_exec.py",
+        "scripts/sar_complete_train_runner.py": "complete_runner.py",
+        "scripts/sar_stage.py": "stage.py",
+        "scripts/sar_additional_probe.py": "../diagnostics/model_probe.py"
+      }
+    }
+  },
+  "models": {
+    "fingerprint_rf": {
+      "environment": "classical",
+      "run": "classical"
+    },
+    "fingerprint_extra_trees": {
+      "environment": "classical",
+      "run": "classical"
+    },
+    "fingerprint_ridge": {
+      "environment": "classical",
+      "run": "classical"
+    },
+    "molclr": {
+      "environment": "molclr",
+      "run": "molclr"
+    },
+    "chemprop_cgr": {
+      "environment": "chemprop",
+      "run": "chemprop"
+    },
+    "chemprop_multicomponent": {
+      "environment": "chemprop",
+      "run": "chemprop"
+    },
+    "t5chem": {
+      "environment": "t5chem",
+      "run": "t5chem"
+    },
+    "rxnresid": {
+      "environment": "rxnresid",
+      "run": "rxnresid"
+    },
+    "uam": {
+      "environment": "uam",
+      "run": "uam"
+    },
+    "reactiont5": {
+      "environment": "reactiont5",
+      "run": "reactiont5"
+    },
+    "rxngraphormer": {
+      "environment": "rxngraphormer",
+      "run": "rxngraphormer"
+    }
+  },
+  "shared_source_roots": {
+    "tricycle_core": "../../../../tricycle-core/src/tricycle_core"
+  }
+}

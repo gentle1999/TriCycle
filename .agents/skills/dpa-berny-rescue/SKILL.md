@@ -12,7 +12,7 @@ description: "Prepare a DPA-Berny or Gaussian rescue run from an existing run di
 ## 输入与输出
 
 - 输入：TOML，包含 `source_run`、worker 数量，以及可选下载目录和重试策略；
-- 输出：新的本地 run 目录、`rescue-plan.tsv`、`batch.toml` 和可继续提交的任务；
+- 输出：新的本地 run 目录、`rescue-summary.tsv`、`batch.toml` 和可继续提交的任务；
 - 不会自动重新提交远程任务。
 
 ## 执行
@@ -23,6 +23,9 @@ uv run --package tricycle-agent tricycle-agent run \
 ```
 
 先检查救援计划和被跳过的成功任务，再使用 `bohr.batch.submit`。源目录不会被覆盖。
+救援同样要求 DPA 使用 GPU、纯 Gaussian 使用 CPU；源配置不符合时拒绝准备。
+新 run 从包内当前实现生成 Bash worker，复用源任务输入和模型资产，不复制旧启动脚本。
+从修正后的请求创建新 run，保留源记录；不能把 DPA 的 CPU 结果作为 GPU smoke 通过证据。
 
 ## 失败与恢复
 

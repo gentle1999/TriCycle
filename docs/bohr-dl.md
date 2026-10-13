@@ -1,162 +1,52 @@
-# Bohr 深度学习运行环境
+# Bohr 模型运行环境
 
-## 当前镜像
+## 配置来源
 
-RxnResid 和 RitS 训练、微调、推理统一使用：
+模型环境和平台资源由配置选择，不能从通用文档中的安装示例推断。当前入口如下：
 
-```text
-registry.dp.tech/dptech/dp/native/prod-23278/dl:260828
-```
+| 工作流 | 配置与准备入口 |
+| --- | --- |
+| SAR 多模型、RxnResid 单任务及采样 | [catalog.json](../packages/tricycle-sar/src/tricycle_sar/backends/catalog.json)、[环境配置](../packages/tricycle-sar/src/tricycle_sar/backends/environments/)、[SAR 包](../packages/tricycle-sar/README.md) |
+| RitS 训练/微调/推理 | [模型资产](../packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)、[请求示例](../configs/example-rits-train-request.toml)、[RitS 包](../packages/tricycle-rits/README.md) |
+| DPA-Berny 与 Gaussian | [引擎请求示例](../configs/example-dpa-berny-request.toml)、[BohrSubmit](../packages/tricycle-bohrsubmit/README.md) |
+| 采样套件与整条轨迹 | [配置索引](../configs/README.md)，通过 SAR 共用接口交付模型 |
 
-该镜像包含系统 Python 3.12、PyTorch、PyG 及其加速库、RDKit、Open Babel，以及模型任务
-需要的公共运行时。镜像不包含 RitS、RxnResid 或其他任务源码。
+Bohr GPU 请求使用当前配置中的统一机型；DPA 能量与梯度必须在 GPU 上执行，纯 Gaussian 和指纹模型使用 CPU。RXNGraphormer 使用 catalog 指定的内网 SSH/Docker 执行器。不要用全局机器默认值覆盖这些资源边界。
 
-每次任务将当前代码仓库、`pyproject.toml`、任务原生配置、数据和 checkpoint 作为 artifact
-上传。对于当前 `bohr` CLI，`input_directory` 应指向包含这些内容的本地任务目录；请求中的
-`code_artifact`、`dataset`、`checkpoint` 和 `input_artifacts` 同时用于审计输入。Bohr 直接执行
-输入目录中的 bash entrypoint，例如：
+## 解释器、环境与源码
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
-python3.12 -m pip install --no-cache-dir --editable .
-exec python3.12 train.py
-```
+SAR 的 `workers/unified.sh` 进入共享执行器；环境引擎按所选 profile 选择解释器和初始化方式。继承镜像的环境校验基础 Python/Torch，再创建可继承镜像依赖的任务环境；CPU 环境按自身配方隔离依赖。实际 Python 路径、Torch/CUDA 版本与依赖来自执行记录，不能假定 `python3.12` 或某个系统路径一定对应模型环境。
 
-因此任务代码目录必须包含 `pyproject.toml`；任务原生配置保持模型项目要求的格式，例如
-RitS 的 Hydra YAML，不需要转换成 TriCycle TOML。该 entrypoint 不创建或激活虚拟环境。
+源码、配置、数据和 checkpoint 按准备接口交付，镜像不能替代源码绑定。RitS 的模型来源与权重位置由资产 TOML 指定；微调使用 `finetune_from`，保留优化器状态的恢复使用 `resume`。ReactionOpt 的 TS pipeline 还要求请求绑定包含 `scripts/run_ts_pipeline.py` 的源码，模型资产的 revision 不能替代 pipeline 来源证明。
 
-## 本地镜像 smoke test
+固定资产必须在本地存在并通过校验。ReactionT5 的权重、tokenizer 和 config 随任务提供；MolCLR 使用指定预训练权重。运行失败时先保留诊断，不通过升级依赖、替换 checkpoint 或切换训练方式让检查通过。
 
-先登录镜像仓库并拉取镜像：
+## 本地准备与设备诊断
+
+只读镜像清单和 SAR 环境任务均由包内入口准备：
 
 ```bash
-docker login registry.dp.tech
-docker pull registry.dp.tech/dptech/dp/native/prod-23278/dl:260828
+uv run --all-packages python -m tricycle_sar.preparation.inventory \
+  --config configs/example-sar-inventory.toml --out-dir /path/to/new-inventory
+uv run --all-packages python -m tricycle_sar.preparation.environment \
+  --model rxnresid --out-dir /path/to/new-environment-check \
+  --group-config /path/to/group.toml
 ```
 
-检查公共依赖和 PyG 扩展：
+这些命令只准备本地输入；生成的 Bohr 请求再走 [batch prepare/submit/status/download 流程](../packages/tricycle-bohrsubmit/README.md#cli-示例)。任务组配置见 [example-sar-bohr-group.toml](../configs/example-sar-bohr-group.toml)。提交需在已有授权范围内显式进入 live 路径。
 
-```bash
-docker run --rm \
-  registry.dp.tech/dptech/dp/native/prod-23278/dl:260828 \
-  python3.12 -c "
-import torch
-import torch_geometric
-import pyg_lib
-import torch_scatter
-import torch_sparse
-from rdkit import Chem
-from openbabel import pybel
-from torch_scatter import scatter
-x = torch.tensor([1., 2., 3.])
-i = torch.tensor([0, 1, 0])
-print('torch:', torch.__version__)
-print('cuda:', torch.version.cuda)
-print('pyg:', torch_geometric.__version__)
-print('scatter:', scatter(x, i, dim=0, reduce='sum'))
-print('runtime imports: OK')
-"
-```
+GPU 初始化应在实际任务容器、实际模型解释器中核对：
 
-有 NVIDIA GPU 时，再执行 CUDA 检查：
+- Python/Torch 路径、CUDA runtime、`nvidia-smi` 的驱动和设备信息；
+- 驱动 API 版本与实际加载的 CUDA 动态库；
+- 实际 CUDA 运算及模型进程的设备证据。
 
-```bash
-docker run --rm --gpus all \
-  registry.dp.tech/dptech/dp/native/prod-23278/dl:260828 \
-  python3.12 -c "
-import torch
-assert torch.cuda.is_available()
-print(torch.cuda.get_device_name(0))
-print(torch.cuda.get_device_capability(0))
-"
-```
+节点模式下看到的驱动不是另一个 job 的环境证明；申请了 GPU 或 `torch.cuda.is_available()` 为真也不等于模型实际完成 GPU 计算。SAR 预检日志和错误下一动作见[加速器执行约定](sar-accelerator-execution.md)。不能把反复提交到偶然可用节点作为兼容性验收。
 
-## 验证任务代码安装
+## Smoke 验收与恢复
 
-将本地 RitS 仓库挂载到 `/workspace/job`，验证可编辑安装和基础导入：
+分别报告输入准备、环境检查、模型前后向 probe、训练后预测和完整工作流的结果。probe 成功不能替代完整训练/推理；RitS 推理成功也不能替代 ReactionOpt 的 TS 后处理验收。
 
-```bash
-docker run --rm --gpus all \
-  -v "$PWD/RitS:/workspace/job" \
-  registry.dp.tech/dptech/dp/native/prod-23278/dl:260828 \
-  bash -lc 'cd /workspace/job && python3.12 -m pip install --no-cache-dir --editable . && \
-    python3.12 -c "import megalodon; print('"'"'RitS install/import: OK'"'"')"'
-```
+任务完成后查询状态、下载产物，核对预期预测/结构、数值有效性、输入覆盖以及 GPU 设备证据。DPA 同时核对能量/梯度请求和优化产物；纯 Gaussian 按 CPU 任务验收。实际 job ID、驱动版本、耗时与成功/失败记录只写入该 run，不回填到通用指南。
 
-RxnResid 使用同样的方式，将挂载路径替换为 RxnResid 仓库，并把最后的 Python 命令替换为
-其实际包导入或最小推理入口。
-
-模型级测试应使用一个样本或极小数据集：推理先验证能产生预测文件，训练只运行一个 batch
-或一个 epoch，并确认 checkpoint、日志和输出 artifact 均能生成。
-
-两种上游微调协议不能互换：RitS 使用
-`scripts/train.py ... finetune_from=<checkpoint>`，只加载权重并启动新的 optimizer；
-RxnResid 使用 `train.py --refit --checkpoint <selection-checkpoint>`，从 checkpoint
-读取 config/fold/split，在 train+valid 上以新的 optimizer 重拟合。后者不应再传
-`--config` 或 `--fold-index`。
-
-RitS 的实际训练、微调和推理参数以其[官方仓库说明](https://github.com/gentle1999/RitS#usage)
-为准；TriCycle 只负责把命令、任务目录和 artifact 交给 Bohr。
-
-## RitS 版本与权重
-
-当前组件锁定官方 RitS 仓库提交：
-
-```text
-https://github.com/gentle1999/RitS@6d8aa0704c21d2798326a7e070491abf438ca292
-```
-
-默认使用官方发布目录中的 `rits.ckpt`（RGD1-ChEMBL-extended 模型）。请先将文件放到
-TriCycle 根目录：
-
-```text
-artifacts/rits/rits.ckpt
-```
-
-当前文件的 SHA-256 为
-`2c6fdacc13a304cb8bb4030881ff4198de647d8f8f7fdaa878414e2514be0668`；组件清单会在校验时使用它。
-
-再复制到实际上传的任务目录，使其满足 RitS 官方入口的相对路径：
-
-```bash
-mkdir -p /path/to/RitS/data
-cp artifacts/rits/rits.ckpt /path/to/RitS/data/rits.ckpt
-```
-
-组件级 TOML 清单和官方 checkpoint 来源见
-[`packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml`](../packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)。
-`ts1x_rits.ckpt` 属于另一套 Transition1x 模型，不作为当前默认权重。
-
-## RxnResid 版本与入口
-
-RxnResid 组件固定使用：
-
-```text
-https://github.com/gentle1999/RxnResid@9deebde39b38df1085dbac3a379c2a59edd7c97d
-```
-
-其官方任务入口为 `train.py` 和 `predict.py`，默认项目配置为
-`configs/rxnresid.yaml`。任务目录应携带该仓库的代码、数据、配置和 checkpoint；
-`tricycle-sar` 仅在计划中记录仓库 provenance，并通过上传目录中的 bash entrypoint 调用这些入口。
-当前 `predict.py` 还会输出 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、
-对应标准差以及 `lower_95`/`upper_95`。主动学习默认使用 `epistemic_variance` 排序；这些字段
-会随 SAR plan 的 `uncertainty_fields` 元数据一并记录。
-
-## Bohr 任务测试
-
-在环境变量中指定镜像：
-
-```bash
-export BOHR_ML_IMAGE=registry.dp.tech/dptech/dp/native/prod-23278/dl:260828
-```
-
-先用 `rits.infer` 或 `sar.infer`（RxnResid）的 TOML 请求执行 dry-run，检查 `image`、command、资源和
-输入 artifact；确认无误后再显式使用 `--live` 提交一个最小任务。任务完成后依次查询状态
-并下载输出，重点确认：
-
-- worker 能安装随任务上传的最新代码；
-- CUDA、PyG 加速库和模型包可以导入；
-- 输出目录、checkpoint 或预测文件被声明并成功下载；
-- `run.toml` 中记录了远程任务 ID 和下一步动作。
+环境初始化对临时网络错误执行有限重试；确定性的依赖、资产或 CUDA 错误需先检查。训练和推理不自动整段重跑，平台提交结果未知时先核对回执。执行计算不授权修改原定协议。具体重试规则由 [SAR 包](../packages/tricycle-sar/README.md#精简任务输出)和配置负责。

@@ -1,7 +1,5 @@
 # project_id is returned by reaction-db.batch-import, not the local project slug.
 project_id = "replace-with-internal-database-project-id"
 # This exact predicate is sent to the database's reaction_smarts query.
-# reaction_filter is only the local operation label; do not use reaction_class.
-reaction_filter = "cycloaddition"
 reaction_smarts = "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1"
 cleaned_only = true

@@ -1,0 +1,17 @@
+# Copy this template and bind the dataset and existing five-fold assignments.
+# Paths are resolved relative to this request; replace both SHA-256 placeholders.
+# Keep training_protocol.reference pointing to the current backend reference.
+experiment_id = "sar-fivefold"
+models = ["chemprop_cgr", "chemprop_multicomponent", "t5chem", "rxngraphormer", "reactiont5", "fingerprint_rf", "fingerprint_extra_trees", "fingerprint_ridge", "uam", "molclr", "rxnresid"]
+
+[training_protocol]
+reference = "sar-training-protocols.lock.json"
+
+[dataset]
+path = "/path/to/dataset.csv"
+sha256 = "replace-with-dataset-sha256"
+
+[split]
+# Reuse published assignments; do not regenerate folds for an existing experiment.
+path = "/path/to/splits.csv"
+sha256 = "replace-with-splits-sha256"

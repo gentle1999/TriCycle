@@ -1,0 +1,21 @@
+# Wang et al., Nature 2024, DOI: 10.1038/s41586-024-07021-y
+# Gaussian expected-reward posteriors; independent pool arms and fixed quantile.
+strategy = "ucb"
+budget = 2
+seed = 42
+
+[metadata.baseline]
+quantile = 0.95
+direction = "minimize"
+
+[[candidates]]
+candidate_id = "rxn-001"
+payload = { reward_posterior_mean = -10.0, reward_posterior_std = 0.2 }
+
+[[candidates]]
+candidate_id = "rxn-002"
+payload = { reward_posterior_mean = -8.0, reward_posterior_std = 2.0 }
+
+[[candidates]]
+candidate_id = "rxn-003"
+payload = { reward_posterior_mean = -7.0, reward_posterior_std = 0.5 }

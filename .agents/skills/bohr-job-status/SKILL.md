@@ -12,14 +12,17 @@ description: "Read the status of an existing Bohr job or prepared batch run and 
 
 ## 执行
 
-批量 run 使用：
+批量 run 按 [bohr-batch-status](../bohr-batch-status/SKILL.md) 操作。先 inspect；仅在
+`resume.next_action` 为相应的 `bohr.batch.status` 或 `bohr.job.status` 时使用：
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
   --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
 
-单任务请求 TOML 至少包含 `external_id`，能力为 `bohr.job.status`。默认 dry-run 不发起网络请求；
+单任务可用含 `external_id` 的独立 TOML，通过 `tricycle-agent run bohr.job.status request.toml --live` 查询并创建新的查询记录；不要将 `--run-dir` 指向已有 `run.toml` 的目录。`resume` 会执行记录中的下一动作，不保证只读查询。
+
+默认 dry-run 不发起网络请求；
 真实查询需要 `--live` 和 Bohr 环境变量（工具会自动发现项目 `.env`）。查询结果写入状态/报告，完成后 `next_action` 通常指向下载。
 
 ## 失败与恢复

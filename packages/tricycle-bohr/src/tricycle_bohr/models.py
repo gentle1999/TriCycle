@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
 from tricycle_core import Artifact, BohrJobSpec, ModelMode, load_dotenv
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 
 def _artifact(value: object, *, field_name: str, default_kind: str = "file") -> Artifact | None:
@@ -104,8 +105,9 @@ class BohrComputeRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> BohrComputeRequest:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            job_name=str(payload.get("job_name", payload.get("name", ""))),
+            job_name=str(payload.get("job_name", "")),
             operation=str(payload.get("operation", "")),
             image=str(_env_or(payload, "image", "BOHR_IMAGE", "")),
             command=_command(payload.get("command", ())),
@@ -223,11 +225,13 @@ class BohrModelJobRequest:
 
     @classmethod
     def from_mapping(cls: type[Self], payload: Mapping[str, Any], mode: ModelMode) -> Self:
-        code_value = payload.get(
-            "code_artifact",
-            payload.get("code", payload.get("source_artifact", payload.get("repository"))),
+        validate_fields(
+            payload,
+            (item.name for item in fields(cls) if item.name != "mode"),
+            context=cls.__name__,
         )
-        input_directory = payload.get("input_directory", payload.get("input_dir"))
+        code_value = payload.get("code_artifact", None)
+        input_directory = payload.get("input_directory", None)
         return cls(
             model_name=str(payload.get("model_name", "")),
             mode=mode,

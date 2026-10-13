@@ -1,0 +1,38 @@
+{
+  "repository": "https://github.com/sagawatatsuya/ReactionT5v2",
+  "source_revision": "76eb08068e10fe255cae5d563a91e1c1e9abac54",
+  "checkpoint_repository": "sagawa/ReactionT5v2-yield",
+  "checkpoint_revision": "f0658bfd360bceaaf560f11b850781c50221fe0b",
+  "checkpoint_directory": "assets",
+  "epochs": 200,
+  "patience": 30,
+  "batch_size": 8,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.01,
+  "max_length": 512,
+  "device": "cuda:0",
+  "files": [
+    {
+      "path": "config.json",
+      "git_blob_sha1": "e0141b4d6b3a233f11346a8bb320cd0668ed5c36"
+    },
+    {
+      "path": "pytorch_model.bin",
+      "sha256": "29f5cc9a91aaa74b768d348d18f1bf0e01914f480102cf94142015a6a52cb3d9"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "git_blob_sha1": "ca796dba9833739c67e8e8c9f5c050977d726804"
+    },
+    {
+      "path": "tokenizer.json",
+      "git_blob_sha1": "90a11dd97e3698647dac555081b503e8ade613d3"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "git_blob_sha1": "7ae3afcf60fcaa5707a0e70dccd03ecbecea9bbd"
+    }
+  ],
+  "seed": 42,
+  "target": "G_T_activate"
+}

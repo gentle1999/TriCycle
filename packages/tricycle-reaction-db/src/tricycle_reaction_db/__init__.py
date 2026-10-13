@@ -19,7 +19,6 @@ from .models import (
     ReactionDatabaseProjectSpec,
     ReactionFilterRequest,
     ReactionIngestRequest,
-    ReactionSpaceExportRequest,
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
     record_from_mapping,
@@ -31,6 +30,7 @@ from .repository import (
     ReactionDatabaseImportReceipt,
     ReactionFilterReceipt,
     ReactionSpaceExportReceipt,
+    ReactionThermodynamicsCsvAdapter,
     validate_export_receipt,
 )
 
@@ -58,7 +58,7 @@ __all__ = [
     "RitsDatasetExportRequest",
     "RxnResidDatasetExportRequest",
     "ReactionSpaceExportReceipt",
-    "ReactionSpaceExportRequest",
+    "ReactionThermodynamicsCsvAdapter",
     "create_reaction_database_adapter",
     "record_from_mapping",
     "validate_export_receipt",

@@ -4,27 +4,47 @@ from unittest.mock import patch
 
 from tricycle_core import Artifact, ExecutionContext, ModelMode
 from tricycle_core.errors import InvalidRequestError
+
 from tricycle_sar import (
-    RxnResidPlugin,
-    SarJobRequest,
+    RxnResidJobRequest,
     SarPlugin,
     build_finetune_command,
     build_inference_command,
-    build_refit_command,
     build_training_command,
-    load_default_model_asset,
+    get_backend,
+    load_model_asset,
 )
 
 
 class SarModelTests(unittest.TestCase):
+    def test_generic_training_accepts_user_config_and_dataset_artifact(self) -> None:
+        request = RxnResidJobRequest(
+            model_name="rxnresid",
+            mode=ModelMode.TRAIN,
+            image=get_backend("rxnresid").environment["image"],
+            machine_type=get_backend("rxnresid").environment["machine_type"],
+            project_id="compute-project",
+            dataset=Artifact("local-regression", "data/custom.csv"),
+            code_artifact=Artifact("rxnresid-source", "RxnResid", kind="directory"),
+            input_directory="RxnResid",
+            command=build_training_command(config="configs/custom-regression.yaml", fold_index=0),
+            parameters={"config_path": "configs/custom-regression.yaml"},
+        )
+        plan = SarPlugin().plan_job(request, ExecutionContext("generic-sar", dry_run=True))
+        job = plan.parameters["bohr_job"]
+        self.assertEqual(job["parameters"]["config_path"], "configs/custom-regression.yaml")
+        self.assertEqual(job["parameters"]["source_revision"], load_model_asset().revision)
+        self.assertIn("configs/custom-regression.yaml", job["command"])
+        self.assertEqual(SarPlugin().manifest.dependencies, ("tricycle.bohr.compute",))
+
     def test_default_model_asset_pins_rxnresid_repository(self) -> None:
-        asset = load_default_model_asset()
+        asset = load_model_asset()
 
         self.assertEqual(asset.model_name, "rxnresid")
         self.assertEqual(asset.repository, "https://github.com/gentle1999/RxnResid")
         self.assertEqual(
             asset.revision,
-            "9deebde39b38df1085dbac3a379c2a59edd7c97d",
+            "a615f4161cb612f5ad98136d4965685009c62bab",
         )
         self.assertEqual(asset.config_path, "configs/rxnresid.yaml")
         self.assertEqual(asset.training_entrypoint, "train.py")
@@ -54,26 +74,23 @@ class SarModelTests(unittest.TestCase):
                 "kind": "directory",
             },
             "input_directory": "RxnResid",
-            "command": [
-                "bash",
-                "run.sh",
-            ],
+            "command": list(build_training_command(fold_index=0)),
         }
         with patch.dict(
             os.environ,
             {
-                "BOHR_ML_IMAGE": "registry.example/dl:rxnresid",
+                "BOHR_ML_IMAGE": get_backend("rxnresid").environment["image"],
                 "BOHR_PROJECT_ID": "project-001",
-                "BOHR_MACHINE_TYPE": "gpu-machine",
+                "BOHR_MACHINE_TYPE": get_backend("rxnresid").environment["machine_type"],
             },
             clear=False,
         ):
             plan = SarPlugin().plan("train", request, ExecutionContext(run_id="sar-env"))
 
         job = plan.parameters["bohr_job"]
-        self.assertEqual(job["image"], "registry.example/dl:rxnresid")
+        self.assertEqual(job["image"], get_backend("rxnresid").environment["image"])
         self.assertEqual(job["project_id"], "project-001")
-        self.assertEqual(job["machine_type"], "gpu-machine")
+        self.assertEqual(job["machine_type"], get_backend("rxnresid").environment["machine_type"])
         self.assertEqual(job["parameters"]["uncertainty_method"], "evidential")
         self.assertEqual(
             job["parameters"]["uncertainty_fields"],
@@ -88,10 +105,10 @@ class SarModelTests(unittest.TestCase):
                 "upper_95",
             ],
         )
-        self.assertEqual(plan.metadata["uncertainty_method"], "evidential")
+        self.assertNotIn("uncertainty_method", plan.metadata)
 
     def test_explicit_image_and_resources_override_environment(self) -> None:
-        request = SarJobRequest(
+        request = RxnResidJobRequest(
             model_name="rxnresid-v1",
             mode=ModelMode.INFER,
             image="registry.example/explicit:latest",
@@ -116,10 +133,6 @@ class SarModelTests(unittest.TestCase):
         self.assertEqual(job.image, "registry.example/explicit:latest")
         self.assertEqual(job.project_id, "explicit-project")
         self.assertEqual(job.machine_type, "explicit-machine")
-
-    def test_named_rxnresid_plugin_keeps_sar_capability_compatibility(self) -> None:
-        self.assertIsInstance(RxnResidPlugin(), SarPlugin)
-        self.assertEqual(RxnResidPlugin().manifest.plugin_id, "tricycle.sar")
 
     def test_official_rxnresid_command_builders(self) -> None:
         train = build_training_command(fold_index=0, extra_args=("--epochs", "1"))
@@ -150,10 +163,6 @@ class SarModelTests(unittest.TestCase):
         self.assertIn("--epochs", finetune)
         self.assertNotIn("--config", finetune)
         self.assertNotIn("--fold-index", finetune)
-        self.assertEqual(
-            build_refit_command(checkpoint="runs/fold-00/checkpoint.pt"),
-            build_finetune_command(checkpoint="runs/fold-00/checkpoint.pt"),
-        )
 
         with self.assertRaises(InvalidRequestError):
             build_training_command()
@@ -168,7 +177,7 @@ class SarModelTests(unittest.TestCase):
             "finetune",
             {
                 "model_name": "rxnresid-refit",
-                "image": "registry.example/dl:rxnresid",
+                "image": get_backend("rxnresid").environment["image"],
                 "checkpoint": {
                     "artifact_id": "checkpoint",
                     "location": "runs/fold-00/checkpoint.pt",
@@ -179,7 +188,7 @@ class SarModelTests(unittest.TestCase):
                     "kind": "directory",
                 },
                 "input_directory": "RxnResid",
-                "command": ["bash", "run.sh"],
+                "command": list(build_finetune_command(checkpoint="runs/fold-00/checkpoint.pt")),
             },
             ExecutionContext(run_id="rxnresid-refit"),
         )

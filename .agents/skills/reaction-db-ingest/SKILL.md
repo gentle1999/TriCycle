@@ -7,7 +7,7 @@ description: "Validate reaction records or plan project-scoped calculation-log d
 
 ## 适用场景
 
-当反应记录需要兼容录入，或 Bohr 计算日志要按批次进入反应数据库时使用。大批量计算日志应
+当反应记录需要录入，或 Bohr 计算日志要按批次进入反应数据库时使用。大批量计算日志应
 使用 `reaction-db-batch-import`；筛选和训练数据导出分别使用对应的 reaction-db skills。
 
 ## 安全边界
@@ -18,9 +18,13 @@ description: "Validate reaction records or plan project-scoped calculation-log d
 
 ## 输入与执行
 
-兼容单反应请求使用 `reaction_id`、`reaction_smiles`、可选 `conditions`、`provenance` 和
+单反应请求使用 `reaction_id`、`reaction_smiles`、可选 `conditions`、`provenance` 和
 artifact 字段。批次请求一次只能声明一个 project 创建描述和一个批次目录，并且只递归选择
 `downloads/` 下的 `*.log`；必须保留 workflow、初猜来源、Bohr job group/project provenance。
+
+单反应录入使用 `ReactionIngestRequest`，记录 `idempotency_key`、来源及 artifact；真实写入需注入
+`ReactionRepository.upsert` 并关闭 dry-run，`validate_only=True` 只校验。默认 CLI 不提供真实单反应 repository，
+需要由调用应用注入；不要把支持批次 MCP adapter 当作已支持单反应 live upsert。冲突合并由 repository 契约决定。
 
 导出操作一律使用数据库内部 `project_id`，且由数据库用固定的实际反应
 `reaction_smarts` 筛选清洗成功数据（不是 `reaction_class` 分类）：
@@ -31,6 +35,11 @@ artifact 字段。批次请求一次只能声明一个 project 创建描述和�
 
 - RitS：`mapped_reaction_smiles + ts_structure`；
 - RxnResid：`mapped_reaction_smiles + reaction/activation free energy + reactant/TS/product seconds`。
+
+更新候选池/评价池时使用 [reaction-db-export-rxnresid](../reaction-db-export-rxnresid/SKILL.md)
+的数据库原生 CSV 出口和已有适配入口。底物身份按
+[反应数据集适配规范](../../../docs/reaction-dataset-adaptation.md) 验证，保留原生 profile 行和立体信息。
+mapping/遍历规则变化先核查图等价性；匹配覆盖不能代替数据库导出完整性。
 
 应用层保留 `run.toml` 作为审计入口，不要猜测未定义的数据库 schema，也不要在本地重新推断反应关系。
 

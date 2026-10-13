@@ -1,0 +1,20 @@
+repository = "https://github.com/The-Real-JerryChen/reaction_yield_prediction"
+revision = "5f981569b64aec65a3c7a8a84d8bd2e6e72b773f"
+asset_directory = "assets/uam"
+device = "cuda:0"
+batch_size = 8
+epochs = 300
+patience = 30
+learning_rate = 0.001
+weight_decay = 5e-05
+tokenizer_repository = "laituan245/molt5-base"
+tokenizer_revision = "7f2da6b30fd8ddc55b7867d53ce75e09bb85f284"
+pretrained_encoder = false
+files = [{"path" = "README.md", "sha256" = "5e74ca29a3ab41f1bfa63976e298764934fa8f1c4cf7dd8996f2db34900c4b63"}, {"path" = "config.yaml", "sha256" = "0ef630c2e79d8e062a74d1d7b3ee47a495790b8c964024d439dd6149dc4f894d"}, {"path" = "dataset/__init__.py", "sha256" = "62abea1e968ac9053f2678343189f018787748abf42cb6c614365e93d000a8b7"}, {"path" = "dataset/chemdata.py", "sha256" = "839506d5bfce56cea0dcdd5609ff5018c1b145b88b66db1829d9f0f3820aa4e9"}, {"path" = "dataset/rxndataset.py", "sha256" = "9eb94024b6b793803fbe0e1abbd92e14bbf4bf39fcc65c3a371176d770ee5f4c"}, {"path" = "dataset/utils.py", "sha256" = "48dcebf4123cf76b993df90f1c49432eddc828fac0756db71188c2960c996d72"}, {"path" = "model/__init__.py", "sha256" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, {"path" = "model/encoders.py", "sha256" = "81446a36cb864f762befbd3ec2b03b7bdbea889ec1e0fe4494f536a51e1169d8"}, {"path" = "model/mmmodel.py", "sha256" = "ffe58d1666c7db525cfd5e4e00414db0eecacf429bd0b38ad79321a073d627b3"}, {"path" = "pretrain.py", "sha256" = "9db757b99b4dcec8cc8574b9ea4ee612f5b5cf6b08c4ecdfec4a7c57822c6bb5"}, {"path" = "sweep.py", "sha256" = "6ce59cfedcb4230ba2ebaa34efc0e1ee6f1e69f41374af574f9ae2b9e4476748"}, {"path" = "tokenizer/config.json", "sha256" = "459c85bbfe0ea6b713995f642af78a0db2fece550313c5774484ec54c089f54a"}, {"path" = "tokenizer/special_tokens_map.json", "sha256" = "4720c0fddbe4c5991334f85ad7073d9bd0a294a8ba4641a2f8dab614ca825949"}, {"path" = "tokenizer/spiece.model", "sha256" = "d60acb128cf7b7f2536e8f38a5b18a05535c9e14c7a355904270e15b0945ea86"}, {"path" = "tokenizer/tokenizer.json", "sha256" = "fe2ebbbbde2985be723e0ce18217853e4020c5e9d35bd07be2c27ab9d3ead57a"}, {"path" = "tokenizer/tokenizer_config.json", "sha256" = "aa7b635caaf0cda79f9fa1bc1bf1d19413c4e31991a04a7f4774f786b26b0443"}, {"path" = "train.py", "sha256" = "21410dcbc12689bc75b4b2382c368f141e383bd449340b535afaacac167fcd7f"}, {"path" = "utils.py", "sha256" = "672c3382b400648ca985d98031c06cac643a89b1553f737bf6e71282625fac06"}]
+seed = 42
+dataset = "data/snapshots/ground-truth/dataset.csv"
+splits = "data/splits/ground-truth-5fold/assignments.csv"
+row_id = "path_id"
+target = "G_T_activate"
+smiles_column = "rxn_smiles"
+group_columns = ["ene_id", "diene_id"]

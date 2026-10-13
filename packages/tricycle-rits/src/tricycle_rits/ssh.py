@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from tricycle_core.errors import IntegrationNotConfiguredError, InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 _HOST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _USER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
@@ -150,6 +151,7 @@ class RitsSshFinetuneRequest:
             raise InvalidRequestError(
                 "SSH secrets and identity_file are not request fields; configure OpenSSH agent/config"
             )
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         raw_command = payload.get("command", ())
         if isinstance(raw_command, str) or not isinstance(raw_command, (list, tuple)):
             raise InvalidRequestError("command must be a list of strings")

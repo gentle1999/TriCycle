@@ -166,7 +166,7 @@ def render_gjf(
     lines = [f"%nproc={nproc}", f"%mem={mem}"]
 
     if not pairs or link1_mode == "plain":
-        lines.extend([route_line, "", title, "", f"{charge} {multiplicity}", ""])
+        lines.extend([route_line, "", title, "", f"{charge} {multiplicity}"])
         lines.extend(_atom_lines(atoms))
         lines.extend(["", ""])
         return "\n".join(lines)
@@ -253,6 +253,8 @@ def build_dpa_tasks(request: DpaBernyRequest) -> tuple[DpaTask, ...]:
         used_names.add(task_name)
 
         pairs = () if request.ignore_constraints else constraint_pairs(source_xyz)
+        json_names: tuple[str, ...]
+        traj_names: tuple[str, ...]
         if pairs and request.fixed_only:
             json_names = (f"{task_name}.fixed.json",)
             traj_names = (f"{task_name}.fixed.xyz",)

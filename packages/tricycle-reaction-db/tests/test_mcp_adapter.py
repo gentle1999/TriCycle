@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import base64
 import csv
+import io
 import json
 import os
 import threading
 import unittest
-from hashlib import sha256
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, ClassVar
+from unittest.mock import patch
 
-from tricycle_core import IntegrationNotConfiguredError
+from tricycle_core import IntegrationNotConfiguredError, InvalidRequestError
 from tricycle_reaction_db import (
     CalculationLogBatchSpec,
     McpReactionDatabaseAdapter,
@@ -26,9 +28,121 @@ from tricycle_reaction_db import (
 from tricycle_reaction_db.mcp_adapter import _McpTransport
 
 
+class NativeThermodynamicsExportTests(unittest.TestCase):
+    def test_presence_filters_are_forwarded_on_every_page_and_recorded(self) -> None:
+        with TemporaryDirectory() as directory:
+            adapter = McpReactionDatabaseAdapter(ReactionDatabaseMcpConfig(
+                endpoint_url="https://example.invalid/mcp", token="unused"
+            ))
+            calls = []
+            header = "mapped_reaction_id,mapped_reaction_smiles,activation_gibbs_free_energy_kcal_mol\n"
+
+            def page(name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+                calls.append(dict(arguments))
+                offset = arguments["offset"]
+                return {"project_id": "project-one", "media_type": "text/csv",
+                        "csv": header + f"shared,C=C.C=CC=C>>C1CC=CCC1,{offset}\n",
+                        "row_count": 1, "next_offset": offset + 1, "has_more": offset == 0}
+
+            destination = Path(directory) / "native.csv"
+            with patch.object(adapter._transport, "call_tool", side_effect=page):
+                receipt = adapter.export_thermodynamics_csv(
+                    ReactionFilterRequest("project-one"), destination,
+                    has_activation_gibbs_free_energy=True, has_reaction_gibbs_free_energy=False,
+                )
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(c["has_activation_gibbs_free_energy"] is True for c in calls))
+            self.assertTrue(all(c["has_reaction_gibbs_free_energy"] is False for c in calls))
+            self.assertTrue(receipt["arguments"]["has_activation_gibbs_free_energy"])
+            self.assertEqual([r["activation_gibbs_free_energy_kcal_mol"] for r in csv.DictReader(io.StringIO(destination.read_text()))], ["0", "1"])
+
+    def test_presence_filter_violation_fails_without_local_filtering(self) -> None:
+        with TemporaryDirectory() as directory:
+            adapter = McpReactionDatabaseAdapter(ReactionDatabaseMcpConfig(
+                endpoint_url="https://example.invalid/mcp", token="unused"
+            ))
+            destination = Path(directory) / "native.csv"
+            destination.write_text("previous verified export\n")
+            response = {"project_id": "project-one", "media_type": "text/csv",
+                        "csv": "mapped_reaction_id,mapped_reaction_smiles,activation_gibbs_free_energy_kcal_mol\nshared,C=C.C=CC=C>>C1CC=CCC1,\n",
+                        "row_count": 1, "next_offset": 1, "has_more": False}
+            with patch.object(adapter._transport, "call_tool", return_value=response), self.assertRaisesRegex(ReactionDatabaseMcpError, "presence filter"):
+                adapter.export_thermodynamics_csv(
+                    ReactionFilterRequest("project-one"), destination,
+                    has_activation_gibbs_free_energy=True,
+                )
+            self.assertEqual(destination.read_text(), "previous verified export\n")
+
+    def test_preserves_profile_rows_across_repeated_and_omitted_headers(self) -> None:
+        with TemporaryDirectory() as directory:
+            header = "mapped_reaction_id,mapped_reaction_smiles,activation_gibbs_free_energy_kcal_mol,level_of_theory,products_running_time_seconds\n"
+            first = 'rxn-1,C=C.C=CC=C>>C1CC=CCC1,12.123456789,"method,one",\n'
+            second = "rxn-1,C=C.C=CC=C>>C1CC=CCC1,18.25,method-two,0\n"
+            third = "rxn-2,C=C.C=CC=C>>C1CC=CCC1,,method-three,\n"
+            responses = [
+                {"csv": header + first, "header_included": True},
+                {"csv": header + second, "header_included": False},
+                {"csv": third, "header_included": False},
+            ]
+            calls: list[tuple[str, Mapping[str, Any]]] = []
+
+            class Transport:
+                def call_tool(self, name: str, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+                    calls.append((name, arguments))
+                    offset = arguments["offset"]
+                    return {
+                        **responses[offset], "project_id": "project-one",
+                        "media_type": "text/csv; charset=utf-8", "row_count": 1,
+                        "next_offset": offset + 1, "has_more": offset < 2,
+                    }
+
+            adapter = McpReactionDatabaseAdapter(ReactionDatabaseMcpConfig(
+                endpoint_url="https://example.invalid/mcp", token="unused"
+            ))
+            destination = Path(directory) / "native.csv"
+            with patch.object(adapter._transport, "call_tool", side_effect=Transport().call_tool):
+                receipt = adapter.export_thermodynamics_csv(
+                    ReactionFilterRequest(project_id="project-one"), destination
+                )
+            self.assertEqual(destination.read_text(), header + first + second + third)
+            rows = list(csv.DictReader(io.StringIO(destination.read_text())))
+            self.assertEqual(len(rows), 3)
+            self.assertEqual(rows[0]["activation_gibbs_free_energy_kcal_mol"], "12.123456789")
+            self.assertEqual(rows[2]["activation_gibbs_free_energy_kcal_mol"], "")
+            self.assertEqual(receipt["row_count"], 3)
+            self.assertEqual([args["offset"] for _, args in calls], [0, 1, 2])
+            predicate = json.loads(calls[0][1]["filter_expression"])
+            self.assertEqual(predicate["field"], "rxn_smarts")
+
+    def test_rejects_cross_project_or_stalled_pages_without_replacing_output(self) -> None:
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "native.csv"
+            destination.write_text("original output\n")
+            for project, more in (("wrong-project", False), ("project-one", True)):
+                class Transport:
+                    def call_tool(
+                        self, name: str, arguments: Mapping[str, Any],
+                        returned_project: str = project, has_more: bool = more,
+                    ) -> Mapping[str, Any]:
+                        return {
+                            "project_id": returned_project, "media_type": "text/csv",
+                            "csv": "mapped_reaction_id,mapped_reaction_smiles\n",
+                            "row_count": 0, "next_offset": 0, "has_more": has_more,
+                        }
+
+                adapter = McpReactionDatabaseAdapter(ReactionDatabaseMcpConfig(
+                    endpoint_url="https://example.invalid/mcp", token="unused"
+                ))
+                with patch.object(adapter._transport, "call_tool", side_effect=Transport().call_tool), self.assertRaises(ReactionDatabaseMcpError):
+                    adapter.export_thermodynamics_csv(
+                        ReactionFilterRequest(project_id="project-one"), destination
+                    )
+                self.assertEqual(destination.read_text(), "original output\n")
+
+
 class _McpState:
     def __init__(self) -> None:
-        self.requests: list[dict[str, object]] = []
+        self.requests: list[dict[str, Any]] = []
         self.project_id = "project-001"
         self.projects = [
             {"id": "project-001", "slug": "space-001", "name": "Space 001"},
@@ -36,14 +150,12 @@ class _McpState:
             {"id": "project-003", "slug": "space-003", "name": "Space 003"},
             {"id": "project-004", "slug": "space-004", "name": "Space 004"},
         ]
-        self.include_upload_tool = True
-        self.fail_upload_filenames: set[str] = set()
 
 
 class _McpHandler(BaseHTTPRequestHandler):
     state: _McpState
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         return
 
     def _body(self) -> dict[str, object]:
@@ -83,8 +195,6 @@ class _McpHandler(BaseHTTPRequestHandler):
                 "export_mapped_reaction_transition_state_geometries",
                 "list_projects",
             }
-            if self.state.include_upload_tool:
-                names.add("upload_calculation_log")
             self._respond(
                 {
                     "jsonrpc": "2.0",
@@ -124,34 +234,6 @@ class _McpHandler(BaseHTTPRequestHandler):
             data: object = {"id": self.state.project_id}
         elif name == "list_projects":
             data = self.state.projects
-        elif name == "upload_calculation_log":
-            filename = arguments["filename"]
-            assert isinstance(filename, str)
-            if filename in self.state.fail_upload_filenames:
-                self._respond(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "isError": True,
-                            "content": [{"type": "text", "text": "file rejected"}],
-                        },
-                    }
-                )
-                return
-            content_base64 = arguments["content_base64"]
-            assert isinstance(content_base64, str)
-            payload = base64.b64decode(content_base64, validate=True)
-            expected_size = arguments["expected_size_bytes"]
-            expected_sha256 = arguments["expected_sha256"]
-            assert expected_size == len(payload)
-            assert expected_sha256 == sha256(payload).hexdigest()
-            assert arguments["media_type"] == "text/plain"
-            assert isinstance(arguments["relative_path"], str)
-            data = {
-                "batch": {"id": f"batch-{filename}", "status": "active"},
-                "item": {"id": f"item-{filename}", "status": "staged"},
-            }
         elif name == "export_mapped_reaction_transition_state_geometries":
             after_binding_id = arguments.get("after_binding_id")
             geometry_id = "geometry-ts" if after_binding_id is None else "geometry-ts-2"
@@ -284,6 +366,11 @@ class _McpHandler(BaseHTTPRequestHandler):
 
 
 class McpReactionDatabaseAdapterTests(unittest.TestCase):
+    _no_proxy: ClassVar[str | None]
+    state: ClassVar[_McpState]
+    server: ClassVar[ThreadingHTTPServer]
+    thread: ClassVar[threading.Thread]
+    base_url: ClassVar[str]
     @classmethod
     def setUpClass(cls) -> None:
         cls._no_proxy = os.environ.get("NO_PROXY")
@@ -307,8 +394,6 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.state.requests.clear()
-        self.state.include_upload_tool = True
-        self.state.fail_upload_filenames.clear()
 
     def _request(self, root: Path) -> ReactionBatchImportRequest:
         return ReactionBatchImportRequest(
@@ -322,8 +407,7 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             provenance={"workflow": "RitS -> Gaussian", "initial_guess_source": "RitS zero-shot"},
         )
 
-    def _adapter(self, **kwargs: object) -> McpReactionDatabaseAdapter:
-        kwargs.setdefault("upload_mode", "mcp")
+    def _adapter(self, **kwargs: Any) -> McpReactionDatabaseAdapter:
         return McpReactionDatabaseAdapter(
             ReactionDatabaseMcpConfig(
                 self.base_url,
@@ -357,6 +441,10 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
         self.assertEqual(arguments["include_archived"], False)
         self.assertEqual(arguments["organization_id"], "organization-001")
 
+    def test_obsolete_upload_mode_is_rejected_before_credentials_are_used(self) -> None:
+        with self.assertRaisesRegex(InvalidRequestError, "UPLOAD_MODE"):
+            ReactionDatabaseMcpConfig.from_env(environ={"TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE": "mcp"})
+
     def test_from_env_accepts_only_mcp_variable_names(self) -> None:
         with TemporaryDirectory() as temp:
             env_file = Path(temp) / ".env"
@@ -368,75 +456,13 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(IntegrationNotConfiguredError, "MCP_URL"):
                 ReactionDatabaseMcpConfig.from_env(env_file, environ={})
 
-    def test_import_uploads_each_file_bytes_through_mcp(self) -> None:
-        with TemporaryDirectory() as temp:
-            root = Path(temp)
-            logs = root / "downloads" / "worker-000"
-            logs.mkdir(parents=True)
-            (logs / "a.log").write_text("Gaussian A\n", encoding="utf-8")
-            (logs / "b.log").write_text("Gaussian B\n", encoding="utf-8")
-            request = self._request(root)
-
-            receipt = self._adapter().ingest_calculation_logs(request, request.resolve_batch())
-
-        self.assertEqual(receipt.status, "submitted")
-        self.assertEqual(receipt.project_id, self.state.project_id)
-        self.assertEqual(receipt.accepted_log_count, 2)
-        self.assertIsNone(receipt.cleaned_reaction_count)
-        methods = [str(item.get("method")) for item in self.state.requests]
-        self.assertEqual(
-            methods[:4], ["initialize", "notifications/initialized", "tools/list", "tools/call"]
-        )
-        tool_calls = [
-            item["params"]["name"]
-            for item in self.state.requests
-            if item.get("method") == "tools/call"
-        ]
-        self.assertEqual(
-            tool_calls,
-            [
-                "create_project",
-                "upload_calculation_log",
-                "upload_calculation_log",
-            ],
-        )
-        self.assertFalse(any("staged_file_path" in json.dumps(item) for item in self.state.requests))
-        upload_calls = [
-            item
-            for item in self.state.requests
-            if item.get("method") == "tools/call"
-            and item["params"]["name"] == "upload_calculation_log"
-        ]
-        self.assertEqual(len(upload_calls), 2)
-        first_upload = upload_calls[0]
-        arguments = first_upload["params"]["arguments"]
-        assert isinstance(arguments, dict)
-        self.assertEqual(arguments["filename"], "a.log")
-        self.assertEqual(arguments["relative_path"], "downloads/worker-000/a.log")
-        self.assertEqual(
-            base64.b64decode(arguments["content_base64"], validate=True),
-            b"Gaussian A\n",
-        )
-        self.assertEqual(receipt.metadata["file_transfer"], "base64-per-file-queue")
-        self.assertEqual(receipt.metadata["queue_mode"], "durable-upload-batch")
-        self.assertEqual(receipt.metadata["queue_batch_count"], 2)
-        self.assertEqual(len(receipt.metadata["queue_submissions"]), 2)
-        self.assertNotIn("staging_root", receipt.metadata)
-        create = next(
-            item
-            for item in self.state.requests
-            if item.get("method") == "tools/call"
-            and item["params"]["name"] == "create_project"
-        )
-        create_arguments = create["params"]["arguments"]
-        assert isinstance(create_arguments, dict)
-        self.assertEqual(
-            create_arguments["data_source"]["file_transfer"],
-            "mcp.upload_calculation_log.base64",
-        )
-
     def test_batch_upload_uses_multipart_queue_without_file_mcp_tool(self) -> None:
-        self.state.include_upload_tool = False
+        self._check_batch_upload(reject_second=False)
+
+    def test_batch_upload_records_rejected_queue_items(self) -> None:
+        self._check_batch_upload(reject_second=True)
+
+    def _check_batch_upload(self, *, reject_second: bool) -> None:
         rest_paths: list[str] = []
         create_payload: dict[str, object] = {}
 
@@ -447,7 +473,7 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             (logs / "a.log").write_text("Gaussian A\n", encoding="utf-8")
             (logs / "b.log").write_text("Gaussian B\n", encoding="utf-8")
             request = self._request(root)
-            adapter = self._adapter(upload_mode="batch")
+            adapter = self._adapter()
 
             def fake_rest_json(
                 method: str,
@@ -472,13 +498,14 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
                 self.assertIsNotNone(data)
                 self.assertIsNotNone(content_type)
                 self.assertIn(b"Gaussian A\n", data or b"")
+                self.assertIn(b"Gaussian B\n", data or b"")
                 descriptors = create_payload["files"]
                 assert isinstance(descriptors, list)
                 items = [
                     {
                         "id": f"item-{index}",
                         "client_file_id": descriptor["client_file_id"],
-                        "status": "staged",
+                        "status": "failed" if reject_second and index == 1 else "staged",
                     }
                     for index, descriptor in enumerate(descriptors)
                     if isinstance(descriptor, dict)
@@ -489,8 +516,9 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             adapter._rest_request = fake_rest_request  # type: ignore[method-assign]
             receipt = adapter.ingest_calculation_logs(request, request.resolve_batch())
 
-        self.assertEqual(receipt.status, "submitted")
-        self.assertEqual(receipt.accepted_log_count, 2)
+        self.assertEqual(receipt.status, "failed" if reject_second else "submitted")
+        self.assertEqual(receipt.accepted_log_count, 1 if reject_second else 2)
+        self.assertEqual(receipt.failed_log_count, int(reject_second))
         self.assertEqual(receipt.metadata["file_transfer"], "multipart-batch-queue")
         self.assertEqual(receipt.metadata["queue_batch_count"], 1)
         self.assertEqual(rest_paths, ["/api/upload-batches", "/api/upload-batches/batch-bulk-001/files"])
@@ -545,50 +573,6 @@ class McpReactionDatabaseAdapterTests(unittest.TestCase):
             ),
             3.0,
         )
-
-    def test_import_requires_upload_tool_before_project_creation(self) -> None:
-        self.state.include_upload_tool = False
-        with TemporaryDirectory() as temp:
-            root = Path(temp)
-            logs = root / "downloads"
-            logs.mkdir()
-            (logs / "one.log").write_text("Gaussian\n", encoding="utf-8")
-            request = self._request(root)
-
-            with self.assertRaisesRegex(ReactionDatabaseMcpError, "upload_calculation_log"):
-                self._adapter().ingest_calculation_logs(request, request.resolve_batch())
-
-        tool_calls = [
-            item["params"]["name"]
-            for item in self.state.requests
-            if item.get("method") == "tools/call"
-        ]
-        self.assertEqual(tool_calls, [])
-
-    def test_import_continues_after_one_file_upload_error(self) -> None:
-        self.state.fail_upload_filenames.add("b.log")
-        with TemporaryDirectory() as temp:
-            root = Path(temp)
-            logs = root / "downloads"
-            logs.mkdir()
-            (logs / "a.log").write_text("Gaussian A\n", encoding="utf-8")
-            (logs / "b.log").write_text("Gaussian B\n", encoding="utf-8")
-            request = self._request(root)
-
-            receipt = self._adapter().ingest_calculation_logs(request, request.resolve_batch())
-
-        self.assertEqual(receipt.status, "failed")
-        self.assertEqual(receipt.accepted_log_count, 1)
-        self.assertEqual(receipt.failed_log_count, 1)
-        self.assertEqual(receipt.metadata["uploaded_count"], 1)
-        self.assertEqual(receipt.metadata["error_count"], 1)
-        uploaded_names = [
-            item["params"]["arguments"]["filename"]
-            for item in self.state.requests
-            if item.get("method") == "tools/call"
-            and item["params"]["name"] == "upload_calculation_log"
-        ]
-        self.assertEqual(uploaded_names, ["a.log", "b.log"])
 
     def test_rits_export_uses_paged_mcp_geometry_tool_and_database_filter(self) -> None:
         adapter = self._adapter()

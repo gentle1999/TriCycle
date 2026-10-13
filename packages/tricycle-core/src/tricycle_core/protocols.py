@@ -29,16 +29,16 @@ class Component(Protocol):
     def execute(self, plan: TaskPlan, context: ExecutionContext) -> TaskResult: ...
 
 
-# Compatibility name for callers that still use the original terminology.
-Plugin = Component
-
-
-class BohrGateway(Protocol):
-    def submit(self, job: BohrJobSpec) -> str: ...
-
+class BohrStatusGateway(Protocol):
     def status(self, external_id: str) -> dict[str, Any]: ...
 
+
+class BohrDownloadGateway(Protocol):
     def download(self, external_id: str, destination: Path) -> tuple[str, ...]: ...
+
+
+class BohrGateway(BohrStatusGateway, BohrDownloadGateway, Protocol):
+    def submit(self, job: BohrJobSpec) -> str: ...
 
 
 class ReactionRepository(Protocol):

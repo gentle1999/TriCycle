@@ -1,0 +1,6 @@
+# Copy into your run directory and fill in the intended Bohr project and group.
+# Pass the copy with --group-config; no historical experiment group is loaded.
+project_id = "your-project-id"
+job_group_id = "your-job-group-id"
+# `requests --job-group-name <name>` uses project_id and creates a new group;
+# individual preparation commands reuse job_group_id for smoke and training.

@@ -5,7 +5,9 @@ description: "Submit one planned Bohr computational chemistry job through the Bo
 
 # 提交单个 Bohr 计算
 
-先用 `bohr.compute.plan` 检查镜像、命令、资源和输入 artifact。得到授权后：
+先用 `bohr.compute.plan` 检查镜像、命令、资源和输入 artifact。
+DPA 必须使用 GPU 加速并申请 GPU 节点，纯 Gaussian 只允许 CPU 节点；不接受用
+额外 CLI 参数覆盖这一选择。得到授权后：
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \

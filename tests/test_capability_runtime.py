@@ -22,11 +22,22 @@ from tricycle_core import (
     TaskResult,
     TaskStatus,
 )
-from tricycle_reaction_db import ReactionDatabaseImportReceipt
+from tricycle_reaction_db import (
+    CalculationLogBatchManifest,
+    ReactionBatchImportRequest,
+    ReactionDatabaseImportReceipt,
+)
 from tricycle_rits import InMemoryRitsSshGateway
 
 
 class CapabilityRuntimeTests(unittest.TestCase):
+    def test_removed_download_option_is_rejected_before_any_file_or_network_access(self) -> None:
+        with self.assertRaisesRegex(InvalidRequestError, "only_succeeded"):
+            create_capability_catalog().plan(
+                "bohr.batch.download", {"run_dir": "/missing", "only_succeeded": True},
+                ExecutionContext("invalid-download"),
+            )
+
     def test_catalog_exposes_independent_capabilities(self) -> None:
         catalog = create_capability_catalog()
         expected = {
@@ -177,7 +188,7 @@ container_digest = "sha256:container"
 candidate_id = "candidate-1"
 
 [candidates.payload]
-epistemic_unc = 0.9
+epistemic_uncertainty = 0.9
 """.lstrip(),
                 encoding="utf-8",
             )
@@ -224,7 +235,6 @@ epistemic_unc = 0.9
                 'project_id = "project-1"\n'
                 'machine_type = "cpu"\n'
                 "continue_on_error = true\n"
-                "only_succeeded = true\n"
                 "interval = 0.25\n"
                 f'out_dir = "{run_dir}"\n',
                 encoding="utf-8",
@@ -245,7 +255,6 @@ epistemic_unc = 0.9
             action, resumed_request = resume_request(RunStore.open(run_dir))
             self.assertEqual(action, "bohr.batch.submit")
             self.assertTrue(resumed_request["continue_on_error"])
-            self.assertTrue(resumed_request["only_succeeded"])
             self.assertEqual(resumed_request["interval"], 0.25)
 
             with redirect_stdout(io.StringIO()):
@@ -403,7 +412,9 @@ initial_guess_source = "RitS zero-shot"
 
     def test_live_reaction_database_capability_injects_the_mcp_adapter(self) -> None:
         class FakeAdapter:
-            def ingest_calculation_logs(self, _request, manifest):
+            def ingest_calculation_logs(
+                self, _request: ReactionBatchImportRequest, manifest: CalculationLogBatchManifest
+            ) -> ReactionDatabaseImportReceipt:
                 self.manifest = manifest
                 return ReactionDatabaseImportReceipt(
                     project_id="project-001",
@@ -496,7 +507,7 @@ initial_guess_source = "RitS zero-shot"
         with TemporaryDirectory() as temp:
             request = Path(temp) / "request.json"
             request.write_text('reaction_id = "rxn-1"\n', encoding="utf-8")
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(InvalidRequestError):
                 main(["plan", "reactionopt.generate", str(request)])
 
     def test_retryable_failure_keeps_next_action(self) -> None:

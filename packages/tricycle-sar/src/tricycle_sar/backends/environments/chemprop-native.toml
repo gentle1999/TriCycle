@@ -1,0 +1,24 @@
+schema_version = 1
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[bootstrap]
+micromamba_url = "https://micro.mamba.pm/api/micromamba/linux-64/2.3.3"
+micromamba_version = "2.3.3"
+micromamba_archive_sha256 = "e7274528ceb9c20d048a428d6c22d7e02e268f8ffb762c4c365422347c8b8ba2"
+micromamba_binary_sha256 = "9496f94a8b78c536573c93d946ec9bba74bd9ff79ee55aaa4b546e30db8f511b"
+
+[models]
+
+[models.chemprop]
+repository = "https://github.com/chemprop/chemprop.git"
+revision = "db0bb86fbad6f6ec3c414202810390d8acc8baa0"
+mode = "base-venv"
+package = true
+requirements = []
+modules = ["chemprop", "chemprop.models", "lightning", "rdkit"]
+cli = ["chemprop", "--help"]
+
+[framework]
+bootstrap_build_tools = false
+no_build_isolation = false

@@ -2,6 +2,5 @@ project_id = "replace-with-internal-database-project-id"
 destination = "outputs/reaction-space-rits.csv"
 consumer = "RitS"
 structure_format = "xyz"
-reaction_filter = "cycloaddition"
 reaction_smarts = "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1"
 cleaned_only = true

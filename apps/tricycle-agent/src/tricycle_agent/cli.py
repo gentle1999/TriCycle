@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -19,11 +18,13 @@ from tricycle_core import (
     canonical_json,
     sha256_value,
 )
+from tricycle_core.io import file_sha256 as _file_hash
 from tricycle_core.toml import dump_toml
 
 from .bootstrap import create_capability_catalog, create_registry
 from .execution import CapabilityDispatcher
 from .run_state import (
+    _BATCH_CAPABILITIES,
     _PREPARATION_CAPABILITIES,
     copy_request,
     open_or_create,
@@ -32,15 +33,6 @@ from .run_state import (
     resume_request,
 )
 from .toml_requests import load_request
-
-
-def _read_toml_request(path: Path) -> dict[str, object]:
-    """Compatibility wrapper for the legacy CLI's user-facing errors."""
-
-    try:
-        return load_request(path)
-    except InvalidRequestError as exc:
-        raise SystemExit(str(exc)) from exc
 
 
 def _json(value: object, *, indent: int | None = None) -> None:
@@ -60,25 +52,21 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tricycle-agent")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from .campaign_cli import add_campaign_parser
+
+    add_campaign_parser(subparsers)
+
     subparsers.add_parser("plugins", help="list registered implementation components")
     subparsers.add_parser("capabilities", help="list Codex-facing capability manifests")
 
     plan = subparsers.add_parser(
         "plan",
-        help="build a dry-run plan; use '<capability> <request.toml>' for the new API",
+        help="build a dry-run plan for a capability request",
     )
-    plan.add_argument("target", help="capability ID or legacy plugin ID")
-    plan.add_argument("operation_or_request")
-    plan.add_argument("request", nargs="?", type=Path, help="legacy TOML request path")
+    plan.add_argument("capability_id")
+    plan.add_argument("request", type=Path, help="path to a TOML request file")
     plan.add_argument("--run-id", default="cli-run")
     plan.add_argument("--workdir", type=Path, default=Path("."))
-
-    prepare = subparsers.add_parser("prepare", help="legacy local plugin preparation")
-    prepare.add_argument("plugin_id")
-    prepare.add_argument("operation")
-    prepare.add_argument("request", type=Path, help="path to a TOML request file")
-    prepare.add_argument("--run-id", default="cli-run")
-    prepare.add_argument("--workdir", type=Path, default=Path("."))
 
     run = subparsers.add_parser(
         "run", help="execute one independently callable capability and persist run.toml"
@@ -111,14 +99,6 @@ def _run_directory_from_result(result: TaskResult, fallback: Path) -> Path:
         if artifact.kind == "directory":
             return Path(artifact.location).resolve()
     return fallback.resolve()
-
-
-def _file_hash(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _persist_plan(run_dir: Path, plan: TaskPlan) -> tuple[Path, str]:
@@ -225,12 +205,22 @@ def _execute_capability(
 ) -> tuple[TaskResult, RunStore]:
     dry_run = not live
     effective_request = dict(request)
-    if run_dir is not None:
-        key = "out_dir" if capability_id in _PREPARATION_CAPABILITIES else "run_dir"
-        effective_request[key] = str(run_dir)
-    target_dir = requested_run_dir(effective_request, workdir, run_id)
+    target_dir = (
+        run_dir.resolve() if run_dir is not None
+        else requested_run_dir(effective_request, workdir, run_id)
+    )
+    if capability_id in _PREPARATION_CAPABILITIES:
+        effective_request["out_dir"] = str(target_dir)
+        # These application lifecycle settings stay in the saved request for
+        # resume; the input preparer receives only its own request fields.
+        for key in ("continue_on_error", "interval", "max_iterations", "download_when_complete"):
+            effective_request.pop(key, None)
+    elif capability_id in _BATCH_CAPABILITIES and run_dir is not None:
+        effective_request["run_dir"] = str(target_dir)
+    elif capability_id.startswith("reactionopt.") and run_dir is not None:
+        effective_request["output_dir"] = str(target_dir)
     if capability_id == "exploration.round":
-        effective_request.setdefault("run_dir", str(target_dir))
+        effective_request["output_dir"] = str(target_dir)
         if reuse_existing:
             effective_request["resume"] = True
 
@@ -317,7 +307,6 @@ def _execute_capability(
             "reaction-db.filter",
             "reaction-db.export-rits",
             "reaction-db.export-rxnresid",
-            "reaction-db.export-space",
         }:
             dispatcher = dispatcher.with_reaction_database()
 
@@ -387,6 +376,7 @@ def _execute_capability(
                 payload={"result": result.to_dict()},
                 status=result.status.value,
             )
+        assert store is not None
         copy_request(request_path, store.run_dir)
         record_result(store, capability_id, result)
         _record_trace_summary(store, trace)
@@ -415,7 +405,7 @@ def _execute_capability(
 
 
 def _run_command(args: argparse.Namespace, catalog: CapabilityCatalog) -> int:
-    request = _read_toml_request(args.request)
+    request = load_request(args.request)
     run_id = _run_id_for(args.request, args.run_id)
     result, store = _execute_capability(
         args.capability_id,
@@ -467,6 +457,10 @@ def _resume_command(args: argparse.Namespace, catalog: CapabilityCatalog) -> int
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "campaign":
+        from .campaign_cli import campaign_command
+
+        return campaign_command(args)
 
     if args.command == "plugins":
         for manifest in create_registry().manifests():
@@ -485,26 +479,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             workdir=args.workdir,
             dry_run=True,
         )
-        if args.request is None:
-            request_path = Path(args.operation_or_request)
-            request = _read_toml_request(request_path)
-            plan = create_capability_catalog(registry).plan(args.target, request, context)
-        else:
-            request = _read_toml_request(args.request)
-            plugin = registry.get(args.target)
-            plan = plugin.plan(args.operation_or_request, request, context)
+        request = load_request(args.request)
+        plan = create_capability_catalog(registry).plan(args.capability_id, request, context)
         _json(plan.to_dict(), indent=2)
-        return 0
-
-    if args.command == "prepare":
-        request = _read_toml_request(args.request)
-        plugin = create_registry().get(args.plugin_id)
-        prepare = getattr(plugin, "prepare", None)
-        if prepare is None:
-            raise SystemExit(f"plugin does not support local preparation: {args.plugin_id}")
-        context = ExecutionContext(run_id=args.run_id, workdir=args.workdir, dry_run=True)
-        result = prepare(args.operation, request, context)
-        _json(result.to_dict(), indent=2)
         return 0
 
     if args.command == "run":

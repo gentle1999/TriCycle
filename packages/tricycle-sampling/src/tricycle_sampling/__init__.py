@@ -1,13 +1,40 @@
 from .acquisition import (
     AGENT_ACQUISITION_SCHEMA,
     AGENT_ACQUISITION_STRATEGY,
+    MAE_ACQUISITION_SCHEMA,
     AgentAuthoredAcquisitionSamplingStrategy,
     evaluate_numeric_expression,
+    validate_calculation_evidence,
+)
+from .experiment import (
+    EXPERIMENT_SAMPLING_SCHEMA,
+    STRUCTURE_FEATURE_NAMES,
+    StructuralKrigingBelieverFactory,
+    bounded_structure_features,
+    experiment_sampling_request,
+    reactant_structure_features,
+    select_experiment_candidates,
+)
+from .literature import (
+    BayesUCBSamplingStrategy,
+    DistanceUncertaintyProductSamplingStrategy,
+    GaussianKrigingBelieverFactory,
+    GaussianKrigingBelieverSession,
+    KrigingBelieverFactory,
+    KrigingBelieverSession,
+    LatinHypercubeSamplingStrategy,
+    SurrogatePrediction,
+    UncertaintyKrigingBelieverSamplingStrategy,
 )
 from .models import Candidate, SamplingRequest, SamplingResult
 from .plugin import SamplingPlugin
+from .protocols import (
+    LITERATURE_BASELINE_STRATEGIES,
+    LITERATURE_BASELINES,
+    SamplingBaselineProtocol,
+    get_baseline_protocol,
+)
 from .strategies import (
-    STRATEGY_ALIASES,
     UNCERTAINTY_SCORE_KEYS,
     AleatoricUncertaintySamplingStrategy,
     DensityWeightedUncertaintySamplingStrategy,
@@ -28,10 +55,31 @@ from .strategies import (
 )
 
 __all__ = [
+    "EXPERIMENT_SAMPLING_SCHEMA",
+    "STRUCTURE_FEATURE_NAMES",
+    "StructuralKrigingBelieverFactory",
+    "bounded_structure_features",
+    "experiment_sampling_request",
+    "reactant_structure_features",
+    "select_experiment_candidates",
+    "BayesUCBSamplingStrategy",
+    "DistanceUncertaintyProductSamplingStrategy",
+    "GaussianKrigingBelieverFactory",
+    "GaussianKrigingBelieverSession",
+    "KrigingBelieverFactory",
+    "KrigingBelieverSession",
+    "LITERATURE_BASELINES",
+    "LITERATURE_BASELINE_STRATEGIES",
+    "LatinHypercubeSamplingStrategy",
+    "SamplingBaselineProtocol",
+    "SurrogatePrediction",
+    "UncertaintyKrigingBelieverSamplingStrategy",
+    "get_baseline_protocol",
     "Candidate",
     "AleatoricUncertaintySamplingStrategy",
     "AGENT_ACQUISITION_SCHEMA",
     "AGENT_ACQUISITION_STRATEGY",
+    "MAE_ACQUISITION_SCHEMA",
     "AgentAuthoredAcquisitionSamplingStrategy",
     "DensityWeightedUncertaintySamplingStrategy",
     "EpistemicUncertaintySamplingStrategy",
@@ -39,7 +87,6 @@ __all__ = [
     "PairCoreSetSamplingStrategy",
     "PredictiveUncertaintySamplingStrategy",
     "RandomSamplingStrategy",
-    "STRATEGY_ALIASES",
     "SamplingPlugin",
     "SamplingRequest",
     "SamplingResult",
@@ -54,4 +101,5 @@ __all__ = [
     "get_uncertainty_field",
     "get_uncertainty_score",
     "get_uncertainty_scores",
+    "validate_calculation_evidence",
 ]

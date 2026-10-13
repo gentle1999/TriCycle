@@ -1,0 +1,22 @@
+# Souza et al., JACS 2025, DOI: 10.1021/jacs.5c02218
+# Pair-level Gaussian conditioning adapter, not the paper's RF/tree refit.
+strategy = "uncertainty-kriging-believer"
+budget = 2
+seed = 42
+
+[metadata.baseline]
+observation_noise_variance = 0.0
+
+[metadata.baseline.posterior]
+candidate_ids = ["rxn-001", "rxn-002", "rxn-003"]
+means = [20.0, 30.0, 40.0]
+covariance = [[9.0, 8.0, 0.0], [8.0, 8.9, 0.0], [0.0, 0.0, 8.0]]
+
+[[candidates]]
+candidate_id = "rxn-001"
+
+[[candidates]]
+candidate_id = "rxn-002"
+
+[[candidates]]
+candidate_id = "rxn-003"

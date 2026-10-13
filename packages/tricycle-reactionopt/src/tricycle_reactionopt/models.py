@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from hashlib import sha256
 from typing import Any
 
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,7 @@ class ReactionConfigRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionConfigRequest:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
             reaction_id=str(payload.get("reaction_id", "")),
             reaction_smiles=str(payload.get("reaction_smiles", "")),
@@ -127,13 +129,9 @@ class DielsAlderEnumerationRequest:
             raise InvalidRequestError("at least one substrate pair is required")
         object.__setattr__(self, "pairs", pairs)
         if self.stereochemistry not in {"reactant-constrained", "all"}:
-            raise InvalidRequestError(
-                "stereochemistry must be 'reactant-constrained' or 'all'"
-            )
+            raise InvalidRequestError("stereochemistry must be 'reactant-constrained' or 'all'")
         for name in ("max_products_per_pair", "max_isomers_per_product"):
-            object.__setattr__(
-                self, name, _positive_optional_int(getattr(self, name), name)
-            )
+            object.__setattr__(self, name, _positive_optional_int(getattr(self, name), name))
         for name in ("output_csv", "output_dir"):
             value = getattr(self, name)
             if value is not None:
@@ -155,8 +153,6 @@ class DielsAlderEnumerationRequest:
             "max_isomers_per_product",
             "output_csv",
             "output_dir",
-            "out_dir",
-            "run_dir",
         }
         unknown = sorted(set(payload) - allowed)
         if unknown:
@@ -166,9 +162,7 @@ class DielsAlderEnumerationRequest:
         pair_values = payload.get("pairs")
         if pair_values is None:
             pair_fields = {"ene_id", "ene_smiles", "diene_id", "diene_smiles"}
-            pair_values = [
-                {key: value for key, value in payload.items() if key in pair_fields}
-            ]
+            pair_values = [{key: value for key, value in payload.items() if key in pair_fields}]
         if not isinstance(pair_values, (list, tuple)):
             raise InvalidRequestError("pairs must be an array of tables")
         pairs: list[DielsAlderSubstratePair] = []
@@ -176,9 +170,7 @@ class DielsAlderEnumerationRequest:
             if not isinstance(value, Mapping):
                 raise InvalidRequestError(f"pairs[{index}] must be a table")
             pairs.append(DielsAlderSubstratePair.from_mapping(value))
-        output_dir = payload.get(
-            "output_dir", payload.get("out_dir", payload.get("run_dir"))
-        )
+        output_dir = payload.get("output_dir", None)
         return cls(
             pairs=tuple(pairs),
             stereochemistry=str(payload.get("stereochemistry", "reactant-constrained")),
@@ -189,9 +181,7 @@ class DielsAlderEnumerationRequest:
                 payload.get("max_isomers_per_product"), "max_isomers_per_product"
             ),
             output_csv=(
-                str(payload["output_csv"])
-                if payload.get("output_csv") is not None
-                else None
+                str(payload["output_csv"]) if payload.get("output_csv") is not None else None
             ),
             output_dir=(str(output_dir) if output_dir is not None else None),
         )
@@ -215,9 +205,7 @@ def _positive_optional_int(value: Any, name: str) -> int | None:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise InvalidRequestError(
-            f"{name} must be a positive integer when provided"
-        ) from exc
+        raise InvalidRequestError(f"{name} must be a positive integer when provided") from exc
     if parsed < 1 or str(value).strip() != str(parsed):
         raise InvalidRequestError(f"{name} must be a positive integer when provided")
     return parsed
@@ -272,16 +260,6 @@ class ConformerSamplingConfig:
         if payload is not None and not isinstance(payload, Mapping):
             raise InvalidRequestError("sampling must be a table")
         values = dict(payload or {})
-        aliases = {
-            "target_confs": "target_conformers",
-            "max_confs": "max_conformers",
-            "max_steps": "max_iterations",
-            "rms_prune_threshold": "rms_threshold",
-            "seed": "random_seed",
-        }
-        for source, target in aliases.items():
-            if target not in values and source in values:
-                values[target] = values[source]
         allowed = {
             "target_conformers",
             "max_conformers",
@@ -294,7 +272,7 @@ class ConformerSamplingConfig:
             "random_seed",
             "add_hs",
         }
-        unknown = sorted(set(values) - allowed - set(aliases))
+        unknown = sorted(set(values) - allowed)
         if unknown:
             raise InvalidRequestError(f"unknown conformer sampling fields: {', '.join(unknown)}")
         return cls(**{key: values[key] for key in allowed if key in values})
@@ -368,27 +346,23 @@ class ReactionProfileRequest:
     def from_mapping(cls, payload: Mapping[str, Any]) -> ReactionProfileRequest:
         allowed = {
             "reaction_smiles",
-            "reaction",
             "reaction_id",
             "sampling",
-            "conformers",
             "rits",
-            "ts",
             "output_dir",
-            "run_dir",
             "metadata",
         }
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise InvalidRequestError("unknown reactionopt.profile fields: " + ", ".join(unknown))
-        sampling_value = payload.get("sampling", payload.get("conformers", {}))
+        sampling_value = payload.get("sampling", {})
         if sampling_value is None:
             sampling_value = {}
         if not isinstance(sampling_value, Mapping):
             raise InvalidRequestError("sampling must be a table")
         sampling = ConformerSamplingConfig.from_mapping(sampling_value)
 
-        rits_value = payload.get("rits", payload.get("ts", {}))
+        rits_value = payload.get("rits", {})
         if rits_value is None:
             rits_value = {}
         if not isinstance(rits_value, Mapping):
@@ -400,15 +374,15 @@ class ReactionProfileRequest:
             raise InvalidRequestError("metadata must be a table")
 
         return cls(
-            reaction_smiles=str(payload.get("reaction_smiles", payload.get("reaction", ""))),
+            reaction_smiles=str(payload.get("reaction_smiles", "")),
             reaction_id=(
                 str(payload["reaction_id"]) if payload.get("reaction_id") is not None else None
             ),
             sampling=sampling,
             rits=rits_value,
             output_dir=(
-                str(payload.get("output_dir", payload.get("run_dir")))
-                if payload.get("output_dir", payload.get("run_dir")) is not None
+                str(payload.get("output_dir", None))
+                if payload.get("output_dir", None) is not None
                 else None
             ),
             metadata=dict(metadata_value),

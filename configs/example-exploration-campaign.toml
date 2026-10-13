@@ -1,0 +1,17 @@
+campaign_id = "adaptive-da"
+# Attach an already submitted batch; all workers must be nonempty and have job IDs.
+batch_run_dir = "/absolute/path/to/submitted-batch"
+# Limits apply to NEW QM batches/candidates, excluding the attached initial batch.
+max_new_batches = 3
+max_selected_candidates = 30
+poll_seconds = 60
+max_failures = 3
+agent_timeout_seconds = 1800
+# Immutable context: candidate pool, labeled history, model recipe/checkpoint manifest,
+# and any scoped authorization for independent model jobs.
+context_paths = ["/absolute/path/to/exploration-context.toml"]
+initial_selected_ids = []
+# Empty: a supervising agent consumes task.toml and writes response.toml.
+# Configured: execute argv + [absolute_task_path, absolute_response_path], no shell.
+# The wrapper must wait for its agent to finish and atomically write the response.
+agent_command = []

@@ -4,8 +4,10 @@ import importlib.util
 import json
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 from unittest.mock import patch
 
 from tricycle_core import ExecutionContext, InvalidRequestError, TaskStatus
@@ -33,6 +35,22 @@ EXPLICIT_CYCLOADDITION_REACTION = (
 
 
 class ReactionOptProfileContractTests(unittest.TestCase):
+    def test_rits_provenance_defaults_follow_manifest_for_both_input_paths(self) -> None:
+        from tricycle_rits.assets import load_model_asset
+
+        asset = replace(
+            load_model_asset(), repository="https://example.invalid/rits", revision="1" * 40,
+        )
+        with patch("tricycle_reactionopt.rits.load_model_asset", return_value=asset):
+            for config in (RitsInferenceConfig(), RitsInferenceConfig.from_mapping({})):
+                self.assertEqual(config.source_repository, asset.repository)
+                self.assertEqual(config.source_revision, asset.revision)
+            explicit = RitsInferenceConfig.from_mapping(
+                {"source_repository": "https://example.invalid/fork", "source_revision": "2" * 40}
+            )
+            self.assertEqual(explicit.source_repository, "https://example.invalid/fork")
+            self.assertEqual(explicit.source_revision, "2" * 40)
+
     @unittest.skipUnless(
         HAS_CHEMISTRY, "RDKit and NumPy are optional in the base smoke environment"
     )
@@ -44,6 +62,7 @@ class ReactionOptProfileContractTests(unittest.TestCase):
                 "rits": {"project_id": "project-1", "machine_type": "gpu"},
             }
         )
+        assert request.reaction_id is not None
         self.assertTrue(request.reaction_id.startswith("reaction-"))
         self.assertEqual(request.sampling.target_conformers, 2)
         config = RitsInferenceConfig.from_mapping(request.rits)
@@ -78,7 +97,7 @@ class ReactionOptProfileContractTests(unittest.TestCase):
     def test_profile_samples_both_sides_and_uses_rits_for_ts(self) -> None:
         import tricycle_reactionopt.conformers as conformers
         from rdkit import Chem
-        from rdkit.Chem import AllChem
+        from rdkit.Chem import rdDistGeom
 
         reaction = Reaction.from_rxn_smiles(EXPLICIT_CYCLOADDITION_REACTION)
         self.assertEqual(reaction.atom_map_numbers, tuple(range(1, 13)))
@@ -87,25 +106,25 @@ class ReactionOptProfileContractTests(unittest.TestCase):
 
         sampled_sides: list[str] = []
 
-        def fake_sample(mol: object, config: ConformerSamplingConfig, *, side: str) -> object:
+        def fake_sample(mol: Chem.Mol, config: ConformerSamplingConfig, *, side: str) -> Chem.Mol:
             del config
             sampled_sides.append(side)
             result = Chem.Mol(mol)
             result.RemoveAllConformers()
-            status = AllChem.EmbedMolecule(result, randomSeed=3407, useRandomCoords=True)
+            status = rdDistGeom.EmbedMolecule(result, randomSeed=3407, useRandomCoords=True)
             self.assertGreaterEqual(status, 0)
             return result
 
         test_case = self
 
-        sampler_requests: list[object] = []
+        sampler_requests: list[RitsTransitionStateInput] = []
 
         class FakeRitsSampler:
-            def sample(self, request: object) -> RitsTransitionStateResult:
+            def sample(self, request: RitsTransitionStateInput) -> RitsTransitionStateResult:
                 test_case.assertEqual(request.__class__.__name__, "RitsTransitionStateInput")
                 sampler_requests.append(request)
                 ts = Chem.Mol(reaction.merged_reactants)
-                status = AllChem.EmbedMolecule(ts, randomSeed=3407, useRandomCoords=True)
+                status = rdDistGeom.EmbedMolecule(ts, randomSeed=3407, useRandomCoords=True)
                 test_case.assertGreaterEqual(status, 0)
                 return RitsTransitionStateResult((ts,), {"adapter": "fake"})
 
@@ -133,7 +152,6 @@ class ReactionOptProfileContractTests(unittest.TestCase):
                 expected_atom_maps,
             )
         self.assertEqual(profile.metadata["ts_sampling"], "rits.run_ts_pipeline")
-        self.assertFalse(profile.metadata["legacy_product_backward_strategy"])
         self.assertEqual(
             profile.transition_state_conformer_set.conformers[0].metadata["adapter"], "fake"
         )
@@ -160,16 +178,16 @@ class ReactionOptProfileContractTests(unittest.TestCase):
     )
     def test_rits_branch_does_not_require_endpoint_sampling(self) -> None:
         from rdkit import Chem
-        from rdkit.Chem import AllChem
+        from rdkit.Chem import rdDistGeom
 
         reaction = Reaction.from_rxn_smiles(EXPLICIT_CYCLOADDITION_REACTION)
         test_case = self
 
         class FakeRitsSampler:
-            def sample(self, request: object) -> RitsTransitionStateResult:
+            def sample(self, request: RitsTransitionStateInput) -> RitsTransitionStateResult:
                 test_case.assertEqual(request.reaction_smiles, reaction.reaction_smiles)
                 ts = Chem.Mol(reaction.merged_reactants)
-                status = AllChem.EmbedMolecule(ts, randomSeed=3407, useRandomCoords=True)
+                status = rdDistGeom.EmbedMolecule(ts, randomSeed=3407, useRandomCoords=True)
                 test_case.assertGreaterEqual(status, 0)
                 return RitsTransitionStateResult((ts,))
 
@@ -188,6 +206,31 @@ class ReactionOptProfileContractTests(unittest.TestCase):
             result = reaction.sample_transition_states(FakeRitsSampler())
 
         self.assertEqual(len(result.conformers), 1)
+
+    @unittest.skipUnless(
+        HAS_CHEMISTRY, "RDKit and NumPy are optional in the base smoke environment"
+    )
+    def test_sampler_requires_sample_method_and_typed_result(self) -> None:
+        reaction = Reaction.from_rxn_smiles(EXPLICIT_METHANE_REACTION)
+
+        def bare_callable(request: RitsTransitionStateInput) -> RitsTransitionStateResult:
+            raise AssertionError("a bare callable must not be invoked")
+
+        class InvalidResultSampler:
+            def __init__(self, result: Any) -> None:
+                self.result = result
+
+            def sample(self, request: RitsTransitionStateInput) -> Any:
+                return self.result
+
+        invalid_sampler: Any = bare_callable
+        with self.assertRaisesRegex(InvalidRequestError, "must implement sample"):
+            reaction.sample_transition_states(invalid_sampler)
+        for result in ([object()], (object(),), None):
+            with self.subTest(result_type=type(result).__name__), self.assertRaisesRegex(
+                InvalidRequestError, "must return RitsTransitionStateResult"
+            ):
+                reaction.sample_transition_states(InvalidResultSampler(result))
 
     @unittest.skipUnless(
         HAS_CHEMISTRY, "RDKit and NumPy are optional in the base smoke environment"

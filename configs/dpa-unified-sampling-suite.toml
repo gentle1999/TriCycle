@@ -1,0 +1,37 @@
+# Matched experiment: only acquisition strategy differs; preparation submits nothing.
+suite_id = "dpa-unified-sampling-suite-v3"
+readiness = "runs/2026-09-25/23-25-15.990993+0800/dpa-smart-experiment-readiness/readiness.toml"
+sampling_strategies = ["predictive-uncertainty", "latin-hypercube", "ucb", "distance-uncertainty-product", "uncertainty-kriging-believer", "cost-aware"]
+# The adaptive agent uses structure coverage, cost estimates, revealed-label feedback and one batch review.
+fixed_seed = 42
+poll_seconds = 60
+agent_timeout_seconds = 600
+max_decision_attempts = 3
+agent_command = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+
+[decision_protocol]
+name = "autonomous-core-hours-mae-v1"
+# Frozen evaluation milestones, not a hard submission spending limit.
+evaluation_budgets_core_hours = [50000, 75000, 100000, 150000, 200000, 250000, 300000]
+
+[decision_agent]
+model = "gpt-6-luna"
+reasoning_effort = "max"
+
+[prior_structures]
+path = "runs/2026-09-25/23-41-37.276124+0800/dpa-intelligent-replay-v1/assets/prior-structures.csv"
+sha256 = "1b0dc551589f939dda9b353de74f38612f429e01cc998c86ec5fd1e77ed35fa8"
+
+[rxnresid]
+# Source is supplied by the verified SAR package asset.
+revision = "a615f4161cb612f5ad98136d4965685009c62bab"
+
+[bohr]
+project_id = "4657140"
+machine_type = "c6_m60_1 * NVIDIA 4090"
+image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
+max_run_time = 1440
+max_reschedule_times = 2
+
+[training]
+epochs = 300

@@ -18,7 +18,7 @@ uv run --package tricycle-agent tricycle-agent run \
   bohr.job.download request.toml --run-id <id> --live
 ```
 
-批量 run 优先使用 `resume --run-dir 'runs/<date>/<timestamp>/<id>' --live`，让状态文件选择下载阶段。下载是远程读取加本地写入，
+已有 run 先 inspect，仅在 `resume.next_action` 为所需下载能力时使用 `resume --run-dir <目录> --live`；批量下载和报告位置见 [bohr-batch-download](../bohr-batch-download/SKILL.md)。单独查询/下载可创建新的操作记录，不对已有 `run.toml` 再执行 `run`。下载是远程读取加本地写入，
 必须检查目标目录、保留下载报告，并且不把凭据写入 `run.toml`。
 
 ## 失败与恢复

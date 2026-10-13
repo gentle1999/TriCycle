@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import csv
 import json
-import os
-import tempfile
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +21,11 @@ from tricycle_core import (
     timestamped_run_directory,
 )
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.io import file_sha256 as _sha256_file
+from tricycle_core.io import write_delimited
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_sampling import (
     AGENT_ACQUISITION_STRATEGY,
-    STRATEGY_ALIASES,
     UNCERTAINTY_SCORE_KEYS,
     SamplingPlugin,
     SamplingRequest,
@@ -38,49 +35,10 @@ from .models import ExplorationRoundRequest
 from .policies import decide_range, decide_training, resolve_snapshot_transition
 
 
-def _write_text_atomic(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_name = handle.name
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-        temporary_name = None
-    finally:
-        if temporary_name is not None:
-            with suppress(FileNotFoundError):
-                os.unlink(temporary_name)
+def _write_tsv(path: Path, fields: tuple[str, ...], rows: Sequence[Mapping[str, object]]) -> None:
+    write_delimited(path, fields, rows, delimiter="\t")
 
 
-def _write_tsv(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:
-    from io import StringIO
-
-    buffer = StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=fields, delimiter="\t", lineterminator="\n")
-    writer.writeheader()
-    writer.writerows({field: row.get(field, "") for field in fields} for row in rows)
-    _write_text_atomic(path, buffer.getvalue())
-
-
-def _sha256_file(path: Path) -> str:
-    import hashlib
-
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _artifact_row(path: Path, root: Path) -> dict[str, object]:
@@ -125,9 +83,8 @@ def _verify_artifact_manifest(manifest_path: Path, root: Path) -> None:
 
 
 def _strategy_kind(strategy: str) -> str | None:
-    canonical = STRATEGY_ALIASES.get(strategy, strategy)
     for kind in UNCERTAINTY_SCORE_KEYS:
-        if canonical == f"{kind}-uncertainty":
+        if strategy == f"{kind}-uncertainty":
             return kind
     return None
 
@@ -136,7 +93,7 @@ def _score_source(candidate: object, kind: str) -> str:
     payload = getattr(candidate, "payload", {})
     if any(key in payload for key in UNCERTAINTY_SCORE_KEYS[kind]):
         return "candidate.payload"
-    if "posterior_probabilities" in payload or "posterior_probs" in payload:
+    if "posterior_probabilities" in payload:
         return "posterior_probabilities"
     return ""
 

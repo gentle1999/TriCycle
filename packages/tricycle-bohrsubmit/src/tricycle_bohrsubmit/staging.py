@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import csv
 import glob
+import json
+import os
 import shlex
 import shutil
 from dataclasses import dataclass
@@ -10,10 +11,13 @@ from typing import Any
 
 from tricycle_core import timestamped_run_directory
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.io import write_delimited
 
 from .config import dump_toml
 from .dpa import build_dpa_tasks, render_task_files
 from .models import BatchRequest, DpaBernyRequest
+from .task_table import expand_task_specs
+from .training_protocol import bind_staged_training_protocol
 from .utils import compact_name, posix_cksum, short_hash, worker_label
 
 
@@ -65,8 +69,25 @@ def _copy_path(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def _link_staged_file(source: str | Path, destination: str | Path) -> str:
+    """Reuse a run-owned immutable copy; never link to an external source."""
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+    return str(destination)
+
+
+def _reuse_staged_path(source: Path, destination: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(source, destination, copy_function=_link_staged_file)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _link_staged_file(source, destination)
+
+
 def _write_env(path: Path, values: dict[str, object]) -> None:
-    """Write a shell environment bridge for worker scripts and compatibility."""
+    """Write shell variables consumed by the worker scripts."""
 
     with path.open("w", encoding="utf-8") as handle:
         handle.write("# Runtime environment bridge; declarative configuration is in batch.toml.\n")
@@ -75,10 +96,7 @@ def _write_env(path: Path, values: dict[str, object]) -> None:
 
 
 def _write_tsv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, object]]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t", lineterminator="\n")
-        writer.writeheader()
-        writer.writerows({key: row.get(key, "") for key in fieldnames} for row in rows)
+    write_delimited(path, fieldnames, rows, delimiter="\t")
 
 
 def _generic_worker_runner() -> str:
@@ -117,6 +135,26 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+export DEVICE=cuda
+mkdir -p results
+python - <<'PY'
+import json
+from pathlib import Path
+import torch
+from deepmd.pt.utils import env
+
+if not torch.cuda.is_available() or env.DEVICE.type != "cuda":
+    raise RuntimeError("DPA requires CUDA; CPU fallback is disabled")
+value = torch.ones((2, 2), device=env.DEVICE, requires_grad=True)
+(value @ value).sum().backward()
+torch.cuda.synchronize(env.DEVICE)
+report = {"device": str(env.DEVICE), "device_name": torch.cuda.get_device_name(env.DEVICE),
+          "torch": str(torch.__version__), "cuda": torch.version.cuda,
+          "forward_backward_verified": True}
+Path("results/dpa-device.json").write_text(json.dumps(report, indent=2) + "\\n")
+print("[dpa-device] " + json.dumps(report), flush=True)
+PY
 
 if [[ "${DPA_NO_FREEZE:-0}" != 1 ]]; then
   [[ -f "${DPA_MODEL_INPUT:-model.ckpt.pt}" ]] || { printf '[dpa-berny] missing model checkpoint\\n' >&2; exit 1; }
@@ -175,7 +213,7 @@ def _stage_common_worker_dirs(run_dir: Path, workers: int) -> list[Path]:
 def _prepared_results(run_dir: Path, submit_rows: list[dict[str, object]], status: str) -> None:
     rows = []
     for row in submit_rows:
-        count = int(row["tasks"])
+        count = int(str(row["tasks"]))
         rows.append(
             {
                 "worker": row["worker"],
@@ -191,31 +229,6 @@ def _prepared_results(run_dir: Path, submit_rows: list[dict[str, object]], statu
         ("worker", "tasks", "job_id", "job_name", "status", "input_dir"),
         rows,
     )
-
-
-def _base_job_metadata(
-    *,
-    run_id: str,
-    workers: int,
-    job_prefix: str,
-    job_group_name: str,
-    job_group_id: str | None,
-    auto_job_group: bool,
-    image: str,
-    project_id: str,
-    machine_type: str,
-) -> dict[str, object]:
-    return {
-        "run_id": run_id,
-        "workers": workers,
-        "job_prefix": job_prefix,
-        "job_group_name": job_group_name,
-        "job_group_id": job_group_id or "",
-        "auto_job_group": int(auto_job_group),
-        "image": image,
-        "project_id": project_id,
-        "machine_type": machine_type,
-    }
 
 
 def _base_run_config(
@@ -252,8 +265,15 @@ def _base_run_config(
 def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: bool) -> StagedRun:
     # Local staging is explicit; dry-run only suppresses remote effects.
     tasks = _expand_patterns(request.task_patterns)
-    if not tasks:
+    task_specs = expand_task_specs(request.task_defaults, request.task_specs)
+    if not tasks and not task_specs:
         raise InvalidRequestError(f"no task files matched: {request.task_patterns}")
+    binding = None
+    for common in request.common_paths:
+        if common.name == "training-protocol.json":
+            value = json.loads(common.read_text())
+            if "method_id" in value:
+                binding = value
     output = (request.out_dir or timestamped_run_directory(workdir / "runs", run_id)).resolve()
     _assert_empty_output(output)
 
@@ -261,7 +281,7 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
     job_group_name = compact_name(request.job_group_name or job_prefix)
     worker_dirs = _stage_common_worker_dirs(output, request.workers)
     counts = [0] * request.workers
-    for worker_dir in worker_dirs:
+    for index, worker_dir in enumerate(worker_dirs):
         (worker_dir / "tasks").mkdir()
         (worker_dir / "common").mkdir()
         if request.worker_script is not None:
@@ -270,58 +290,63 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
                 raise InvalidRequestError(f"worker_script is not a file: {source}")
             _copy_path(source, worker_dir / "run_worker.sh")
         else:
-            source = request.script.resolve() if request.script is not None else None
-            if source is None or not source.is_file():
-                raise InvalidRequestError(f"script is not a file: {source}")
-            _copy_path(source, worker_dir / "common" / "__bohr_task_script.sh")
+            script_source = request.script.resolve() if request.script is not None else None
+            if script_source is None or not script_source.is_file():
+                raise InvalidRequestError(f"script is not a file: {script_source}")
+            if binding is not None and index:
+                _reuse_staged_path(
+                    worker_dirs[0] / "common/__bohr_task_script.sh",
+                    worker_dir / "common/__bohr_task_script.sh",
+                )
+            else:
+                _copy_path(script_source, worker_dir / "common" / "__bohr_task_script.sh")
             (worker_dir / "run_worker.sh").write_text(_generic_worker_runner(), encoding="utf-8")
         (worker_dir / "run_worker.sh").chmod(0o755)
 
-    for task_path in tasks:
-        worker = posix_cksum(str(task_path)) % request.workers
+    task_rows: list[dict[str, object]] = []
+    inputs: list[tuple[str, str, Path | None, dict[str, Any] | None]] = [
+        (str(path), path.name, path, None) for path in tasks
+    ]
+    inputs += [(f"inline:{name}", f"{name}.toml", None, values) for name, values in task_specs]
+    for index, (identity, name, task_path, values) in enumerate(inputs):
+        worker = (
+            index % request.workers
+            if values is not None
+            else posix_cksum(identity) % request.workers
+        )
         label = worker_label(worker, request.workers)
-        cloud_path = f"tasks/{short_hash(str(task_path))}_{task_path.name}"
-        _copy_path(task_path, output / label / cloud_path)
+        cloud_path = f"tasks/{short_hash(identity)}_{name}"
+        if values is not None:
+            dump_toml(output / label / cloud_path, values)
+        else:
+            if task_path is None:
+                raise InvalidRequestError("Missing task input path")
+            _copy_path(task_path, output / label / cloud_path)
         with (output / label / "manifest.txt").open("a", encoding="utf-8") as manifest:
             manifest.write(f"{cloud_path}\n")
-        with (output / label / "manifest.tsv").open("a", encoding="utf-8") as manifest:
-            manifest.write(f"{task_path}\t{cloud_path}\n")
+        if values is None or "manifest.tsv" in request.backward_files.split(","):
+            with (output / label / "manifest.tsv").open("a", encoding="utf-8") as manifest:
+                manifest.write(f"{identity}\t{cloud_path}\n")
+        task_rows.append({"worker": label, "source_path": identity, "cloud_path": cloud_path})
         counts[worker] += 1
 
-    for worker_dir in worker_dirs:
+    for index, worker_dir in enumerate(worker_dirs):
         # The common directory is populated after task staging so duplicate
         # names can be checked consistently for every worker.
         for common in request.common_paths:
+            if binding is not None and common.name == "training-protocol.json":
+                continue
             source = common.resolve()
             if not source.exists():
                 raise InvalidRequestError(f"common path does not exist: {source}")
             destination = worker_dir / "common" / source.name
             if destination.exists():
                 raise InvalidRequestError(f"duplicate staged common basename: {source.name}")
-            _copy_path(source, destination)
+            if binding is not None and index:
+                _reuse_staged_path(worker_dirs[0] / "common" / source.name, destination)
+            else:
+                _copy_path(source, destination)
 
-    batch_env = _base_job_metadata(
-        run_id=run_id,
-        workers=request.workers,
-        job_prefix=job_prefix,
-        job_group_name=job_group_name,
-        job_group_id=request.job_group_id,
-        auto_job_group=request.auto_job_group,
-        image=request.image,
-        project_id=str(request.project_id),
-        machine_type=str(request.machine_type),
-    )
-    batch_env.update(
-        {
-            "backward_files": request.backward_files,
-            "log_file": request.log_file,
-            "result_path": request.result_path or "",
-            "max_reschedule_times": request.max_reschedule_times or "",
-            "max_run_time": request.max_run_time or "",
-            "nnode": request.nnode or "",
-        }
-    )
-    _write_env(output / "batch.env", batch_env)
     batch_config = _base_run_config(
         run_id=run_id,
         workers=request.workers,
@@ -345,17 +370,9 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
             "extra_submit_args": list(request.extra_submit_args),
         }
     )
+    if any((directory / "common/training-protocol.json").exists() for directory in worker_dirs):
+        batch_config["run"]["training_protocol_required"] = True
     dump_toml(output / "batch.toml", batch_config)
-    task_rows: list[dict[str, object]] = []
-    for worker_dir in worker_dirs:
-        manifest = worker_dir / "manifest.tsv"
-        if manifest.is_file():
-            with manifest.open(encoding="utf-8") as handle:
-                for line in handle:
-                    source, cloud = line.rstrip("\n").split("\t", 1)
-                    task_rows.append(
-                        {"worker": worker_dir.name, "source_path": source, "cloud_path": cloud}
-                    )
     _write_tsv(output / "tasks.tsv", ("worker", "source_path", "cloud_path"), task_rows)
 
     submit_rows = [
@@ -367,9 +384,13 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
         }
         for index in range(request.workers)
     ]
-    _write_tsv(output / "submit-plan.tsv", ("worker", "tasks", "job_name", "input_dir"), submit_rows)
+    _write_tsv(
+        output / "submit-plan.tsv", ("worker", "tasks", "job_name", "input_dir"), submit_rows
+    )
     _prepared_results(output, submit_rows, "DRY_RUN" if dry_run else "PREPARED")
-    return StagedRun(run_id, output, request.workers, len(tasks), tuple(counts), "batch")
+    if binding is not None:
+        bind_staged_training_protocol(output, binding, batch_config)
+    return StagedRun(run_id, output, request.workers, len(inputs), tuple(counts), "batch")
 
 
 def _dpa_env(request: DpaBernyRequest) -> dict[str, object]:
@@ -418,45 +439,6 @@ def stage_dpa_berny(
             _copy_path(model_path, worker_dir / request.model_name)
             (worker_dir / "checkpoint").write_text(f"./{request.model_name}", encoding="utf-8")
 
-    batch_env = {
-        **_base_job_metadata(
-            run_id=run_id,
-            workers=request.workers,
-            job_prefix=job_prefix,
-            job_group_name=job_group_name,
-            job_group_id=request.job_group_id,
-            auto_job_group=request.auto_job_group,
-            image=request.image,
-            project_id=str(request.project_id),
-            machine_type=str(request.machine_type),
-        ),
-        "task_type": request.task_type,
-        "engine": request.engine,
-        "fixed_only": int(request.fixed_only),
-        "multi_stage_chk": int(request.multi_stage_chk),
-        "ignore_constraints": int(request.ignore_constraints),
-        "one_task_per_worker": int(request.one_task_per_worker),
-        "charge": request.charge,
-        "multiplicity": request.multiplicity,
-        "nproc": request.nproc,
-        "mem": request.mem,
-        "route": request.route or "",
-        "opt_route": request.opt_route or "",
-        "fixed_route": request.fixed_route or "",
-        "model_name": request.model_name,
-        "frozen_model": request.frozen_model,
-        "no_freeze": int(request.no_freeze),
-        "allow_task_failures": int(request.allow_task_failures),
-        "functional": request.functional or "",
-        "basis": request.basis or "",
-        "backward_files": request.backward_files,
-        "log_file": request.log_file,
-        "result_path": request.result_path or "",
-        "max_reschedule_times": request.max_reschedule_times or "",
-        "max_run_time": request.max_run_time or "",
-        "nnode": request.nnode or "",
-    }
-    _write_env(output / "batch.env", batch_env)
     batch_config = _base_run_config(
         run_id=run_id,
         workers=request.workers,
@@ -542,6 +524,8 @@ def stage_dpa_berny(
         }
         for index in range(request.workers)
     ]
-    _write_tsv(output / "submit-plan.tsv", ("worker", "tasks", "job_name", "input_dir"), submit_rows)
+    _write_tsv(
+        output / "submit-plan.tsv", ("worker", "tasks", "job_name", "input_dir"), submit_rows
+    )
     _prepared_results(output, submit_rows, "DRY_RUN" if dry_run else "PREPARED")
     return StagedRun(run_id, output, request.workers, len(tasks), tuple(counts), "dpa-berny")

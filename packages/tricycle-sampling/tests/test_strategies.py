@@ -3,6 +3,7 @@ import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from tricycle_core import ExecutionContext, InvalidRequestError
 from tricycle_sampling import (
@@ -24,15 +25,15 @@ class UncertaintySamplingTests(unittest.TestCase):
         candidates = (
             Candidate(
                 "rxn-a",
-                {"predictive_unc": 0.2, "epistemic_unc": 0.9, "aleatoric_unc": 0.1},
+                {"predictive_uncertainty": 0.2, "epistemic_uncertainty": 0.9, "aleatoric_uncertainty": 0.1},
             ),
             Candidate(
                 "rxn-b",
-                {"predictive_unc": 0.8, "epistemic_unc": 0.2, "aleatoric_unc": 0.7},
+                {"predictive_uncertainty": 0.8, "epistemic_uncertainty": 0.2, "aleatoric_uncertainty": 0.7},
             ),
             Candidate(
                 "rxn-c",
-                {"predictive_unc": 0.8, "epistemic_unc": 0.3, "aleatoric_unc": 0.4},
+                {"predictive_uncertainty": 0.8, "epistemic_uncertainty": 0.3, "aleatoric_uncertainty": 0.4},
             ),
         )
 
@@ -49,32 +50,16 @@ class UncertaintySamplingTests(unittest.TestCase):
             (candidates[1],),
         )
 
-    def test_paper_aliases_are_registered(self) -> None:
+    def test_old_strategy_names_are_rejected(self) -> None:
         plugin = SamplingPlugin()
-        candidates = tuple(
-            Candidate(
-                candidate_id,
-                {
-                    "predictive_unc": predictive,
-                    "epistemic_unc": epistemic,
-                    "aleatoric_unc": aleatoric,
-                },
-            )
-            for candidate_id, predictive, epistemic, aleatoric in (
-                ("rxn-a", 0.1, 0.3, 0.2),
-                ("rxn-b", 0.9, 0.8, 0.7),
-            )
-        )
-
-        for strategy in (
-            "predictive_unc_based",
-            "epistemic_unc_based",
-            "aleatoric_unc_based",
+        for name in (
+            "predictive_unc_based", "epistemic_unc_based", "aleatoric_unc_based",
+            "random_selection", "bayes-ucb", "latin_hypercube", "core_set",
         ):
-            result = plugin.select(
-                SamplingRequest(candidates=candidates, budget=1, strategy=strategy)
-            )
-            self.assertEqual(result.selected_ids, ("rxn-b",))
+            with self.subTest(name=name), self.assertRaisesRegex(
+                InvalidRequestError, "unknown sampling strategy"
+            ):
+                plugin.select(SamplingRequest((Candidate("a"),), 0, name))
 
     def test_rxnresid_evidential_variances_are_sampling_scores(self) -> None:
         candidates = (
@@ -130,17 +115,17 @@ class UncertaintySamplingTests(unittest.TestCase):
     def test_plan_contains_uncertainty_field_and_scores(self) -> None:
         plugin = SamplingPlugin()
         request = SamplingRequest(
-            candidates=(Candidate("rxn-a", {"predictive_unc": 0.25, "epistemic_unc": 0.1, "aleatoric_unc": 0.15}),),
+            candidates=(Candidate("rxn-a", {"predictive_uncertainty": 0.25, "epistemic_uncertainty": 0.1, "aleatoric_uncertainty": 0.15}),),
             budget=1,
             strategy="predictive-uncertainty",
         )
 
         plan = plugin.plan_select(request, ExecutionContext(run_id="sampling-test"))
 
-        self.assertEqual(plan.parameters["score_field"], "predictive_unc")
+        self.assertEqual(plan.parameters["score_field"], "predictive_uncertainty")
         self.assertEqual(plan.parameters["candidate_scores"], [{"candidate_id": "rxn-a", "score": 0.25}])
         self.assertEqual(plan.metadata["selection"], "highest-score")
-        self.assertEqual(plan.metadata["strategy_version"], "1.0.0")
+        self.assertEqual(plan.metadata["strategy_version"], "1.1.0")
 
     def test_uncertainty_scores_are_required_when_budget_is_nonzero(self) -> None:
         plugin = SamplingPlugin()
@@ -157,8 +142,8 @@ class UncertaintySamplingTests(unittest.TestCase):
         plugin = SamplingPlugin()
         request = SamplingRequest(
             candidates=(
-                Candidate("rxn-low", {"epistemic_unc": 0.1}),
-                Candidate("rxn-high", {"epistemic_unc": 0.9}),
+                Candidate("rxn-low", {"epistemic_uncertainty": 0.1}),
+                Candidate("rxn-high", {"epistemic_uncertainty": 0.9}),
             ),
             budget=1,
             strategy="epistemic-uncertainty",
@@ -247,7 +232,7 @@ class AgentAuthoredAcquisitionTests(unittest.TestCase):
             "worker-001\t1\tbohr-1\tjob-1\tSUBMITTED\tCOMPLETED\tyes\tSUCCEEDED\tinputs\t2026-09-24\n",
             encoding="utf-8",
         )
-        self.metadata = {
+        self.metadata: dict[str, Any] = {
             "agent_acquisition": {
                 "schema": AGENT_ACQUISITION_SCHEMA,
                 "function_id": "adaptive-round-0001",

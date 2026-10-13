@@ -186,6 +186,7 @@ def _validate_rxnresid_mcp_receipt(
         raise InvalidRequestError(
             "RxnResid thermodynamics queries do not match the MCP batch contract"
         )
+    assert isinstance(mapped_count, int)
     if batch_count != (mapped_count + 23) // 24:
         raise InvalidRequestError("RxnResid thermodynamics batch count is inconsistent")
 
@@ -290,7 +291,6 @@ class ReactionFilterReceipt:
     """Adapter result for the database-authoritative rxn-SMARTS selection."""
 
     project_id: str
-    reaction_filter: str = "cycloaddition"
     selected_count: int | None = None
     reaction_smarts: str = CYCLOADDITION_RXN_SMARTS
     metadata: Mapping[str, object] = field(default_factory=dict)
@@ -308,7 +308,6 @@ class ReactionFilterReceipt:
     def to_dict(self) -> dict[str, object]:
         return {
             "project_id": self.project_id,
-            "reaction_filter": self.reaction_filter,
             "selected_count": self.selected_count,
             "reaction_smarts": self.reaction_smarts,
             "metadata": dict(self.metadata),
@@ -322,9 +321,7 @@ class ReactionDatabaseAdapter(Protocol):
     adapter owns project creation, database ingestion, and the authoritative
     cleaned-reaction export protocol; no remote schema is duplicated here.
     For reaction selection and exports, the adapter must pass
-    ``request.reaction_smarts`` to the database's rxn-SMARTS predicate.  The
-    ``reaction_filter`` value is only a local operation label and must not be
-    translated into a ``reaction_class`` query.
+    ``request.reaction_smarts`` to the database's rxn-SMARTS predicate.
 
     Export implementations must use the request builders in ``contracts.py``.
     RxnResid and RitS query the database through the injected MCP adapter.
@@ -352,6 +349,16 @@ class ReactionDatabaseAdapter(Protocol):
         self,
         request: RxnResidDatasetExportRequest,
     ) -> ReactionSpaceExportReceipt: ...
+
+
+class ReactionThermodynamicsCsvAdapter(Protocol):
+    """Injected adapter for database-native profile CSV downloads."""
+
+    def export_thermodynamics_csv(
+        self, request: ReactionFilterRequest, destination: Path, *,
+        has_activation_gibbs_free_energy: bool | None = None,
+        has_reaction_gibbs_free_energy: bool | None = None,
+    ) -> Mapping[str, object]: ...
 
 
 class InMemoryReactionRepository:

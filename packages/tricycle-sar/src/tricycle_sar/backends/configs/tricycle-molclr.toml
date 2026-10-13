@@ -1,0 +1,18 @@
+repository = "https://github.com/yuyangw/MolCLR"
+revision = "3d3bc1912be27b0c97435fd9134f4d4c73d4c5ab"
+asset_directory = "assets/molclr"
+device = "cuda:0"
+batch_size = 8
+epochs = 100
+patience = 30
+learning_rate = 0.0005
+weight_decay = 1e-06
+encoder_learning_rate = 0.0001
+files = [{"path" = "LICENSE", "sha256" = "40883a7fab0f4f9b1bfe4cb7336d88d402fea8f8472f38a29d46fb1f43587251"}, {"path" = "README.md", "sha256" = "046515ce596aa6313d8b1656c63cabccd77c66946a214f60f3ed9434e4dddfee"}, {"path" = "ckpt/pretrained_gin/checkpoints/model.pth", "sha256" = "93bc4f02ea8847cd44fa21ec3f65600ff2f4a7ae6d3a85e8519a5bcc56afc20a"}, {"path" = "config.yaml", "sha256" = "99698a219812c3fa94ba57595c93b81e22801ddee9c144656c3372aacb4e68a9"}, {"path" = "config_finetune.yaml", "sha256" = "60d585fca9f31fb2c8de0a7bacf0ca4a77bff8d391659f887c9b45b54fbbc87d"}, {"path" = "dataset/dataset.py", "sha256" = "bf2bdc67d6c47a851519579cea38a48b0a6f17fc8dfac4488791eb19e911c633"}, {"path" = "dataset/dataset_test.py", "sha256" = "55c2b39418971405c93bb05aa946e4a786e4a63ecd7c6aa19ea0484f0aafbf73"}, {"path" = "models/ginet_finetune.py", "sha256" = "8fb1df60cad7e2de341ec8e0c09cee78d0158287512461f6c657c2113db5400a"}, {"path" = "models/ginet_molclr.py", "sha256" = "5acb1a02aef6042d71104985e427d2a91813273f2c94c4f2fe3a36da895cd26f"}]
+seed = 42
+dataset = "data/snapshots/ground-truth/dataset.csv"
+splits = "data/splits/ground-truth-5fold/assignments.csv"
+row_id = "path_id"
+target = "G_T_activate"
+smiles_column = "rxn_smiles"
+group_columns = ["ene_id", "diene_id"]

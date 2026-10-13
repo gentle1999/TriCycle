@@ -16,22 +16,20 @@ add_hs = false
 model_name = "reactionopt-rits-ts"
 image = "registry.dp.tech/dptech/dp/native/prod-23278/ubuntu2404-py312-pt212-cu130-dl:260831"
 # project_id = "replace-with-bohr-project"
-# machine_type = "replace-with-gpu-machine"
+machine_type = "c6_m60_1 * NVIDIA 4090"
 input_directory = "/path/to/RitS"
 # This directory must be the RitS fork that contains scripts/run_ts_pipeline.py;
 # the official upstream checkout does not provide this profile pipeline entrypoint.
 code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
-checkpoint = { artifact_id = "rits-checkpoint", location = "/path/to/RitS/data/rits.ckpt" }
+checkpoint_artifact = { artifact_id = "rits-checkpoint", location = "/path/to/RitS/data/rits.ckpt" }
 checkpoint_path = "data/rits.ckpt"
 config = "scripts/conf/rits.yaml"
 n_samples = 2
 batch_size = 32
 num_steps = 16
 device = "cuda:0"
-# These two fields identify the default model/checkpoint source. Record the
-# fork repository and commit separately when executing the custom pipeline.
-source_repository = "https://github.com/gentle1999/RitS"
-source_revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
+# Model/checkpoint provenance defaults to tricycle_rits/assets/rits-model.toml.
+# Record the fork repository and commit separately when executing the pipeline.
 
 [rits.pipeline]
 script = "scripts/run_ts_pipeline.py"

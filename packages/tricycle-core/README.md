@@ -12,10 +12,11 @@
 | `models` | `Artifact`、`TaskPlan`、`TaskResult`、`ExecutionContext`、`ReactionRecord`、`BohrJobSpec` 等跨组件数据模型 |
 | `protocols` | `BohrGateway`、`ReactionRepository`、`ArtifactStore`、`ReactionOptAdapter` 等外部依赖接口 |
 | `capabilities` | `CapabilityManifest`、`CapabilityBinding`、`CapabilityCatalog`，用于声明、校验和分发能力 |
-| `plugin` / `registry` | `PluginBase`、`PluginRegistry` 以及旧 `Plugin` 名称的兼容入口 |
-| `run_store` | 以 `run.toml` 保存可审计、可恢复的运行状态 |
+| `plugin` / `registry` | `Component` protocol、`PluginBase` 和 `PluginRegistry` |
+| `run_state` / `run_paths` | 以 `run.toml` 保存可审计、可恢复的运行状态 |
 | `trace` | 以 hash-chain JSONL 保存 append-only 执行事件，并提供校验和大 payload 引用 |
 | `toml` / `env` | 受限 TOML 读写、原子文件更新和 `.env` 查找/加载辅助函数 |
+| `io` / `metrics` / `training_protocol` | 公共文件操作、回归指标、训练绑定读取与校验 |
 | `errors` | 输入错误、集成未配置、运行状态和 artifact 错误 |
 
 ## 核心对象
@@ -84,9 +85,11 @@ core 只定义接口，不提供真实平台实现：
 ## 使用示例
 
 ```python
+from pathlib import Path
+
 from tricycle_core import Artifact, ExecutionContext, TaskPlan
 
-context = ExecutionContext(run_id="demo", workdir="runs/demo", dry_run=True)
+context = ExecutionContext(run_id="demo", workdir=Path("runs/demo"), dry_run=True)
 plan = TaskPlan(
     task_id="demo/task",
     plugin_id="example.plugin",

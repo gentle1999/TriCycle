@@ -1,13 +1,17 @@
 [project]
 name = "tricycle-sar"
 version = "0.1.0"
-description = "RxnResid training, fine-tuning, and inference task plugin with Bohr submission planning."
+description = "Unified SAR model backends, validated training and evaluation protocols, task planning, and reproducible results."
 requires-python = ">=3.11"
-dependencies = ["tricycle-core", "tricycle-bohr"]
+dependencies = ["tricycle-core", "tricycle-bohr", "tricycle-bohrsubmit", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+classical = ["scikit-learn==1.7.2", "rdkit==2026.3.5", "numpy>=2,<3"]
 
 [tool.uv.sources]
 tricycle-core = { workspace = true }
 tricycle-bohr = { workspace = true }
+tricycle-bohrsubmit = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

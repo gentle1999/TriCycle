@@ -37,10 +37,6 @@ class BohrModelPlugin(PluginBase):
             "train": ModelMode.TRAIN,
             "infer": ModelMode.INFER,
             "finetune": ModelMode.FINETUNE,
-            "fine-tune": ModelMode.FINETUNE,
-            "fine_tune": ModelMode.FINETUNE,
-            "fine-tuning": ModelMode.FINETUNE,
-            "fine_tuning": ModelMode.FINETUNE,
         }.get(operation)
         if mode is None:
             raise InvalidRequestError(f"unsupported {self.model_family} operation: {operation}")
@@ -72,15 +68,6 @@ class BohrModelPlugin(PluginBase):
         if request.mode is not ModelMode.FINETUNE:
             raise InvalidRequestError("plan_finetune requires mode=finetune")
         return self.plan_job(request, context)
-
-    def plan_fine_tuning(
-        self,
-        request: BohrModelJobRequest,
-        context: ExecutionContext,
-    ) -> TaskPlan:
-        """Compatibility spelling for :meth:`plan_finetune`."""
-
-        return self.plan_finetune(request, context)
 
     def plan_job(self, request: BohrModelJobRequest, context: ExecutionContext) -> TaskPlan:
         if request.model_family != self.model_family:

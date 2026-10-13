@@ -24,8 +24,8 @@ Bohr 的平台任务测试按代码边界放在具体 package 中：
 - `packages/tricycle-bohr/tests/` 验证组件层的任务推送、任务状态查看和结果下载，以及默认 dry-run 不调用 gateway；
 - `packages/tricycle-bohrsubmit/tests/` 验证新版 `bohr` CLI 的提交、查看、下载命令和参数映射；
 - `packages/tricycle-rits/tests/` 验证 RitS 的 train/finetune/infer 请求、官方命令构造器、代码目录上传字段和公共 Bohr executor；
-- `packages/tricycle-sar/tests/` 验证 RxnResid（兼容 `sar.*` 命名）对同一模型任务基础层的复用；
-- 根目录 `tests/` 只保留跨 package 的注册表、框架契约和工作流 smoke test。
+- `packages/tricycle-sar/tests/` 验证多模型后端、共享环境与训练/评估协议、任务准备和结果处理，以及 RxnResid `sar.*` 任务接口与采样调用的复用；
+- 根目录 `tests/` 包含跨 package 契约、工作流及集成检查；包内 `tests/` 验证所属接口。
 
 这些测试均使用内存 gateway 或 subprocess mock，不需要 Bohr 凭据，也不会创建远程任务。运行全部测试：
 
@@ -33,6 +33,12 @@ Bohr 的平台任务测试按代码边界放在具体 package 中：
 uv run pytest
 make test
 ```
+
+## 文档维护
+
+文档按代码与配置核对入口、字段、路径和副作用边界；具体版本与资源值链接到配置，不复制为第二份绑定。原始第三方资产文档作为来源保留，其旧安装命令不作为本项目执行指南。
+
+实验成绩、一次性 smoke 汇总、任务 ID 和图表留在 Git 忽略的产物目录。删除过时文档前，先归档原字节、原路径和哈希，再移出 Git 跟踪并清理引用；不改写 Git 历史。测试通过小型合成输入覆盖结果核验，不依赖真实实验包。文档修改检查相对链接与命令帮助；无需为措辞修改重跑云端实验。
 
 ## 添加真实 adapter 的顺序
 

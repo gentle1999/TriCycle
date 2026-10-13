@@ -1,0 +1,33 @@
+schema_version = 1
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[bootstrap]
+micromamba_url = "https://micro.mamba.pm/api/micromamba/linux-64/2.3.3"
+micromamba_version = "2.3.3"
+micromamba_archive_sha256 = "e7274528ceb9c20d048a428d6c22d7e02e268f8ffb762c4c365422347c8b8ba2"
+micromamba_binary_sha256 = "9496f94a8b78c536573c93d946ec9bba74bd9ff79ee55aaa4b546e30db8f511b"
+
+[models]
+
+[models.rxngraphormer]
+repository = "https://github.com/licheng-xu-echo/RXNGraphormer.git"
+revision = "ab6d13d1900a2a3125df24dc798ffa8a6cc6761d"
+mode = "base-venv"
+python = "3.12"
+package = true
+no_deps = true
+expected_torch = "2.12.0+cu130"
+requirements = ["numpy==1.26.4", "rdkit==2024.3.2", "pandas==2.3.2", "python-box==7.3.2", "OpenNMT-py==1.2.0", "torch-geometric==2.6.1", "torch_scatter==2.1.2+pt212cu130", "scikit-learn==1.7.2", "tensorboard==2.20.0", "tqdm==4.67.1", "setuptools<81", "tomli==2.4.1"]
+find_links = "/workspace/job/common/wheels"
+modules = ["rxngraphormer", "rxngraphormer.model", "rxngraphormer.train", "torch_scatter", "torch_geometric", "rdkit"]
+require_cuda = true
+model_probe = "rxngraphormer"
+source_paths = ["."]
+assets = [{"path" = "parameters.json", "sha256" = "f26c6ea5c0bc0e639a0632cbbc782c7eadf13569ede4b96b3dc9f5f849815c14"}, {"path" = "model/valid_checkpoint.pt", "sha256" = "db19e1411d5c8ac8be5a8b3add608cb50eb769d0f92d848cd090f1c21ffd64be"}]
+
+[framework]
+official_index = true
+inherit_runtime_sites = true
+bootstrap_build_tools = true
+no_build_isolation = true

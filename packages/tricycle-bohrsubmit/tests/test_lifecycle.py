@@ -5,30 +5,10 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from tricycle_bohrsubmit.lifecycle import download_run, status_run
+from tricycle_bohrsubmit.gateway import InMemoryBohrGateway
+from tricycle_bohrsubmit.lifecycle import download_run, status_run, terminate_run
+from tricycle_core import BohrJobSpec
 from tricycle_core.errors import InvalidRequestError
-
-
-class ResolvingGateway:
-    def __init__(self) -> None:
-        self.resolved: list[tuple[str, str | None]] = []
-        self.status_queries: list[str] = []
-        self.downloads: list[str] = []
-
-    def resolve_job_id(self, external_id: str, *, job_group_id: str | None = None) -> str:
-        self.resolved.append((external_id, job_group_id))
-        return {"11": "22"}.get(external_id, external_id)
-
-    def status(self, external_id: str) -> dict[str, str]:
-        self.status_queries.append(external_id)
-        return {"external_id": external_id, "status": "Finished"}
-
-    def download(self, external_id: str, destination: Path) -> tuple[str, ...]:
-        self.downloads.append(external_id)
-        destination.mkdir(parents=True, exist_ok=True)
-        payload = destination / "payload.txt"
-        payload.write_text("downloaded\n", encoding="utf-8")
-        return (str(payload),)
 
 
 class ArchiveGateway:
@@ -54,6 +34,45 @@ def write_submit_row(run_dir: Path, job_id: str = "123") -> None:
 
 
 class BatchLifecycleTests(unittest.TestCase):
+    def test_internal_id_migration_record_is_rejected_before_remote_access(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            write_submit_row(run, "11")
+            (run / "bohr-id-map.tsv").write_text("internal_job_id\tbohr_id\n11\t22\n")
+            gateway = ArchiveGateway()
+            with self.assertRaisesRegex(InvalidRequestError, "Internal-ID migration"):
+                download_run(run, gateway)
+            self.assertEqual(gateway.downloads, [])
+
+    def test_opaque_gateway_ids_round_trip_through_download_and_termination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run_dir = Path(temp)
+            gateway = InMemoryBohrGateway()
+            job_id = gateway.submit(
+                BohrJobSpec(name="test", operation="test", image="test", command=("true",))
+            )
+            write_submit_row(run_dir, job_id)
+
+            report, summary = download_run(run_dir, gateway)
+            self.assertEqual(summary.succeeded, 1)
+            with report.open(encoding="utf-8", newline="") as handle:
+                row = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(row["job_id"], job_id)
+            destination = Path(row["download_dir"])
+            self.assertEqual(destination.parent, run_dir / "downloads")
+            self.assertTrue((destination / "memory-job.json").is_file())
+            _, resumed = download_run(run_dir, gateway, resume=True)
+            self.assertEqual(resumed.succeeded, 1)
+
+            status_run(run_dir, gateway)
+            report = terminate_run(run_dir, gateway, confirm=True)
+            with report.open(encoding="utf-8", newline="") as handle:
+                row = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(gateway.terminated, [job_id])
+            output = Path(row["output_file"])
+            self.assertEqual(output.parent, run_dir / "terminate-outputs")
+            self.assertIn(job_id, output.read_text())
+
     def test_failed_worker_is_downloaded_for_partial_results(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp)
@@ -75,7 +94,6 @@ class BatchLifecycleTests(unittest.TestCase):
             report, summary = download_run(
                 run_dir,
                 gateway,
-                only_succeeded=True,
                 resume=True,
             )
 
@@ -86,66 +104,7 @@ class BatchLifecycleTests(unittest.TestCase):
             self.assertEqual([row["status"] for row in rows], ["DOWNLOADED", "DOWNLOADED"])
             self.assertTrue((run_dir / "downloads" / "worker-000-job-123").is_dir())
 
-    def test_legacy_internal_ids_are_resolved_for_status_and_download(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            run_dir = Path(temp)
-            (run_dir / "batch.env").write_text("job_group_id=456\n", encoding="utf-8")
-            (run_dir / "submit-results.tsv").write_text(
-                "worker\ttasks\tjob_id\tjob_name\tstatus\tinput_dir\n"
-                "worker-000\t1\t11\tworker-000\tSUBMITTED\tinput\n",
-                encoding="utf-8",
-            )
-            gateway = ResolvingGateway()
-
-            status_file, status_summary = status_run(run_dir, gateway)
-            self.assertEqual(status_summary.succeeded, 1)
-            with status_file.open(encoding="utf-8", newline="") as handle:
-                status_row = next(csv.DictReader(handle, delimiter="\t"))
-            self.assertEqual(status_row["job_id"], "11")
-            self.assertEqual(status_row["result"], "SUCCEEDED")
-            self.assertEqual(gateway.status_queries, ["22"])
-
-            download_file, download_summary = download_run(
-                run_dir,
-                gateway,
-                only_succeeded=True,
-                resume=True,
-            )
-            self.assertEqual(download_summary.succeeded, 1)
-            self.assertEqual(gateway.downloads, ["22"])
-            with download_file.open(encoding="utf-8", newline="") as handle:
-                download_row = next(csv.DictReader(handle, delimiter="\t"))
-            self.assertEqual(download_row["status"], "DOWNLOADED")
-            self.assertTrue((run_dir / "downloads" / "worker-000-job-11" / "payload.txt").is_file())
-            self.assertEqual(gateway.resolved, [("11", "456")])
-            self.assertIn(
-                "11\t22",
-                (run_dir / "bohr-id-map.tsv").read_text(encoding="utf-8"),
-            )
-
-    def test_persisted_id_map_is_used_after_process_restart(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            run_dir = Path(temp)
-            (run_dir / "batch.env").write_text("job_group_id=456\n", encoding="utf-8")
-            write_submit_row(run_dir, job_id="11")
-            (run_dir / "bohr-id-map.tsv").write_text(
-                "internal_job_id\tbohr_id\n11\t22\n",
-                encoding="utf-8",
-            )
-
-            class NoResolveGateway(ResolvingGateway):
-                def resolve_job_id(self, external_id: str, *, job_group_id: str | None = None) -> str:
-                    raise AssertionError("persisted id map should avoid a remote resolution")
-
-            gateway = NoResolveGateway()
-            status_file, summary = status_run(run_dir, gateway)
-
-            self.assertEqual(summary.succeeded, 1)
-            self.assertEqual(gateway.status_queries, ["22"])
-            with status_file.open(encoding="utf-8", newline="") as handle:
-                self.assertEqual(next(csv.DictReader(handle, delimiter="\t"))["result"], "SUCCEEDED")
-
-    def test_legacy_valid_archive_marker_is_migrated_without_redownload(self) -> None:
+    def test_empty_archive_marker_requires_validating_and_extracting_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run_dir = Path(temp)
             write_submit_row(run_dir)
@@ -154,7 +113,7 @@ class BatchLifecycleTests(unittest.TestCase):
             archive = destination / "out.zip"
             with zipfile.ZipFile(archive, "w") as handle:
                 handle.writestr("result.txt", "existing result\n")
-            (destination / "result.txt").write_text("existing result\n", encoding="utf-8")
+            (destination / "result.txt").write_text("stale extraction\n", encoding="utf-8")
             (destination / ".bohr-download-unzipped").touch()
             gateway = ArchiveGateway()
 
@@ -162,6 +121,7 @@ class BatchLifecycleTests(unittest.TestCase):
 
             self.assertEqual(summary.succeeded, 1)
             self.assertEqual(gateway.downloads, [])
+            self.assertEqual((destination / "result.txt").read_text(), "existing result\n")
             marker = destination / ".bohr-download-unzipped"
             state = json.loads(marker.read_text(encoding="utf-8"))
             self.assertEqual(state["version"], 1)

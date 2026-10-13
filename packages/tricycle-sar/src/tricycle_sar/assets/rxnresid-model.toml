@@ -6,7 +6,7 @@ schema = "tricycle.rxnresid-model/v1"
 [model]
 model_name = "rxnresid"
 repository = "https://github.com/gentle1999/RxnResid"
-revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
+revision = "a615f4161cb612f5ad98136d4965685009c62bab"
 revision_kind = "git-commit"
 config_path = "configs/rxnresid.yaml"
 training_entrypoint = "train.py"

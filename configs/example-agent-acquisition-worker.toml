@@ -1,11 +1,12 @@
-# Worker input for tools/agent_acquisition_worker.py.
-# Place this file, agent_acquisition_worker.py/.sh, the RxnResid checkout,
-# checkpoint, remaining-candidate CSV, and labelled validation CSV in the SAR worker's
-# uploaded input directory. Paths below are relative to this file.
+# Worker input for python -m tricycle_sampling.acquisition_worker.
+# First run --prepare-bundle <directory> to stage the shared SAR runtime and run.sh.
+# Add this request, checkpoint, remaining-candidate CSV and labelled validation CSV
+# to the uploaded input directory. Execute bash run.sh <request.toml> on the worker.
+# Paths below are relative to this file.
 
 schema = "tricycle.agent-acquisition-worker/v1"
 model_snapshot_id = "sar-checkpoint-round-0004"
-source_revision = "9deebde39b38df1085dbac3a379c2a59edd7c97d"
+source_revision = "a615f4161cb612f5ad98136d4965685009c62bab"
 source_directory = "rxnresid"
 predict_script = "predict.py"
 python_executable = "python3.12"

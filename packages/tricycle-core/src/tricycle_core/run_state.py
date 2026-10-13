@@ -127,7 +127,7 @@ class RunStore:
 
         if result is not None:
             result_data = result.to_dict()
-            data["result"] = {
+            result_section: dict[str, Any] = {
                 "status": _status_value(result),
                 "task_id": result.task_id,
                 "plugin_id": result.plugin_id,
@@ -135,9 +135,11 @@ class RunStore:
                 "message": result.message or "",
             }
             if result_data.get("metadata"):
-                data["result"]["metadata"] = {
+                result_section["metadata"] = {
                     key: str(value) for key, value in result_data["metadata"].items()
                 }
+
+            data["result"] = result_section
 
         for section_name, values in sections.items():
             current = data.setdefault(section_name, {})

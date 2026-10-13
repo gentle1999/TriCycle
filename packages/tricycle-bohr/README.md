@@ -37,8 +37,8 @@ Bohr 网络客户端，也不在 dry-run 中读取凭据。
 
 `BohrModelJobRequest` 是 RitS 和 RxnResid 共用的模型任务契约，包含：
 
-- `model_name`、`mode`（`train` / `infer` / `finetune`）；
-- `image`、`dataset_artifact`、`checkpoint_artifact`、`code_artifact`；
+- `model_name`；`mode` 由所调用的 `train` / `infer` / `finetune` 能力传入；
+- `image`、`dataset`、`checkpoint`、`code_artifact`；
 - `input_directory`、`command`、输入/输出 artifact；
 - `project_id`、`machine_type` 和任务 `parameters`。
 
@@ -46,6 +46,8 @@ Bohr 网络客户端，也不在 dry-run 中读取凭据。
 任务都必须明确代码 artifact、输入目录和实际启动命令。具体模型的来源、入口和参数由
 [`tricycle-rits`](../tricycle-rits/README.md) 或 [`tricycle-sar`](../tricycle-sar/README.md)
 补充。
+
+用户请求只接受上述规范字段，未知字段报错。已生成的计划通过 `BohrJobSpec.from_mapping()` 恢复，严格使用 job 契约中的 `name`，不会再套用请求默认值或读取环境。状态请求只接受 `external_id`；下载请求接受 `external_id` 和 `destination`。
 
 ## 规划和执行边界
 
@@ -75,9 +77,9 @@ flowchart LR
 job_name = "geometry-opt-demo"
 operation = "compute"
 image = "registry.example/chemistry:tag"
-command = "bash run.sh"
+command = ["bash", "run.sh"]
 project_id = "project-id"
-machine_type = "c4-m8"
+machine_type = "<按计算需求填写当前平台规格>"
 output_artifacts = ["results"]
 ```
 

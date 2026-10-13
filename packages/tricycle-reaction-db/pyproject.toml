@@ -5,6 +5,9 @@ description = "Project-scoped reaction calculation-log ingestion, filtering, and
 requires-python = ">=3.11"
 dependencies = ["tricycle-core"]
 
+[project.optional-dependencies]
+adaptation = ["rdkit>=2024.3.1"]
+
 [tool.uv.sources]
 tricycle-core = { workspace = true }
 

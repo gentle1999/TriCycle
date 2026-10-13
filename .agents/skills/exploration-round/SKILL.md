@@ -14,7 +14,7 @@ RitS 训练决定时使用。
 
 - `exploration_id`、正整数 `round_index` 和可选 `parent_round_id`；
 - 完整 `candidates`、`budget`、策略名和随机 `seed`；
-- `space`，描述本轮搜索空间及其版本；
+- `space.space_id`、`space.version` 和显式 `space.definition`，描述本轮搜索空间；
 - uncertainty 策略必须提供 `model_snapshot.snapshot_id` 和 checkpoint hash；
 - 使用 `agent-authored-acquisition` 时，先完成上一批 worker 状态检查并下载所有结果到本地，
   再按 [`agent-authored-acquisition` skill](../agent-authored-acquisition/SKILL.md) 生成请求；
@@ -23,6 +23,8 @@ RitS 训练决定时使用。
   `every_n_or_new_labels`、`dataset_changed` 或 `manual`。
 - 若训练被安排，`training_spec` 必须包含 `seed`、`dataset_manifest_hash`、`code_revision` 和
   `container_digest` 等可复现训练配方字段；可选 `next_model_snapshot` 用于绑定已经产出的 RitS checkpoint。
+
+历史选择放在 `history`，训练上下文放在 `training_context`，输出目录使用 `output_dir`；具体字段见[包请求契约](../../../packages/tricycle-exploration/README.md)。只使用规范字段和策略 ID，未知字段报错；不填写重复的顶层训练上下文或旧别名。
 
 ## 执行
 

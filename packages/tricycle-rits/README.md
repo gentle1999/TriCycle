@@ -7,7 +7,7 @@ Docker GPU 容器内。
 
 ## 能力
 
-原生插件 ID 为 `tricycle.rits`：
+模型任务插件 ID 为 `tricycle.rits`，SSH 生命周期插件 ID 为 `tricycle.rits.ssh`：
 
 | 能力 | 作用 |
 | --- | --- |
@@ -25,8 +25,12 @@ Docker GPU 容器内。
 ## 模型资产和版本
 
 默认模型资产位于 [`src/tricycle_rits/assets/rits-model.toml`](src/tricycle_rits/assets/rits-model.toml)。
-`load_default_model_asset()` 只读取本地 TOML，`require_checkpoint()` 可校验 checkpoint 存在及
+`model.repository`、`model.revision`、`model.checkpoint_sha256` 和 checkpoint 路径由这份配置维护；
+技能读取这些字段并描述操作流程，不复制具体 commit 或校验值，也不随绑定值更新而修改。
+`load_model_asset()` 只读取本地 TOML，`require_checkpoint()` 可校验 checkpoint 存在及
 SHA256；不会在加载资产时联网下载代码或权重。
+
+资产配置使用 `schema = "tricycle.rits-model/v1"` 和 `[model]` 表，顶层只允许这两个字段；表内只接受 `RitsModelAsset` 声明的字段。`revision_kind` 只能为 `git-commit`，可选 `checkpoint_dataset` 记录权重来源数据集。
 
 `RitsPlugin.plan_job()` 会把以下 provenance 固定到计划中：
 
@@ -103,6 +107,8 @@ uv run --package tricycle-agent tricycle-agent plan \
 
 ## 内网 Docker/SSH fine-tuning
 
+所有 SSH 生命周期请求只接受 `RitsSshFinetuneRequest` 声明的字段；未知字段在规划时直接报错。
+
 `OpenSshRitsGateway` 使用 `docker context create remote --docker host=ssh://...` 注册 SSH-backed
 Docker endpoint，并用 OpenSSH/scp 传输文件；`docker --context remote info/run/inspect/logs/stop`
 负责远端容器生命周期。训练容器使用 `docker run --gpus ...` 在请求指定的镜像内运行 command。
@@ -125,18 +131,18 @@ inspect，Docker logs 提供训练 stdout/stderr；容器固定设置 `WANDB_MOD
 构建完成后，fine-tune bundle 仍挂载到 `/workspace/job`；镜像内的 `RITS_DEPS_IN_IMAGE=1` 让挂载源码安装脚本跳过
 重复下载依赖，但保留 GPU/版本校验和 editable 安装，便于直接更新训练代码。
 
-    uv run --package tricycle-agent tricycle-agent plan \\
-      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \\
+    uv run --package tricycle-agent tricycle-agent plan \
+      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \
       --run-id rits-internal-smoke
 
-    uv run --package tricycle-agent tricycle-agent run \\
-      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \\
+    uv run --package tricycle-agent tricycle-agent run \
+      rits.ssh.finetune configs/example-rits-ssh-finetune-request.toml \
       --run-id rits-internal-smoke --live
 
 任务状态、日志、停止与选定输出下载由 `rits.ssh.status`、`rits.ssh.logs`、
 `rits.ssh.terminate`、`rits.ssh.download` 提供。停止是 destructive capability，需要
 `--confirm`；下载只允许配置显式的远端相对路径，避免拉回整个数据 bundle。CLI 请求及安全
-边界见 `.agents/skills/rits-ssh-finetune/SKILL.md`。
+边界见 [rits-ssh-finetune 技能](../../.agents/skills/rits-ssh-finetune/SKILL.md)。
 
 ## 验证
 

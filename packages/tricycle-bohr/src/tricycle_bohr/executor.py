@@ -13,8 +13,6 @@ from tricycle_core import (
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.protocols import BohrGateway
 
-from .models import BohrComputeRequest
-
 
 class BohrJobExecutor:
     """Execute a planned single Bohr job through an injected gateway.
@@ -37,7 +35,7 @@ class BohrJobExecutor:
         payload = plan.parameters.get(payload_key)
         if not isinstance(payload, Mapping):
             raise InvalidRequestError(f"Bohr task plan is missing its {payload_key} payload")
-        job = BohrComputeRequest.from_mapping(payload).to_job_spec()
+        job = BohrJobSpec.from_mapping(payload)
         return self.submit_job(
             job,
             gateway,

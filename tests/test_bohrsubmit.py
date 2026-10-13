@@ -25,9 +25,9 @@ class BohrSubmitTests(unittest.TestCase):
         plan = plugin.plan(
             "dpa-berny.prepare",
             {
-                "xyz": ["inputs/*.xyz"],
+                "xyz_patterns": ["inputs/*.xyz"],
                 "workers": 2,
-                "model": "model.ckpt.pt",
+                "model_path": "model.ckpt.pt",
                 "project_id": "123",
                 "machine_type": "c4_m15_1 * NVIDIA T4",
             },
@@ -48,7 +48,7 @@ class BohrSubmitTests(unittest.TestCase):
                 workers=1,
                 model_path=model,
                 project_id="123",
-                machine_type="cpu",
+                machine_type="1 * NVIDIA T4_16g",
                 multi_stage_chk=True,
                 out_dir=root / "run",
             )
@@ -70,6 +70,7 @@ class BohrSubmitTests(unittest.TestCase):
             self.assertEqual(config["run"]["workers"], 1)
             self.assertEqual(config["workflow"]["engine"], "dpa")
             self.assertTrue(next((root / "run").glob("worker-*/dpa-berny.env")).is_file())
+            next((root / "run").glob("worker-*/work.sh")).write_text("exit 99\n")
 
             rescue = BohrSubmitPlugin().rescue(
                 RescueRequest(
@@ -85,6 +86,9 @@ class BohrSubmitTests(unittest.TestCase):
                 rescue_config = tomllib.load(handle)
             self.assertEqual(rescue_config["workflow"]["engine"], "dpa")
             self.assertFalse((root / "rescue" / "submit-extra-args.txt").exists())
+            rescue_worker = next((root / "rescue").glob("worker-*/work.sh")).read_text()
+            self.assertIn("DPA requires CUDA; CPU fallback is disabled", rescue_worker)
+            self.assertNotIn("exit 99", rescue_worker)
 
     def test_generic_batch_prepare_and_submit_uses_injected_gateway(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -162,7 +166,7 @@ class BohrSubmitTests(unittest.TestCase):
             clear=False,
         ):
             request = BatchRequest.from_mapping(
-                {"tasks": ["cases/*.json"], "workers": 1, "script": "run.sh"}
+                {"task_patterns": ["cases/*.json"], "workers": 1, "script": "run.sh"}
             )
 
         self.assertEqual(request.image, "registry.example/chemistry:env")
@@ -182,7 +186,7 @@ class BohrSubmitTests(unittest.TestCase):
 
             with patch.dict(os.environ, {}, clear=True), chdir(root):
                 request = BatchRequest.from_mapping(
-                    {"tasks": ["cases/*.json"], "workers": 1, "script": "run.sh"}
+                    {"task_patterns": ["cases/*.json"], "workers": 1, "script": "run.sh"}
                 )
                 self.assertNotIn("BOHR_ACCESS_KEY", os.environ)
 

@@ -19,7 +19,6 @@ from .models import (
     ReactionBatchImportRequest,
     ReactionFilterRequest,
     ReactionIngestRequest,
-    ReactionSpaceExportRequest,
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
 )
@@ -52,7 +51,6 @@ class ReactionDatabasePlugin(PluginBase):
             "reaction.filter.cycloaddition",
             "reaction.space.rits.export",
             "reaction.space.rxnresid.export",
-            "reaction.space.export",
         ),
     )
 
@@ -78,8 +76,6 @@ class ReactionDatabasePlugin(PluginBase):
             return self.plan_rxnresid_export(
                 RxnResidDatasetExportRequest.from_mapping(request), context
             )
-        if operation == "export-space":
-            return self.plan_export(ReactionSpaceExportRequest.from_mapping(request), context)
         raise InvalidRequestError(f"unsupported reaction database operation: {operation}")
 
     def plan_ingest(self, request: ReactionIngestRequest, context: ExecutionContext) -> TaskPlan:
@@ -151,7 +147,6 @@ class ReactionDatabasePlugin(PluginBase):
             parameters={"request": request.to_dict()},
             metadata={
                 "project_id": request.project_id,
-                "filter": request.reaction_filter,
                 "cleaned_only": request.cleaned_only,
                 "reaction_smarts": request.reaction_smarts,
                 "authority": "database-rxn-smarts",
@@ -173,15 +168,6 @@ class ReactionDatabasePlugin(PluginBase):
     ) -> TaskPlan:
         return self._plan_export(request, context, operation="export-rxnresid")
 
-    def plan_export(
-        self,
-        request: ReactionSpaceExportRequest,
-        context: ExecutionContext,
-    ) -> TaskPlan:
-        """Compatibility planner for the former generic RxnResid export."""
-
-        return self.plan_rxnresid_export(request, context)
-
     def _plan_export(
         self,
         request: RitsDatasetExportRequest | RxnResidDatasetExportRequest,
@@ -197,7 +183,6 @@ class ReactionDatabasePlugin(PluginBase):
             metadata={
                 "project_id": request.project_id,
                 "consumer": request.consumer,
-                "filter": request.reaction_filter,
                 "cleaned_only": request.cleaned_only,
                 "reaction_smarts": request.reaction_smarts,
                 "required_columns": request.to_dict()["required_columns"],
@@ -253,16 +238,6 @@ class ReactionDatabasePlugin(PluginBase):
             return self.execute(plan, context)
         return self._export_result(plan, request, adapter.export_rxnresid_dataset(request))
 
-    def export_space(
-        self,
-        request: ReactionSpaceExportRequest,
-        adapter: ReactionDatabaseAdapter,
-        context: ExecutionContext,
-    ) -> TaskResult:
-        """Compatibility execution path for the former generic export."""
-
-        return self.export_rxnresid(request, adapter, context)
-
     @staticmethod
     def _filter_result(plan: TaskPlan, receipt: ReactionFilterReceipt) -> TaskResult:
         return TaskResult(
@@ -290,7 +265,6 @@ class ReactionDatabasePlugin(PluginBase):
             media_type="text/csv",
             metadata={
                 "consumer": request.consumer,
-                "reaction_filter": request.reaction_filter,
                 "cleaned_only": request.cleaned_only,
                 "reaction_smarts": request.reaction_smarts,
                 "required_columns": request.to_dict()["required_columns"],

@@ -12,6 +12,8 @@ description: "Build a mapped ReactionOpt profile from three independent reactant
 分支只在最终 profile 汇总时合并；也不调用 ReactionOpt 上游的 4+2 product-stretch 或
 从后体反向推导策略。
 
+字段使用当前请求契约：`rits.code_artifact`、`rits.checkpoint_artifact`、`rits.checkpoint_path` 和 `rits.input_directory` 分别绑定源码、权重资产、容器内权重路径与上传目录；不使用旧字段别名。
+
 ## 输入与输出
 
 - 输入：TOML，必填 `reaction_smiles`；可选 `reaction_id`、`[sampling]`、`[rits]` 和
@@ -24,7 +26,7 @@ description: "Build a mapped ReactionOpt profile from three independent reactant
 - `[rits.pipeline]` 使用 RitS fork 中新增的 `scripts/run_ts_pipeline.py`，不是官方 RitS 发布入口；
   pipeline 内部调用 RitS 模型生成 candidate，随后执行 stereo 过滤、Kabsch RMSD 聚类和 g-xTB
   能量筛选；`code_artifact`/`input_directory` 必须指向包含该脚本的 fork checkout；
-- `source_repository`/`source_revision` 默认记录官方 RitS 模型和 checkpoint 来源；使用 fork pipeline
+- `source_repository`/`source_revision` 默认从 [RitS 模型配置](../../../packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)读取官方模型和 checkpoint 来源，直接 Python 构造与 TOML 请求使用同一默认值；显式请求值优先。使用 fork pipeline
   时还应记录 fork 的仓库地址和 commit，不能把官方模型 revision 当作 pipeline 脚本版本；
 - pipeline 的 `device` 使用 `cuda:0` 或 `cpu` 等上游生成器支持的设备名，不使用 `auto`；
 - RitS 分支直接消费 mapped reaction connectivity，不读取 reactant/product 分支的 3D
@@ -44,7 +46,8 @@ uv run --package tricycle-agent tricycle-agent plan \
   reactionopt.profile configs/example-reactionopt-profile-request.toml
 ```
 
-真实构建需要在应用中显式注入实现 `RitsTransitionStateSampler` 的 pipeline adapter。仓库提供的
+真实构建需要在应用中显式注入实现 `RitsTransitionStateSampler` 的 pipeline adapter：
+提供 `sample(request)` 方法并返回 `RitsTransitionStateResult`，普通 callable 或裸结构列表会被拒绝。仓库提供的
 `LocalRitsPipelineSampler` 可以调用本地 RitS checkout；云端 adapter 可以使用同一套
 `RitsInferenceConfig.build_pipeline_command()` 提交/下载 Bohr worker。组件不会读取凭据、访问网络
 或自行选择 transport。
@@ -55,6 +58,6 @@ uv run --package tricycle-agent tricycle-agent plan \
 默认 dry-run 不执行构象优化、不调用 RitS、不提交远程任务。实际运行产生的每个 TS 样本
 都保留 RitS 样本序号和固定 source revision；失败后检查 run 状态和
 已写出的 profile 目录，修复 adapter/输入后使用新的 run ID 重试。不要回退到旧的
-product-backward 策略来补救。
+product-backward 策略来补救。RDKit 嵌入失败会尝试随机坐标嵌入；仍无构象则检查分子图与立体约束，不制造替代坐标或清除立体信息使流程通过。
 
 实现入口：`packages/tricycle-reactionopt/src/tricycle_reactionopt/reaction_profile.py`。

@@ -1,11 +1,11 @@
-# 组件与兼容插件契约
+# 组件与能力契约
 
-本文档描述现有 Python 组件的兼容接口。Codex 面向的公共调用单位是
-`CapabilityManifest`/capability ID，目标架构见 [`architecture-design.md`](architecture-design.md)。
+本文档描述Python 组件的实现接口。Codex 面向的公共调用单位是
+`CapabilityManifest`/capability ID，架构与执行边界见 [`architecture.md`](architecture.md)。
 
 ## 公共生命周期
 
-每个兼容组件至少提供：
+每个组件至少提供：
 
 - `PluginManifest`：稳定的 `plugin_id`、版本、能力列表和依赖信息。
 - 领域请求 dataclass：避免用未定义的字典在插件边界传播。
@@ -40,7 +40,7 @@
 ## 外部边界
 
 - Bohr：实现 `BohrGateway`，至少覆盖 submit/status/download；批量生命周期可额外实现 job group、terminate 等操作；
-- 反应数据库：兼容单反应记录时实现 `ReactionRepository.upsert`；批次工作流实现
+- 反应数据库：写入单反应记录时实现 `ReactionRepository.upsert`；批次工作流实现
   `ReactionDatabaseAdapter`，负责按一个批次创建内部 project、提交计算日志、调用数据库
   rxn-SMARTS 筛选，以及导出 RitS/RxnResid 数据集；
 - ReactionOpt：实现 `ReactionOptAdapter`，把中间配置转换成真实 ReactionOpt 调用；
@@ -51,11 +51,11 @@
   connectivity，也不得回退到旧的 product-backward 初猜策略。输入
   reaction SMILES 必须为显式氢完整格式：每个氢是独立的带映射 `[H:...]` 原子，且所有原子
   均有唯一正映射，反应物/产物两侧映射集合和元素一致；
-- 模型训练/微调/推理：RxnResid（兼容 `sar.*` 命名）和 RitS 复用 `tricycle-bohr` 提供的 `BohrModelJobRequest`、
+- 模型训练/微调/推理：RxnResid（`sar.*`）和 RitS 复用 `tricycle-bohr` 提供的 `BohrModelJobRequest`、
   `BohrModelPlugin` 和 `BohrJobExecutor`，分别生成 `train`、`finetune` 与 `infer` operation；
-  领域组件只保留自己的 manifest、请求别名和任务命令构造。
+  领域组件负责自己的输入准备、源码/资产绑定和任务命令，复用公共提交边界。
 
-这些接口当前不绑定 HTTP、CLI 或具体数据库 ORM。拿到具体插件说明后，再在 adapter 中选择实现方式。
+protocol 不绑定具体传输实现。生产 adapter 包括 Bohr CLI、Reaction DB MCP/HTTP 和内网 SSH/Docker；领域请求与默认 dry-run 不创建这些客户端。
 
 ## 运行轨迹与探索轮次
 
@@ -74,20 +74,19 @@ snapshot，实际 checkpoint 返回后再绑定 `next_model_snapshot`。QM 计�
 `tricycle-sampling` 负责有限语法校验、确定性求值、成本排序和公式 hash。每次决策还必须引用
 本地 `status.tsv` 与 `download-results.tsv` 的路径和 SHA-256；所有 worker 必须已进入终态，且
 下载清单中的文件都存在。此检查将采样轮次与计算提交/运行分开，采样组件不能在同一计算任务中
-提交候选或操作 Bohr 生命周期。每个候选还需有按指定距离定义预计算的 `sampled_novelty`，以将
-已采样分布分析落实到候选间的排序中。
+提交候选或操作 Bohr 生命周期。各候选字段按所选采集协议校验；v1 与 MAE v2 的信号约束不同，见 [sampling 接口](../packages/tricycle-sampling/README.md#智能采集与自定义策略)。
 
-## BohrSubmit 迁移边界
+## Bohr 工作流边界
 
 `tricycle-bohr` 是单任务 Bohr 基础层：`BohrJobSpec`/`BohrGateway` 定义平台边界，
 `BohrJobExecutor` 统一计划提交，`BohrModelJobRequest`/`BohrModelPlugin` 统一模型任务的
-artifact、train/finetune/infer 和提交逻辑。RxnResid/RitS 只提供领域 manifest、请求别名和任务命令构造，
+artifact、train/finetune/infer 和提交逻辑。RxnResid/RitS 提供领域请求、输入准备、资产校验和任务命令，
 不重复实现 Bohr 提交。
 
-`tricycle-bohrsubmit` 负责把旧 `TriCycle-BohrSubmit` 的本地 staging、Gaussian/DPA-Berny 输入生成、TSV 生命周期和救援策略转换成类型化 Python API。云端 worker 仍生成小型 Bash 启动脚本，因为 Gaussian、DPA server 和用户提供的 ORCA 命令是镜像内的进程边界；`BohrCliGateway` 则集中处理 `bohr` CLI、重试和提交去重。
+`tricycle-bohrsubmit` 提供本地 staging、Gaussian/DPA-Berny 输入生成、TSV 生命周期和救援策略的类型化 Python API。云端 worker 仍生成小型 Bash 启动脚本，因为 Gaussian、DPA server 和用户提供的 ORCA 命令是镜像内的进程边界；`BohrCliGateway` 则集中处理 `bohr` CLI、重试和提交去重。
 
 TriCycle 自己拥有的声明式请求和运行元数据使用 TOML。具体任务的配置文件属于输入
 artifact，格式由任务自身决定，不要求组件为了适配 TriCycle 而改写，例如 RitS 的
 Hydra YAML 配置可以原样随任务上传。环境变量保持独立：Bohr CLI 的认证凭据以及
-worker 的 Bash 运行时变量由进程环境注入或通过 `.env` 兼容桥接传递，不作为 TOML
+worker 的 Bash 运行时变量由进程环境注入或通过 `.env`传递，不作为 TOML
 配置内容保存。

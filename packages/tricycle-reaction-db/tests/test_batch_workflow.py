@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Never
 
 from tricycle_core import ExecutionContext, InvalidRequestError, TaskStatus
 from tricycle_reaction_db import (
@@ -10,6 +11,7 @@ from tricycle_reaction_db import (
     RITS_EXPORT_API_CONTRACT,
     RXNRESID_EXPORT_API_CONTRACT,
     RXNRESID_GROUND_TRUTH_PROJECT_ID,
+    CalculationLogBatchManifest,
     CalculationLogBatchSpec,
     ReactionBatchImportRequest,
     ReactionDatabaseImportReceipt,
@@ -26,12 +28,12 @@ from tricycle_reaction_db import (
 
 class _FakeDatabaseAdapter:
     def __init__(self) -> None:
-        self.import_calls = []
-        self.filter_calls = []
-        self.rits_calls = []
-        self.rxnresid_calls = []
+        self.import_calls: list[tuple[ReactionBatchImportRequest, CalculationLogBatchManifest]] = []
+        self.filter_calls: list[ReactionFilterRequest] = []
+        self.rits_calls: list[RitsDatasetExportRequest] = []
+        self.rxnresid_calls: list[RxnResidDatasetExportRequest] = []
 
-    def ingest_calculation_logs(self, request, manifest):
+    def ingest_calculation_logs(self, request: ReactionBatchImportRequest, manifest: CalculationLogBatchManifest) -> ReactionDatabaseImportReceipt:
         self.import_calls.append((request, manifest))
         return ReactionDatabaseImportReceipt(
             project_id="project-uuid-1",
@@ -39,7 +41,7 @@ class _FakeDatabaseAdapter:
             cleaned_reaction_count=1,
         )
 
-    def filter_cleaned_reactions(self, request):
+    def filter_cleaned_reactions(self, request: ReactionFilterRequest) -> ReactionFilterReceipt:
         self.filter_calls.append(request)
         return ReactionFilterReceipt(
             project_id=request.project_id,
@@ -47,7 +49,7 @@ class _FakeDatabaseAdapter:
             reaction_smarts=request.reaction_smarts,
         )
 
-    def export_rits_dataset(self, request):
+    def export_rits_dataset(self, request: RitsDatasetExportRequest) -> ReactionSpaceExportReceipt:
         self.rits_calls.append(request)
         return ReactionSpaceExportReceipt(
             request.destination,
@@ -60,7 +62,7 @@ class _FakeDatabaseAdapter:
             ),
         )
 
-    def export_rxnresid_dataset(self, request):
+    def export_rxnresid_dataset(self, request: RxnResidDatasetExportRequest) -> ReactionSpaceExportReceipt:
         self.rxnresid_calls.append(request)
         return ReactionSpaceExportReceipt(
             request.destination,
@@ -71,6 +73,14 @@ class _FakeDatabaseAdapter:
                 request.reaction_smarts,
                 "rxnresid",
             ),
+            metadata={
+                "transport": "mcp", "mcp_app_name": "test-reaction-db",
+                "project_id": request.project_id, "reaction_smarts": request.reaction_smarts,
+                "cleaned_only": True, "energy_unit": "kcal/mol", "timing_unit": "seconds",
+                "mapped_reaction_pages": 1, "mapped_reaction_count": 1,
+                "exported_rows": 1, "excluded_incomplete_thermodynamics_count": 0,
+                "excluded_reasons": {},
+            },
         )
 
 
@@ -102,7 +112,7 @@ def _mcp_export_calls(
                 },
             ),
         )
-    operations = (
+    operations: tuple[tuple[str, str], ...] = (
         (
             "MappedReactionQueryService.list_mapped_reactions",
             "reaction-list",
@@ -127,6 +137,11 @@ def _mcp_export_calls(
                 "project_id": project_id,
                 "reaction_smarts": reaction_smarts,
                 "resource": resource,
+                **({
+                    "cleaned_only": True, "page_count": 1, "mapped_reaction_count": 1,
+                    "batch_count": 1, "queried_reaction_count": 1,
+                    "max_aliases_per_query": 24, "profile_policy": "profiles[0]",
+                } if export_kind == "rxnresid" else {}),
             },
         )
         for operation, resource in operations
@@ -134,8 +149,19 @@ def _mcp_export_calls(
 
 
 class _FailingDatabaseAdapter:
-    def __getattr__(self, name):
-        raise AssertionError(f"dry-run called adapter method: {name}")
+    def ingest_calculation_logs(
+        self, request: ReactionBatchImportRequest, manifest: CalculationLogBatchManifest
+    ) -> Never:
+        raise AssertionError("dry-run called adapter method: ingest_calculation_logs")
+
+    def filter_cleaned_reactions(self, request: ReactionFilterRequest) -> Never:
+        raise AssertionError("dry-run called adapter method: filter_cleaned_reactions")
+
+    def export_rits_dataset(self, request: RitsDatasetExportRequest) -> Never:
+        raise AssertionError("dry-run called adapter method: export_rits_dataset")
+
+    def export_rxnresid_dataset(self, request: RxnResidDatasetExportRequest) -> Never:
+        raise AssertionError("dry-run called adapter method: export_rxnresid_dataset")
 
 
 class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
@@ -191,7 +217,7 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
             ],
             "provenance": {"workflow": "w", "initial_guess_source": "s"},
         }
-        with self.assertRaisesRegex(InvalidRequestError, "exactly one batch"):
+        with self.assertRaisesRegex(InvalidRequestError, "unknown ReactionBatchImportRequest fields: batches"):
             ReactionBatchImportRequest.from_mapping(payload)
 
     def test_batch_import_rejects_existing_internal_project_id(self) -> None:
@@ -201,7 +227,7 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
             "batch": {"batch_id": "one", "root": "/tmp/one"},
             "provenance": {"workflow": "w", "initial_guess_source": "s"},
         }
-        with self.assertRaisesRegex(InvalidRequestError, "project_id is not accepted"):
+        with self.assertRaisesRegex(InvalidRequestError, "unknown ReactionBatchImportRequest fields: project_id"):
             ReactionBatchImportRequest.from_mapping(payload)
 
     def test_bohr_import_requires_job_group_and_project_provenance(self) -> None:
@@ -281,7 +307,7 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
             "[#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>"
             "[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1",
         )
-        with self.assertRaisesRegex(InvalidRequestError, "project_id"):
+        with self.assertRaisesRegex(InvalidRequestError, "project_slug"):
             ReactionFilterRequest.from_mapping(
                 {"project_slug": "not-an-internal-project-id"}
             )
@@ -313,7 +339,7 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
 
     def test_successful_export_rejects_receipt_without_mcp_provenance(self) -> None:
         class _IncompleteRxnResidAdapter(_FakeDatabaseAdapter):
-            def export_rxnresid_dataset(self, request):
+            def export_rxnresid_dataset(self, request: RxnResidDatasetExportRequest) -> ReactionSpaceExportReceipt:
                 return ReactionSpaceExportReceipt(
                     request.destination,
                     row_count=1,
@@ -344,7 +370,7 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
 
     def test_successful_rits_export_requires_all_mcp_queries(self) -> None:
         class _IncompleteRitsAdapter(_FakeDatabaseAdapter):
-            def export_rits_dataset(self, request):
+            def export_rits_dataset(self, request: RitsDatasetExportRequest) -> ReactionSpaceExportReceipt:
                 return ReactionSpaceExportReceipt(
                     request.destination,
                     row_count=1,
@@ -385,3 +411,12 @@ class ReactionDatabaseBatchWorkflowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_obsolete_filter_fields_are_rejected() -> None:
+    import pytest
+
+    for request_type in (ReactionFilterRequest, RitsDatasetExportRequest, RxnResidDatasetExportRequest):
+        for field in ("reaction_filter", "filter", "rxn_smarts"):
+            with pytest.raises(InvalidRequestError, match=field):
+                request_type.from_mapping({"project_id": "project", "destination": "out.csv", field: "ignored"})

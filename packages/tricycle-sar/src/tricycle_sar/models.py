@@ -12,7 +12,3 @@ class RxnResidJobRequest(BohrModelJobRequest):
 
     model_family: ClassVar[str] = "sar"
     model_label: ClassVar[str] = "RxnResid"
-
-
-# Keep the original public type name while making the upstream model explicit.
-SarJobRequest = RxnResidJobRequest

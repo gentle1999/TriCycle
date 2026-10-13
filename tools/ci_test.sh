@@ -13,13 +13,19 @@ if ! command -v "${UV_BIN}" >/dev/null 2>&1; then
 fi
 
 printf '%s\n' "ci: syncing workspace with Python ${CI_PYTHON_VERSION}"
-"${UV_BIN}" sync --frozen --all-packages --python "${CI_PYTHON_VERSION}"
+"${UV_BIN}" sync --frozen --all-packages --extra classical --python "${CI_PYTHON_VERSION}"
 
 printf '%s\n' 'ci: compiling source and tests'
-"${UV_BIN}" run --frozen --all-packages python -m compileall -q packages apps tests
+"${UV_BIN}" run --frozen --all-packages python -m compileall -q -x '(^|/)(\.venv|__pycache__)(/|$)' packages apps tests analysis
 
 printf '%s\n' 'ci: running Ruff'
 "${UV_BIN}" run --frozen --all-packages ruff check .
+
+printf '%s\n' 'ci: running mypy across the workspace, tools, and tests'
+"${UV_BIN}" run --frozen --all-packages mypy
+
+printf '%s\n' 'ci: running Pyright across the workspace, tools, and tests'
+"${UV_BIN}" run --frozen --all-packages pyright
 
 printf '%s\n' 'ci: running root integration tests'
 "${UV_BIN}" run --frozen --all-packages pytest tests

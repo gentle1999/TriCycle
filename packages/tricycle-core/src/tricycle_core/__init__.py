@@ -19,7 +19,7 @@ from .models import (
     TaskStatus,
 )
 from .plugin import PluginBase
-from .protocols import Component, Plugin
+from .protocols import Component
 from .registry import PluginRegistry
 from .run_paths import timestamped_run_directory
 from .run_state import RUN_SCHEMA, RunStore
@@ -47,7 +47,6 @@ __all__ = [
     "load_dotenv",
     "ModelMode",
     "PluginBase",
-    "Plugin",
     "PluginKind",
     "PluginManifest",
     "PluginRegistrationError",

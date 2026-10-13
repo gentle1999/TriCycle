@@ -1,6 +1,7 @@
 # RitS fine-tuning loads weights only and starts a fresh optimizer/scheduler.
 # The task directory must be a checkout of the pinned gentle1999/RitS commit.
 model_name = "rits-finetune-smoke"
+machine_type = "c6_m60_1 * NVIDIA 4090"
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 input_directory = "/path/to/RitS"
 code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
@@ -19,7 +20,7 @@ output_artifacts = [
 task = "finetune"
 upstream_protocol = "finetune_from"
 source_repository = "https://github.com/gentle1999/RitS"
-source_revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
+source_revision = "07e48da98c4d4f10d0dc1a1cc6b2acad40341c04"
 model_manifest = "packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml"
 checkpoint_path = "data/rits.ckpt"
 dataset_root = "data/rits_dataset"

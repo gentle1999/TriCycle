@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
 from tricycle_core import ExecutionContext, TaskStatus
@@ -64,6 +65,22 @@ class RitsSshTests(unittest.TestCase):
         self.assertEqual(plan.metadata["target"], "trainer@gpu-box.internal")
         self.assertEqual(plan.parameters["ssh_request"]["command"], ["bash", "run.sh"])
 
+    def test_all_ssh_operations_reject_unknown_fields_and_preserve_round_trip(self) -> None:
+        for operation in ('submit', 'status', 'logs', 'download', 'terminate'):
+            with self.subTest(operation=operation):
+                payload = self._request(
+                    job_id='job-test', download_paths=['outputs/metrics.csv'], download_dir='outputs',
+                )
+                request = RitsSshFinetuneRequest.from_mapping(payload, operation=operation)
+                self.assertEqual(
+                    RitsSshFinetuneRequest.from_mapping(request.to_dict(), operation=operation),
+                    request,
+                )
+                with self.assertRaisesRegex(InvalidRequestError, 'container_gpu'):
+                    RitsSshPlugin().plan(
+                        operation, {**payload, 'container_gpu': '0'}, ExecutionContext('bad-ssh'),
+                    )
+
     def test_in_memory_gateway_supports_task_lifecycle(self) -> None:
         request = RitsSshFinetuneRequest.from_mapping(
             self._request(job_id="rits-run-1"), operation="submit"
@@ -92,9 +109,8 @@ class RitsSshTests(unittest.TestCase):
             )
             context_created = False
 
-            def successful_command(args: list[str], **_: object):
+            def successful_command(args: list[str], **_: object) -> CompletedProcess[str]:
                 nonlocal context_created
-                from subprocess import CompletedProcess
 
                 output = ""
                 if args[:3] == ["docker", "context", "ls"]:
@@ -135,8 +151,7 @@ class RitsSshTests(unittest.TestCase):
             self._request(job_id="rits-conflict"), operation="submit"
         )
 
-        def conflicting_context(args: list[str], **_: object):
-            from subprocess import CompletedProcess
+        def conflicting_context(args: list[str], **_: object) -> CompletedProcess[str]:
 
             output = "remote\n" if args[:3] == ["docker", "context", "ls"] else "ssh://elsewhere\n"
             return CompletedProcess(args, 0, output, "")
@@ -153,8 +168,7 @@ class RitsSshTests(unittest.TestCase):
         )
         calls: list[list[str]] = []
 
-        def context_list(args: list[str], **_: object):
-            from subprocess import CompletedProcess
+        def context_list(args: list[str], **_: object) -> CompletedProcess[str]:
 
             calls.append(args)
             return CompletedProcess(args, 0, "default\n", "")
@@ -171,8 +185,7 @@ class RitsSshTests(unittest.TestCase):
             self._request(job_id="rits-run-3", log_lines=20), operation="status"
         )
         gateway = OpenSshRitsGateway()
-        def successful_command(args: list[str], **_: object):
-            from subprocess import CompletedProcess
+        def successful_command(args: list[str], **_: object) -> CompletedProcess[str]:
 
             if args[:3] == ["docker", "context", "ls"]:
                 output = "remote\n"

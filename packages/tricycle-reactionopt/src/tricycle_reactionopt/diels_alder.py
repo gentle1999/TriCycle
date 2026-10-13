@@ -21,7 +21,7 @@ DA_REACTION_SMARTS = (
     "[#6+0,#7+0:4]=[#6+0,#7+0:5]-[#6+0,#7+0:6]1"
 )
 
-_CANDIDATE_FIELDS = (
+_CANDIDATE_FIELDS: tuple[str, ...] = (
     "reaction_id",
     "pair_id",
     "ene_id",
@@ -334,7 +334,7 @@ def _diene_paths(
                     and product_bonds[1].GetBondType() == Chem.BondType.DOUBLE
                     and product_bonds[2].GetBondType() == Chem.BondType.SINGLE
                 ):
-                    paths.append(path)  # type: ignore[arg-type]
+                    paths.append(path)
             return
         atom = product.GetAtomWithIdx(current)
         for neighbor in atom.GetNeighbors():

@@ -10,16 +10,17 @@ description: "Query all submitted workers in a Bohr batch run and persist a stat
 输入是已有 `run.toml`、`submit-results.tsv` 和远程公开 `BOHR_ID` 的运行目录；输出是
 `status.tsv` 和更新后的 `run.toml`。本能力只读远程状态，不提交、下载或终止 worker。
 
-新版 CLI 的 `id` 是平台内部 ID，不能直接传给生命周期命令。兼容旧批次时，若运行目录
-包含 `job_group_id`，adapter 会调用 `bohr job describe --job_group_id` 将旧 `id` 映射为
-`bohrId`；新提交无需额外处理。
+CLI 的 `id` 是平台内部 ID，不能传给生命周期命令。请求和回执使用公开 `bohrId`；不自动映射内部 ID 或迁移旧运行目录。
 
-需要已有 `submit-results.tsv` 和远程 job ID。推荐从状态文件恢复：
+需要已有 `submit-results.tsv` 和远程 job ID。先 `inspect --run-dir <目录>`，仅在
+`resume.next_action = "bohr.batch.status"` 时使用下面的恢复命令：
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
   --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
+
+`resume` 执行状态中的下一动作，不是固定的查询命令。若下一动作不是 status，通过注入 gateway 的 `BohrSubmitPlugin.status(run_dir, gateway, context)` 单独查询；不要为了查状态推进提交/下载，也不要改写状态伪装阶段。
 
 真实查询产生 `status.tsv`，默认 dry-run 不调用网络；凭据可放在项目 `.env` 中，shell 环境变量优先。查询后检查 `incomplete`、`failed` 和下一动作，
 不要把 TSV 报告误当成配置文件。

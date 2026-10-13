@@ -5,19 +5,20 @@ import csv
 import hashlib
 import math
 import operator
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from tricycle_core import canonical_json
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.io import file_sha256 as core_file_sha256
 
 from .models import Candidate
 
-
 AGENT_ACQUISITION_STRATEGY = "agent-authored-acquisition"
 AGENT_ACQUISITION_SCHEMA = "tricycle.agent-acquisition/v1"
+MAE_ACQUISITION_SCHEMA = "tricycle.agent-acquisition/v2"
 AGENT_ACQUISITION_VERSION = "1.0.0"
 _MAX_EXPRESSION_LENGTH = 4096
 _MAX_EXPRESSION_NODES = 256
@@ -150,7 +151,7 @@ _COMPARE_OPERATORS = {
     ast.Gt: operator.gt,
     ast.GtE: operator.ge,
 }
-_SAFE_FUNCTIONS = {
+_SAFE_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "abs": abs,
     "exp": math.exp,
     "log": math.log,
@@ -226,7 +227,9 @@ def _evaluate_node(node: ast.AST, names: Mapping[str, Any], *, expression: str) 
         branch = node.body if bool(_evaluate_node(node.test, names, expression=expression)) else node.orelse
         return _evaluate_node(branch, names, expression=expression)
     if isinstance(node, ast.Call):
-        function = _SAFE_FUNCTIONS[node.func.id]  # type: ignore[union-attr]
+        if not isinstance(node.func, ast.Name):
+            raise InvalidRequestError("expression calls must reference a named safe function")
+        function = _SAFE_FUNCTIONS[node.func.id]
         args = [
             _number(_evaluate_node(arg, names, expression=expression), field_name="function argument")
             for arg in node.args
@@ -237,7 +240,7 @@ def _evaluate_node(node: ast.AST, names: Mapping[str, Any], *, expression: str) 
             value = function(args)
         else:
             if len(args) != 1:
-                raise InvalidRequestError(f"{node.func.id} needs exactly one expression argument")  # type: ignore[union-attr]
+                raise InvalidRequestError(f"{node.func.id} needs exactly one expression argument")
             value = function(args[0])
         return _number(value, field_name="agent acquisition expression result")
     raise InvalidRequestError(f"unsupported expression node: {type(node).__name__}")
@@ -357,9 +360,9 @@ def acquisition_spec(request_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
         raise InvalidRequestError(
             "agent-authored-acquisition requires metadata.agent_acquisition"
         )
-    if raw.get("schema") != AGENT_ACQUISITION_SCHEMA:
+    if raw.get("schema") not in {AGENT_ACQUISITION_SCHEMA, MAE_ACQUISITION_SCHEMA}:
         raise InvalidRequestError(
-            f"metadata.agent_acquisition.schema must be {AGENT_ACQUISITION_SCHEMA!r}"
+            f"metadata.agent_acquisition.schema must be {AGENT_ACQUISITION_SCHEMA!r} or {MAE_ACQUISITION_SCHEMA!r}"
         )
     for key in ("function_id", "version", "expression", "cost_expression", "rationale", "authored_by"):
         if not isinstance(raw.get(key), str) or not str(raw[key]).strip():
@@ -388,10 +391,51 @@ def acquisition_spec(request_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
     for key in ("sampled_set", "candidate_space", "model_evaluation"):
         if not isinstance(evidence.get(key), str) or not str(evidence[key]).strip():
             raise InvalidRequestError(f"metadata.agent_acquisition.evidence.{key} must not be empty")
+    validate_calculation_evidence(evidence)
+    _parse_expression(str(raw["expression"]))
+    if raw["schema"] == AGENT_ACQUISITION_SCHEMA:
+        _require_adaptive_inputs(str(raw["expression"]))
+    else:
+        if raw.get("objective") not in {"minimize-generalization-mae", "minimize-ground-truth-mae-at-core-hour-budget"}:
+            raise InvalidRequestError("MAE acquisition requires an explicit MAE objective")
+        if raw.get("objective") == "minimize-ground-truth-mae-at-core-hour-budget":
+            budget_context = context.get("core_hour_budget")
+            if not isinstance(budget_context, Mapping) or budget_context.get("unit") != "core_hours":
+                raise InvalidRequestError("core-hour MAE acquisition requires core_hours resource context")
+            spent = _number(budget_context.get("spent_core_hours"), field_name="spent_core_hours")
+            milestones = budget_context.get("evaluation_budgets_core_hours")
+            if spent < 0 or not isinstance(milestones, list) or not milestones:
+                raise InvalidRequestError("core-hour MAE acquisition requires nonnegative spent hours and budgets")
+            numeric = [_number(v, field_name="core-hour budget") for v in milestones]
+            if any(v <= 0 for v in numeric) or numeric != sorted(set(numeric)):
+                raise InvalidRequestError("core-hour budgets must be positive and strictly increasing")
+        if raw.get("decision_action") not in {"retain", "adjust", "replace"}:
+            raise InvalidRequestError("MAE acquisition requires retain, adjust or replace")
+        for key in ("hypothesis", "expected_effect", "author_notes"):
+            if not isinstance(raw.get(key), str) or not str(raw[key]).strip():
+                raise InvalidRequestError(f"MAE acquisition requires non-empty {key}")
+    _parse_expression(str(raw["cost_expression"]))
+    if raw.get('objective') == 'minimize-ground-truth-mae-at-core-hour-budget':
+        tree = _parse_expression(str(raw['cost_expression']))
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names.update(n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute))
+        if not names & {'estimated_core_hours', 'core_hours_per_proxy_unit'}:
+            raise InvalidRequestError('core-hour acquisition requires a calibrated core-hour cost_expression')
+    cost_features = _referenced_candidate_names(str(raw["cost_expression"]))
+    if raw["schema"] == AGENT_ACQUISITION_SCHEMA and not _REQUIRED_COST_FEATURES.issubset(cost_features):
+        missing = sorted(_REQUIRED_COST_FEATURES - cost_features)
+        raise InvalidRequestError(
+            "cost_expression must use payload.product_count and "
+            f"payload.mean_product_atom_count (missing: {', '.join(missing)})"
+        )
+    return raw
+
+
+def validate_calculation_evidence(evidence: Mapping[str, Any]) -> set[str]:
+    """Validate the batch barrier shared by campaign orchestration and sampling."""
+
     status_path, status_workers = _validate_status_evidence(evidence.get("calculation_status"))
-    download_path, download_workers = _validate_download_evidence(
-        evidence.get("downloaded_results")
-    )
+    download_path, download_workers = _validate_download_evidence(evidence.get("downloaded_results"))
     if status_path.parent.resolve() != download_path.parent.resolve():
         raise InvalidRequestError(
             "calculation_status.tsv and download-results.tsv must belong to the same local run"
@@ -400,17 +444,7 @@ def acquisition_spec(request_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
         raise InvalidRequestError(
             "calculation_status.tsv and download-results.tsv must report the same workers"
         )
-    _parse_expression(str(raw["expression"]))
-    _require_adaptive_inputs(str(raw["expression"]))
-    _parse_expression(str(raw["cost_expression"]))
-    cost_features = _referenced_candidate_names(str(raw["cost_expression"]))
-    if not _REQUIRED_COST_FEATURES.issubset(cost_features):
-        missing = sorted(_REQUIRED_COST_FEATURES - cost_features)
-        raise InvalidRequestError(
-            "cost_expression must use payload.product_count and "
-            f"payload.mean_product_atom_count (missing: {', '.join(missing)})"
-        )
-    return raw
+    return status_workers
 
 
 def _read_local_tsv_evidence(value: Any, *, name: str) -> tuple[Path, list[dict[str, str]]]:
@@ -429,7 +463,7 @@ def _read_local_tsv_evidence(value: Any, *, name: str) -> tuple[Path, list[dict[
         raise InvalidRequestError(
             f"{name} must already exist at an absolute local path: {report_path}"
         )
-    actual_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    actual_hash = core_file_sha256(report_path)
     normalized_hash = expected_hash.removeprefix("sha256:").lower()
     if normalized_hash != actual_hash:
         raise InvalidRequestError(f"{name} SHA-256 does not match: {report_path}")
@@ -560,7 +594,7 @@ class AgentAuthoredAcquisitionSamplingStrategy:
             evaluate_numeric_expression(
                 str(spec["cost_expression"]),
                 candidate=candidate.payload,
-                context=spec["context"],  # type: ignore[arg-type]
+                context=spec["context"],
             )
             if atom_count <= 0:
                 raise InvalidRequestError("mean_product_atom_count must be positive")
@@ -640,6 +674,13 @@ class AgentAuthoredAcquisitionSamplingStrategy:
             "author_notes": spec.get("author_notes", ""),
             "cost_summary": summary,
         }
+        if spec["schema"] == MAE_ACQUISITION_SCHEMA:
+            definition.update({key: spec[key] for key in (
+                "schema", "objective", "decision_action", "hypothesis", "expected_effect"
+            )})
+            definition['decision_source'] = spec.get('decision_source', 'agent')
+            if spec['objective'] == 'minimize-ground-truth-mae-at-core-hour-budget':
+                definition['cost_unit'] = 'core_hours'
         definition["function_hash"] = hashlib.sha256(
             canonical_json(definition).encode("utf-8")
         ).hexdigest()
@@ -654,6 +695,8 @@ class AgentAuthoredAcquisitionSamplingStrategy:
         if budget < 0 or budget > len(candidates):
             raise InvalidRequestError("sampling budget cannot exceed candidate count")
         definition, entries = self._evaluate(candidates, metadata)
+        if definition['schema'] == MAE_ACQUISITION_SCHEMA and 0 < budget < len(entries) and len({row['score'] for row in entries}) == 1:
+            raise InvalidRequestError('MAE acquisition must produce discriminating scores when a choice exists')
         return {
             "score_field": "agent_acquisition_score",
             "score_fields": ["agent_acquisition.expression"] * len(entries),
@@ -670,6 +713,8 @@ class AgentAuthoredAcquisitionSamplingStrategy:
     ) -> tuple[Candidate, ...]:
         del seed
         definition, entries = self._evaluate(candidates, metadata)
+        if definition['schema'] == MAE_ACQUISITION_SCHEMA and 0 < budget < len(entries) and len({row['score'] for row in entries}) == 1:
+            raise InvalidRequestError('MAE acquisition must produce discriminating scores when a choice exists')
         del definition
         if budget == 0:
             return ()

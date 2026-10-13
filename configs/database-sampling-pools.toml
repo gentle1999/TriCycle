@@ -1,0 +1,25 @@
+# Reuse the native database CSV export, then append substrate identities.
+substrate_registry = "/Users/hx_group/proj/tricycle-data/tricycle-autode/new_full_df_exact_balanced_40ene_40diene.csv"
+
+[export_filters]
+has_activation_gibbs_free_energy = true
+
+[[projects]]
+name = "ground-truth"
+project_id = "00000000-0000-7000-8000-000000000201"
+role = "evaluation"
+
+[[projects]]
+name = "dpa-fined-rits-da"
+project_id = "01a09ae5-346f-77e2-b515-abe77a6e77a8"
+role = "candidate"
+
+[[projects]]
+name = "rits-zero-shot-da"
+project_id = "01a0a090-b25b-73d0-a85c-c4b8794e2771"
+role = "candidate"
+
+[[projects]]
+name = "autode"
+project_id = "01a086db-147e-7cdf-9abe-9c70c2c70ec8"
+role = "candidate"

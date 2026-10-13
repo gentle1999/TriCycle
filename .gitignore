@@ -31,4 +31,24 @@ tests/fixtures/rxnresid-mapped-reactant-schema/
 .vscode/
 *.ipynb_checkpoints/
 
+# Temporary files and editor backups
 .tmp
+.tmp-*
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+*.rej
+*.pid
+*~
+.DS_Store
+/docs/*.visual-check.json
+
+# Machine-local live alert settings (contain routing and filesystem details)
+/configs/codex-usage-alert.toml
+/configs/decision-model-balance-alert.draft.toml
+# Experiment reports and one-off documentation archives never enter source commits.
+/reports/
+/docs/benchmarks/

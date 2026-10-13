@@ -68,7 +68,7 @@ class CapabilityManifest:
 
 @dataclass(frozen=True, slots=True)
 class CapabilityBinding:
-    """Bind a public capability ID to a legacy component operation."""
+    """Bind a public capability ID to a component operation."""
 
     manifest: CapabilityManifest
     component_id: str
@@ -171,5 +171,5 @@ class CapabilityCatalog:
     ) -> None:
         self.get(capability_id).validate(request, context)
 
-    def __contains__(self, capability_id: str) -> bool:
-        return capability_id in self._bindings
+    def __contains__(self, capability_id: object) -> bool:
+        return isinstance(capability_id, str) and capability_id in self._bindings

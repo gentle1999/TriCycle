@@ -1,0 +1,4 @@
+interface:
+  display_name: "TriCycle 代码结构规范"
+  short_description: "明确模块归属与依赖方向，检查迁移完整性、重复实现和运行边界"
+  default_prompt: "使用 $code-structure 检查并落实本次 TriCycle 代码改动的目录职责、依赖方向、入口和验证要求。"

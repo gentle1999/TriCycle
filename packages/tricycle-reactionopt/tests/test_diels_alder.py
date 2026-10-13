@@ -15,6 +15,7 @@ from tricycle_reactionopt import (
     Reaction,
     ReactionOptPlugin,
     ReactionProfileRequest,
+    RitsTransitionStateInput,
     RitsTransitionStateResult,
     enumerate_diels_alder_reactions,
 )
@@ -83,7 +84,7 @@ class DielsAlderFlippableAtomTests(unittest.TestCase):
         "RDKit and NumPy are optional in the base smoke environment",
     )
     def test_complete_single_pair_space_builds_every_reaction_profile(self) -> None:
-        from rdkit.Chem import AllChem
+        from rdkit.Chem import rdDistGeom
 
         pair = DielsAlderSubstratePair(
             ene_id="e-pentene-E",
@@ -94,13 +95,13 @@ class DielsAlderFlippableAtomTests(unittest.TestCase):
         sampled_reactions: list[str] = []
 
         class LocalTestSampler:
-            def sample(self, request: object) -> RitsTransitionStateResult:
+            def sample(self, request: RitsTransitionStateInput) -> RitsTransitionStateResult:
                 mapped_reaction = request.reaction_smiles
                 sampled_reactions.append(mapped_reaction)
                 reaction = Reaction.from_rxn_smiles(mapped_reaction)
                 structure = reaction.merged_reactants
                 structure.RemoveAllConformers()
-                status = AllChem.EmbedMolecule(structure, randomSeed=3407)
+                status = rdDistGeom.EmbedMolecule(structure, randomSeed=3407)
                 if status < 0:
                     raise RuntimeError("could not embed the local TS test structure")
                 return RitsTransitionStateResult(

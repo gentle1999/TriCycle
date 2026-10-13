@@ -4,16 +4,16 @@ import hashlib
 import json
 import math
 import os
-import tempfile
 import uuid
-from collections.abc import Callable, Mapping
-from contextlib import contextmanager, suppress
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from .errors import InvalidRequestError
+from .io import atomic_write_text
 
 TRACE_SCHEMA = "tricycle.trace/v1"
 
@@ -153,7 +153,7 @@ class TraceSink(Protocol):
 
 
 @contextmanager
-def _file_lock(path: Path):
+def _file_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as handle:
         try:
@@ -253,27 +253,7 @@ class TraceStore:
             safe_name += suffix
         content = canonical_json(value) + "\n"
         destination = self.trace_dir / "payloads" / safe_name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary_name: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=destination.parent,
-                prefix=f".{destination.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary_name = handle.name
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_name, destination)
-            temporary_name = None
-        finally:
-            if temporary_name is not None:
-                with suppress(FileNotFoundError):
-                    os.unlink(temporary_name)
+        atomic_write_text(destination, content)
         encoded = content.encode("utf-8")
         return {
             "path": str(destination.relative_to(self.run_dir)),

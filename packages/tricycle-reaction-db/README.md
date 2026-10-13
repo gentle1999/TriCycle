@@ -4,21 +4,31 @@
 它负责请求校验、批次文件边界、数据库权威筛选条件、导出字段契约和 provenance receipt；
 具体数据库 API、凭据和 schema 由注入的 adapter 实现。
 
+原生采样池的导出和适配位于 `pools.py`，底物立体身份匹配的唯一实现位于 `substrate_adaptation.py`。安装 `tricycle-reaction-db[adaptation]` 提供 RDKit；普通数据库接口不要求化学依赖。直接使用包内 CLI：
+
+```bash
+uv run --package tricycle-reaction-db --extra adaptation python -m tricycle_reaction_db.pools export --config configs/database-sampling-pools.toml
+uv run --package tricycle-reaction-db --extra adaptation python -m tricycle_reaction_db.pools adapt --config configs/database-sampling-pools.toml --root /absolute/export --output-root /absolute/new-adaptation
+```
+
+`export` 默认只生成离线计划，显式 `--live` 才通过 adapter 读取数据库；`adapt` 核验原生导出回执并保留全部源字段和行。两者不依赖 sampling、analysis 或 tools。
+
+请求只接受模型声明的字段。批量导入使用 `[project]` 的 `slug` / `name` 和唯一 `[batch]` 的 `batch_id` / `root`；单条校验使用 `[record]`。导出目录使用 `destination`。旧字段别名、平铺项目字段和 `batches` 输入均拒绝。
+
 ## 能力
 
 原生插件 ID 为 `tricycle.reaction-database`：
 
 | 能力 | 作用 |
 | --- | --- |
-| `reaction.validate` | 校验兼容的单反应记录 |
+| `reaction.validate` | 校验单反应记录 |
 | `reaction.ingest` | 通过 repository/adapter 录入单条反应记录 |
-| `reaction.upsert` | 暴露兼容的 repository 写入边界 |
+| `reaction.upsert` | 暴露repository 写入边界 |
 | `reaction.batch.validate` | 解析并审计一个计算日志批次 |
 | `reaction.batch.ingest` | 一个新 project 导入一个批次 |
 | `reaction.filter.cycloaddition` | 使用固定 cycloaddition rxn-SMARTS 筛选清洗数据 |
 | `reaction.space.rits.export` | 导出 RitS 所需 mapped reaction + TS structure |
 | `reaction.space.rxnresid.export` | 导出 RxnResid 所需能量和分阶段耗时 |
-| `reaction.space.export` | 兼容旧名称的 RxnResid 导出入口 |
 
 应用层的常用操作名是 `reaction-db.ingest`、`reaction-db.batch-import`、
 `reaction-db.filter`、`reaction-db.export-rits` 和 `reaction-db.export-rxnresid`。
@@ -77,7 +87,7 @@ alias 查询读取 materialized thermodynamics profile。每行能量和阶段�
 本地日志重算或拼接。没有 profile 或 profile 格式无效时导出失败，缺少反应/活化能量的记录会排除并
 统计原因，null 阶段耗时保留为空。receipt 记录 MCP 查询 provenance、project ID、筛选式、页数、批次、
 行数及单位，不保存 bearer token。
-默认项目固定为 ground-truth 的内部 ID `00000000-0000-7000-8000-000000000201`。未显式传入
+默认项目由 [导出请求模型](src/tricycle_reaction_db/models.py)提供；实际任务应在请求中显式绑定所需项目。未显式传入
 destination 时，CSV 与 `receipt.json` 写入
 `$TRICYCLE_RUN_ROOT/YYYY-MM-DD/<本地时间戳>/record/`（`TRICYCLE_RUN_ROOT` 未设置时使用 `runs/`）。
 
@@ -100,14 +110,14 @@ flowchart LR
 
 `ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；仓库内置的
 `McpReactionDatabaseAdapter` 通过数据库的 Streamable HTTP MCP endpoint 调用
-`create_project` 和 `compose_query`；RxnResid 数据通过分页 mapped-reaction 和 materialized thermodynamics MCP 查询导出；默认导入模式使用数据库的
+`create_project` 和 `compose_query`；RxnResid 数据通过分页 mapped-reaction 和 materialized thermodynamics MCP 查询导出；导入使用数据库的
 `POST /api/upload-batches` 创建 durable queue，再通过
 `POST /api/upload-batches/{batch_id}/files` multipart 批量上传日志字节。该批量接口与单文件
 `upload_calculation_log` 共用 RustFS staging 和后台 worker，不依赖数据库服务可见的共享目录。
-将 `TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE=mcp` 可启用逐文件 MCP 兼容模式。adapter 的导入
+adapter 的导入
 receipt 表示文件已提交到持久化队列（`submitted`），保留每个队列 ID 和状态，但不等待异步
 MolOP 解析或填充清洗反应数量。
-`ReactionRepository` 保留单条记录兼容边界。dry-run 只解析请求、发现文件、生成计划和 receipt
+`ReactionRepository` 提供单条记录写入边界。dry-run 只解析请求、发现文件、生成计划和 receipt
 形状，不写数据库、不发 MCP 请求、不创建远程 project。测试可使用 `InMemoryReactionRepository`
 或内存 adapter。MCP endpoint/token、REST bearer token、organization ID 和超时策略只从 live
 环境变量读取，不能保存进请求 TOML。`TRICYCLE_REACTION_DB_REST_TOKEN` 必须是数据库接受的

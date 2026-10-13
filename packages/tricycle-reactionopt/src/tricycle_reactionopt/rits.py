@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from tricycle_core import Artifact, BohrJobSpec
 from tricycle_core.errors import InvalidRequestError
+from tricycle_rits.assets import load_model_asset
 
 DEFAULT_RITS_IMAGE = (
     "registry.dp.tech/dptech/dp/native/prod-23278/ubuntu2404-py312-pt212-cu130-dl:260831"
@@ -329,8 +330,8 @@ class RitsInferenceConfig:
     kekulize: bool = False
     add_stereo: bool = False
     extra_args: tuple[str, ...] = ()
-    source_repository: str = "https://github.com/gentle1999/RitS"
-    source_revision: str | None = "6d8aa0704c21d2798326a7e070491abf438ca292"
+    source_repository: str = field(default_factory=lambda: load_model_asset().repository)
+    source_revision: str | None = field(default_factory=lambda: load_model_asset().revision)
     pipeline: RitsPipelineConfig = field(default_factory=RitsPipelineConfig)
 
     def __post_init__(self) -> None:
@@ -350,26 +351,10 @@ class RitsInferenceConfig:
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any] | None) -> RitsInferenceConfig:
         values = dict(payload or {})
-        code_value = values.get(
-            "code_artifact",
-            values.get("code", values.get("source_artifact")),
-        )
-        checkpoint_value = values.get("checkpoint_artifact", values.get("checkpoint"))
-        input_artifacts = values.get("input_artifacts", ())
-        if input_artifacts is None:
-            input_artifacts = ()
-        if not isinstance(input_artifacts, (list, tuple)):
-            raise InvalidRequestError("rits.input_artifacts must be a list")
-        parsed_inputs = tuple(
-            artifact
-            for index, item in enumerate(input_artifacts)
-            if (artifact := _artifact(item, name=f"input-{index}")) is not None
-        )
         allowed = {
             "model_name",
             "image",
             "input_directory",
-            "input_dir",
             "project_id",
             "machine_type",
             "python_executable",
@@ -391,16 +376,29 @@ class RitsInferenceConfig:
         unknown = sorted(
             set(values)
             - allowed
-            - {"code_artifact", "code", "source_artifact"}
+            - {"code_artifact"}
             - {
                 "checkpoint_artifact",
-                "checkpoint",
                 "input_artifacts",
                 "output_artifacts",
             }
         )
         if unknown:
             raise InvalidRequestError(f"unknown rits inference fields: {', '.join(unknown)}")
+        model_asset = load_model_asset()
+        revision = values.get("source_revision", model_asset.revision)
+        code_value = values.get("code_artifact")
+        checkpoint_value = values.get("checkpoint_artifact")
+        input_artifacts = values.get("input_artifacts", ())
+        if input_artifacts is None:
+            input_artifacts = ()
+        if not isinstance(input_artifacts, (list, tuple)):
+            raise InvalidRequestError("rits.input_artifacts must be a list")
+        parsed_inputs = tuple(
+            artifact
+            for index, item in enumerate(input_artifacts)
+            if (artifact := _artifact(item, name=f"input-{index}")) is not None
+        )
         checkpoint_location = DEFAULT_RITS_CHECKPOINT_SOURCE
         if isinstance(checkpoint_value, Mapping):
             checkpoint_location = str(checkpoint_value.get("location", checkpoint_location))
@@ -423,7 +421,7 @@ class RitsInferenceConfig:
             ),
             input_artifacts=parsed_inputs,
             output_artifacts=_artifact_list(values.get("output_artifacts")),
-            input_directory=str(values.get("input_directory", values.get("input_dir", "."))),
+            input_directory=str(values.get("input_directory", ".")),
             project_id=(
                 str(values["project_id"]) if values.get("project_id") is not None else None
             ),
@@ -443,13 +441,9 @@ class RitsInferenceConfig:
             add_stereo=bool(values.get("add_stereo", False)),
             extra_args=_extra_args(values.get("extra_args")),
             source_repository=str(
-                values.get("source_repository", "https://github.com/gentle1999/RitS")
+                values.get("source_repository", model_asset.repository)
             ),
-            source_revision=(
-                str(values["source_revision"])
-                if values.get("source_revision") is not None
-                else None
-            ),
+            source_revision=str(revision) if revision is not None else None,
             pipeline=RitsPipelineConfig.from_mapping(pipeline_value),
         )
 
@@ -482,7 +476,6 @@ class RitsInferenceConfig:
             product_smiles=product_smiles,
         )
         return build_inference_command(
-            project_dir=self.input_directory,
             python_executable=self.python_executable,
             script=self.script,
             config=self.config,
@@ -518,7 +511,6 @@ class RitsInferenceConfig:
                 "ReactionOpt RitS planning requires the tricycle-rits package"
             ) from exc
         return build_ts_pipeline_command(
-            project_dir=self.input_directory,
             python_executable=self.python_executable,
             script=self.pipeline.script,
             reactions=reactions or self.pipeline.reaction_file,
@@ -563,7 +555,7 @@ class RitsInferenceConfig:
             "python_executable": self.python_executable,
             "script": self.script,
             "config": self.config,
-            "checkpoint": self.checkpoint,
+            "checkpoint_path": self.checkpoint,
             "n_samples": self.n_samples,
             "batch_size": self.batch_size,
             "charge": self.charge,
@@ -591,6 +583,7 @@ class RitsInferenceConfig:
             reactant_smiles=reactant_smiles,
             product_smiles=product_smiles,
         )
+        pipeline_reaction: str | None = None
         if self.pipeline.enabled:
             pipeline_reaction = _pipeline_reaction_smiles(resolved_reactants, resolved_products)
             output_artifacts = self.output_artifacts or (
@@ -627,7 +620,7 @@ class RitsInferenceConfig:
             "source_revision": self.source_revision,
             "ts_pipeline": self.pipeline.to_dict(),
         }
-        if self.pipeline.enabled:
+        if pipeline_reaction is not None:
             parameters.update(
                 {
                     "pipeline_reaction_smiles": pipeline_reaction,
@@ -735,7 +728,6 @@ class RitsTransitionStateSampler(Protocol):
     def sample(self, request: RitsTransitionStateInput) -> RitsTransitionStateResult: ...
 
 
-RitsInferenceAdapter = RitsTransitionStateSampler
 
 
 def _mapped_template_from_smiles(smiles: str) -> Any:
@@ -826,10 +818,10 @@ class LocalRitsPipelineSampler:
             selected_files = tuple(sorted(selected_dir.glob("*.xyz")))
             if not selected_files:
                 summary_path = output_dir / "summary.json"
-                summary = summary_path.read_text(encoding="utf-8") if summary_path.is_file() else ""
+                summary_text = summary_path.read_text(encoding="utf-8") if summary_path.is_file() else ""
                 raise InvalidRequestError(
                     "RitS TS pipeline returned no selected transition-state structures"
-                    + (f": {summary[-1200:]}" if summary else "")
+                    + (f": {summary_text[-1200:]}" if summary_text else "")
                 )
             template = _mapped_template_from_smiles(request.reactant_smiles or "")
             structures: list[Any] = []
@@ -962,16 +954,6 @@ def normalize_transition_state_structures(
     return tuple(normalized)
 
 
-def coerce_sampler_result(value: Any) -> RitsTransitionStateResult:
-    if isinstance(value, RitsTransitionStateResult):
-        return value
-    if isinstance(value, (list, tuple)):
-        return RitsTransitionStateResult(tuple(value))
-    raise InvalidRequestError(
-        "RitS sampler must return RitsTransitionStateResult or a sequence of RDKit molecules"
-    )
-
-
 def _chem() -> Any:
     try:
         from rdkit import Chem
@@ -1024,13 +1006,11 @@ __all__ = [
     "DEFAULT_RITS_PIPELINE_SCRIPT",
     "DEFAULT_RITS_SCRIPT",
     "LocalRitsPipelineSampler",
-    "RitsInferenceAdapter",
     "RitsInferenceConfig",
     "RitsPipelineConfig",
     "RitsTransitionStateInput",
     "RitsTransitionStateResult",
     "RitsTransitionStateSampler",
-    "coerce_sampler_result",
     "molecule_to_xyz",
     "normalize_transition_state_structures",
     "parse_xyz_conformers",

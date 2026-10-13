@@ -2,8 +2,10 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from tricycle_bohrsubmit import BohrCliConfig, BohrCliGateway
@@ -31,7 +33,7 @@ class BohrCliGatewayTests(unittest.TestCase):
     def test_submit_uses_public_job_id_and_current_output_flag(self) -> None:
         gateway = BohrCliGateway(
             BohrCliConfig(retry_delay=0, retry_jitter=0),
-            environ={"ACCESS_KEY": "legacy-test-key"},
+            environ={"BOHR_ACCESS_KEY": "test-key"},
         )
         job = BohrJobSpec(
             name="worker-001",
@@ -56,11 +58,13 @@ class BohrCliGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.submit(job), "22")
 
         args = run_once.call_args.args[0]
+        self.assertIn("--project-id", args)
+        self.assertNotIn("--project_id", args)
         self.assertIn("--output", args)
         self.assertEqual(args[args.index("--output") + 1], "json")
         self.assertNotIn("--backward_files", args)
         self.assertNotIn("--dataset_path", args)
-        self.assertEqual(gateway.environ["BOHR_ACCESS_KEY"], "legacy-test-key")
+        self.assertEqual(gateway.environ["BOHR_ACCESS_KEY"], "test-key")
 
     def test_job_id_parser_rejects_the_new_cli_internal_id_field(self) -> None:
         self.assertEqual(
@@ -114,30 +118,6 @@ class BohrCliGatewayTests(unittest.TestCase):
         with patch.object(gateway, "_run_once", return_value=result):
             self.assertEqual(gateway.status("22")["status"], "failed")
 
-    def test_resolve_job_id_maps_legacy_internal_id_from_current_group_listing(self) -> None:
-        gateway = BohrCliGateway(
-            BohrCliConfig(retry_delay=0, retry_jitter=0),
-            environ={},
-        )
-        result = SimpleNamespace(
-            returncode=0,
-            output=(
-                '{"ok":true,"data":['
-                '{"id":11,"bohrId":22,"phase":"failed"},'
-                '{"id":12,"bohrId":23,"phase":"finished"}'
-                ']}'
-            ),
-        )
-        with patch.object(gateway, "_run_once", return_value=result) as run_once:
-            self.assertEqual(gateway.resolve_job_id("11", job_group_id="456"), "22")
-            self.assertEqual(gateway.resolve_job_id("23", job_group_id="456"), "23")
-
-        self.assertEqual(run_once.call_count, 1)
-        self.assertEqual(
-            run_once.call_args.args[0],
-            ["job", "describe", "--job_group_id", "456", "--output", "json"],
-        )
-
     def test_structured_non_retryable_cli_error_is_not_retried(self) -> None:
         gateway = BohrCliGateway(
             BohrCliConfig(retry_max=5, retry_delay=0, retry_jitter=0),
@@ -173,6 +153,30 @@ class BohrCliGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.status("22")["status"], "running")
 
         self.assertEqual(run_once.call_count, 2)
+
+    def test_submit_recovery_ignores_an_older_job_with_the_same_name(self) -> None:
+        gateway = BohrCliGateway(BohrCliConfig(retry_delay=0), environ={})
+        created_after = datetime.fromisoformat("2026-09-28T00:15:00+08:00")
+        response = json.dumps({"data": {"items": [
+            {"bohrId": 22, "jobName": "fold-2", "createTime": "2026-09-28 00:02:41"},
+        ]}})
+        with patch.object(gateway, "_run", return_value=response):
+            self.assertIsNone(
+                gateway._find_recent_job("fold-2", "7447947", created_after=created_after)
+            )
+
+    def test_submit_recovery_matches_a_job_created_after_the_attempt_started(self) -> None:
+        gateway = BohrCliGateway(BohrCliConfig(retry_delay=0), environ={})
+        created_after = datetime.fromisoformat("2026-09-28T00:15:00+08:00")
+        response = json.dumps({"data": {"items": [
+            {"bohrId": 23, "jobName": "fold-2", "createTime": "2026-09-28 00:15:08"},
+            {"bohrId": 22, "jobName": "fold-2", "createTime": "2026-09-28 00:02:41"},
+        ]}})
+        with patch.object(gateway, "_run", return_value=response):
+            self.assertEqual(
+                gateway._find_recent_job("fold-2", "7447947", created_after=created_after),
+                "23",
+            )
 
     def test_model_job_uploads_the_declared_input_directory(self) -> None:
         gateway = BohrCliGateway(
@@ -241,14 +245,14 @@ class BohrCliGatewayTests(unittest.TestCase):
             captured["config"],
             {"backward_files": ["outputs/rxnresid-smoke/"]},
         )
-        self.assertFalse(Path(captured["config_path"]).exists())
+        self.assertFalse(Path(str(captured["config_path"])).exists())
 
     def test_submit_rejects_dataset_paths_but_accepts_explicit_output_selectors(self) -> None:
         gateway = BohrCliGateway(
             BohrCliConfig(retry_delay=0, retry_jitter=0),
             environ={},
         )
-        base = {
+        base: dict[str, Any] = {
             "name": "worker-001",
             "operation": "bohr.batch.worker",
             "image": "registry.example/chemistry:latest",

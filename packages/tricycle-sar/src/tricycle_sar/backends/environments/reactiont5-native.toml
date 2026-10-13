@@ -1,0 +1,27 @@
+schema_version = 1
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[bootstrap]
+micromamba_url = "https://micro.mamba.pm/api/micromamba/linux-64/2.3.3"
+micromamba_version = "2.3.3"
+micromamba_archive_sha256 = "e7274528ceb9c20d048a428d6c22d7e02e268f8ffb762c4c365422347c8b8ba2"
+micromamba_binary_sha256 = "9496f94a8b78c536573c93d946ec9bba74bd9ff79ee55aaa4b546e30db8f511b"
+
+[models]
+
+[models.reactiont5]
+repository = "https://github.com/sagawatatsuya/ReactionT5v2.git"
+revision = "76eb08068e10fe255cae5d563a91e1c1e9abac54"
+mode = "base-venv"
+package = false
+requirements = ["transformers==4.40.2", "tokenizers==0.19.1", "sentencepiece==0.2.0", "huggingface-hub==0.26.5", "accelerate==0.30.1"]
+modules = ["transformers.models.t5.modeling_t5", "models", "sentencepiece", "rdkit"]
+source_paths = ["."]
+checkpoint_repository = "sagawa/ReactionT5v2-yield"
+checkpoint_revision = "f0658bfd360bceaaf560f11b850781c50221fe0b"
+assets = [{"path" = "config.json", "git_blob_sha1" = "e0141b4d6b3a233f11346a8bb320cd0668ed5c36"}, {"path" = "pytorch_model.bin", "sha256" = "29f5cc9a91aaa74b768d348d18f1bf0e01914f480102cf94142015a6a52cb3d9"}, {"path" = "special_tokens_map.json", "git_blob_sha1" = "ca796dba9833739c67e8e8c9f5c050977d726804"}, {"path" = "tokenizer.json", "git_blob_sha1" = "90a11dd97e3698647dac555081b503e8ade613d3"}, {"path" = "tokenizer_config.json", "git_blob_sha1" = "7ae3afcf60fcaa5707a0e70dccd03ecbecea9bbd"}]
+
+[framework]
+bootstrap_build_tools = false
+no_build_isolation = false

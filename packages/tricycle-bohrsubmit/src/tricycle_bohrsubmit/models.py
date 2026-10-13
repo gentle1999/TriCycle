@@ -1,18 +1,46 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 from tricycle_core import load_dotenv
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 DEFAULT_CHEMISTRY_IMAGE = (
-    "registry.dp.tech/dptech/dp/native/prod-23278/"
-    "gaussian-orca-dp-client:260824"
+    "registry.dp.tech/dptech/dp/native/prod-23278/gaussian-orca-dp-client:260824"
 )
+
+
+def validate_chemistry_resources(
+    engine: str, machine_type: str, extra_submit_args: tuple[str, ...] = ()
+) -> None:
+    """Reject chemistry/resource mismatches before any platform side effect."""
+    if engine not in {"dpa", "gaussian"}:
+        raise InvalidRequestError("engine must be dpa or gaussian")
+    tokens = set(re.findall(r"[a-z]+", machine_type.lower()))
+    gpu = bool(tokens & {"gpu", "nvidia"})
+    cpu = "cpu" in tokens
+    required = "GPU" if engine == "dpa" else "CPU"
+    if (engine == "dpa" and (not gpu or cpu)) or (engine == "gaussian" and (not cpu or gpu)):
+        raise InvalidRequestError(
+            f"engine={engine} requires an explicit {required} machine_type; got {machine_type!r}"
+        )
+    for arg in extra_submit_args:
+        flag = arg.split("=", 1)[0]
+        if flag in {"--machine_type", "--config_file"} or (
+            arg.startswith("-")
+            and not arg.startswith("--")
+            and arg[1:].lstrip("yh")[:1] in {"t", "i"}
+        ):
+            raise InvalidRequestError(
+                "chemistry extra_submit_args cannot override machine_type or config_file; "
+                "set machine_type in the request"
+            )
 
 
 def _paths(value: object) -> tuple[Path, ...]:
@@ -81,10 +109,20 @@ class BatchRequest:
     max_run_time: str | None = None
     nnode: str | None = None
     extra_submit_args: tuple[str, ...] = ()
+    task_defaults: Mapping[str, Any] = field(default_factory=dict)
+    task_specs: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.task_patterns:
-            raise InvalidRequestError("at least one task pattern is required")
+        if not self.task_patterns and not self.task_specs:
+            raise InvalidRequestError("task patterns or task_specs are required")
+        if self.task_patterns and self.task_specs:
+            raise InvalidRequestError("task patterns and task_specs are mutually exclusive")
+        if self.task_defaults and not self.task_specs:
+            raise InvalidRequestError("task_defaults require task_specs")
+        if self.task_specs:
+            from .task_table import expand_task_specs
+
+            expand_task_specs(self.task_defaults, self.task_specs)
         if self.workers < 1:
             raise InvalidRequestError("workers must be positive")
         if not self.image.strip():
@@ -100,8 +138,12 @@ class BatchRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> BatchRequest:
-        task_patterns = payload.get("task_patterns", payload.get("tasks", ()))
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
+        task_patterns = payload.get("task_patterns", ())
         patterns = _strings(task_patterns)
+        specs = payload.get("task_specs", ())
+        if not isinstance(specs, (list, tuple)):
+            raise InvalidRequestError("task_specs must be a list of tables")
         return cls(
             task_patterns=patterns,
             workers=int(payload.get("workers", 0)),
@@ -110,14 +152,14 @@ class BatchRequest:
             worker_script=_optional_path(payload.get("worker_script")),
             project_id=_env_or(payload, "project_id", "BOHR_PROJECT_ID"),
             machine_type=_env_or(payload, "machine_type", "BOHR_MACHINE_TYPE"),
-            common_paths=_paths(payload.get("common_paths", payload.get("common"))),
-            out_dir=_optional_path(payload.get("out_dir", payload.get("out"))),
+            common_paths=_paths(payload.get("common_paths", None)),
+            out_dir=_optional_path(payload.get("out_dir", None)),
             job_prefix=payload.get("job_prefix"),
             job_group_id=payload.get("job_group_id"),
             job_group_name=payload.get("job_group_name"),
             auto_job_group=bool(payload.get("auto_job_group", True)),
             result_path=payload.get("result_path"),
-            dataset_paths=_strings(payload.get("dataset_paths", payload.get("dataset_path"))),
+            dataset_paths=_strings(payload.get("dataset_paths", None)),
             backward_files=str(
                 payload.get("backward_files", "worker.log,results,manifest.txt,manifest.tsv")
             ),
@@ -125,11 +167,13 @@ class BatchRequest:
             max_reschedule_times=payload.get("max_reschedule_times"),
             max_run_time=payload.get("max_run_time"),
             nnode=payload.get("nnode"),
-            extra_submit_args=_strings(payload.get("extra_submit_args", payload.get("bohr_args"))),
+            extra_submit_args=_strings(payload.get("extra_submit_args", None)),
+            task_defaults=payload.get("task_defaults", {}),
+            task_specs=tuple(specs),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "task_patterns": list(self.task_patterns),
             "workers": self.workers,
             "image": self.image,
@@ -152,6 +196,10 @@ class BatchRequest:
             "nnode": self.nnode,
             "extra_submit_args": list(self.extra_submit_args),
         }
+        if self.task_specs:
+            result["task_defaults"] = dict(self.task_defaults)
+            result["task_specs"] = [dict(row) for row in self.task_specs]
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,9 +237,7 @@ class DpaBernyRequest:
     frozen_model: str = "frozen_model.pth"
     no_freeze: bool = False
     allow_task_failures: bool = False
-    server_script: str = (
-        "/opt/deepmd-kit-3.1.0/lib/python3.12/site-packages/dihscan/pot/server.py"
-    )
+    server_script: str = "/opt/deepmd-kit-3.1.0/lib/python3.12/site-packages/dihscan/pot/server.py"
     server_wait: str = "20"
     server_health_timeout: str = "120"
     out_dir: Path | None = None
@@ -224,11 +270,10 @@ class DpaBernyRequest:
             raise InvalidRequestError("machine_type is required")
         if self.engine == "dpa" and self.model_path is None:
             raise InvalidRequestError("model_path is required for engine=dpa")
+        validate_chemistry_resources(self.engine, self.machine_type, self.extra_submit_args)
         if self.engine == "gaussian":
             if not self.functional or not self.basis:
-                raise InvalidRequestError(
-                    "functional and basis are required for engine=gaussian"
-                )
+                raise InvalidRequestError("functional and basis are required for engine=gaussian")
             if self.model_path is not None:
                 raise InvalidRequestError("model_path is only supported for engine=dpa")
         elif self.functional is not None or self.basis is not None:
@@ -238,11 +283,12 @@ class DpaBernyRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> DpaBernyRequest:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
-            xyz_patterns=_strings(payload.get("xyz_patterns", payload.get("xyz", ()))),
+            xyz_patterns=_strings(payload.get("xyz_patterns", ())),
             workers=int(payload.get("workers", 0)),
             engine=str(payload.get("engine", "dpa")),
-            model_path=_optional_path(payload.get("model_path", payload.get("model"))),
+            model_path=_optional_path(payload.get("model_path", None)),
             image=str(_env_or(payload, "image", "BOHR_IMAGE", DEFAULT_CHEMISTRY_IMAGE)),
             project_id=_env_or(payload, "project_id", "BOHR_PROJECT_ID"),
             machine_type=_env_or(payload, "machine_type", "BOHR_MACHINE_TYPE"),
@@ -273,7 +319,7 @@ class DpaBernyRequest:
             ),
             server_wait=str(payload.get("server_wait", "20")),
             server_health_timeout=str(payload.get("server_health_timeout", "120")),
-            out_dir=_optional_path(payload.get("out_dir", payload.get("out"))),
+            out_dir=_optional_path(payload.get("out_dir", None)),
             job_prefix=payload.get("job_prefix"),
             job_group_id=payload.get("job_group_id"),
             job_group_name=payload.get("job_group_name"),
@@ -289,7 +335,7 @@ class DpaBernyRequest:
             max_reschedule_times=payload.get("max_reschedule_times"),
             max_run_time=payload.get("max_run_time"),
             nnode=payload.get("nnode"),
-            extra_submit_args=_strings(payload.get("extra_submit_args", payload.get("bohr_args"))),
+            extra_submit_args=_strings(payload.get("extra_submit_args", None)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -361,12 +407,13 @@ class RescueRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> RescueRequest:
-        source = payload.get("source_run", payload.get("rescue_from", payload.get("run", "")))
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
+        source = payload.get("source_run", "")
         return cls(
             source_run=Path(str(source)),
             workers=int(payload.get("workers", 0)),
             downloads=_optional_path(payload.get("downloads")),
-            out_dir=_optional_path(payload.get("out_dir", payload.get("out"))),
+            out_dir=_optional_path(payload.get("out_dir", None)),
             job_prefix=payload.get("job_prefix"),
             job_group_id=payload.get("job_group_id"),
             job_group_name=payload.get("job_group_name"),

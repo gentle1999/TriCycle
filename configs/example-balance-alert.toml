@@ -1,0 +1,22 @@
+# Template only: confirm account, unit, provider and recipients before live use.
+poll_seconds = 300
+repeat_seconds = 43200
+
+[[accounts]]
+name = "decision-model"
+# Inject a read-only adapter returning {"amount": <available balance>}.
+# Codex authentication status is not a balance API.
+command = ["/absolute/path/to/balance-provider", "--output", "json"]
+json_path = ["amount"]
+unit = "CNY" # Must match the actual provider.
+threshold = "100" # Example, not an approved operational threshold.
+multiplier = "1" # For integer cents use "0.01".
+
+[smtp]
+host_env = "TRICYCLE_SMTP_HOST"
+username_env = "TRICYCLE_SMTP_USERNAME"
+password_env = "TRICYCLE_SMTP_PASSWORD"
+port = 587
+tls = "starttls"
+sender = "alerts@example.com"
+recipients = ["recipient@example.com"]

@@ -3,18 +3,19 @@ PYTHON ?= python3.11
 PYTHONPATH := $(CURDIR)/packages/tricycle-core/src:$(CURDIR)/packages/tricycle-bohr/src:$(CURDIR)/packages/tricycle-bohrsubmit/src:$(CURDIR)/packages/tricycle-reaction-db/src:$(CURDIR)/packages/tricycle-sar/src:$(CURDIR)/packages/tricycle-rits/src:$(CURDIR)/packages/tricycle-sampling/src:$(CURDIR)/packages/tricycle-reactionopt/src:$(CURDIR)/packages/tricycle-exploration/src:$(CURDIR)/apps/tricycle-agent/src
 export PYTHONPATH
 
-.PHONY: help check ci-test test compile lint format list-plugins list-capabilities
+.PHONY: help check ci-test test compile lint typecheck format list-plugins list-capabilities
 
 help:
 	@printf '%s\n' 'make check          run compile, tests, and optional lint checks' \
 		'make ci-test        run the locked uv CI suite for every workspace project' \
 		'make test           run root and package-local tests' \
-		'make list-plugins   list the registered compatibility components' \
+		'make typecheck      run workspace mypy and Pyright checks using uv' \
+		'make list-plugins   list the registered implementation components' \
 		'make list-capabilities list the Codex-facing capability manifests' \
 		'uv sync             create the uv workspace environment'
 
 compile:
-	$(PYTHON) -m compileall -q packages apps tests
+	$(PYTHON) -m compileall -q -x '(^|/)(\.venv|__pycache__)(/|$$)' packages apps tests analysis
 
 test:
 	$(PYTHON) -m unittest discover -s tests -p 'test_*.py' -v
@@ -31,6 +32,10 @@ test:
 
 lint:
 	@if command -v ruff >/dev/null 2>&1; then ruff check .; else echo 'ruff is not installed; skipped'; fi
+
+typecheck:
+	uv run --all-packages mypy
+	uv run --all-packages pyright
 
 format:
 	@if command -v ruff >/dev/null 2>&1; then ruff format .; else echo 'ruff is not installed; skipped'; fi

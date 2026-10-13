@@ -19,6 +19,12 @@ snapshot 与 replay key；训练产出后可传入 `next_model_snapshot` 绑定�
 replay key。训练配方至少需要 `seed`、`dataset_manifest_hash`、`code_revision` 和
 `container_digest`。QM 计算本身不在本包重做，候选输入和数据集 hash 已作为边界证据保存。
 
+## 请求契约
+
+请求只接受规范字段：`exploration_id`、`output_dir`、`parent_round_id` 和 `next_model_snapshot`。候选使用 `candidate_id`；空间额外属性显式放入 `space.definition`；模型快照使用 `snapshot_id`、`checkpoint_hash` 和 `source_run_id`。
+
+历史选择放在 `history.seen_candidate_ids` / `history.exclude_seen`；训练上下文放在 `training_context`（`last_training_round`、`new_label_count`、`dataset_before_hash`、`dataset_after_hash`、`previous_checkpoint`、`action`），训练配方单独放在顶层 `training_spec`。`to_dict()` 输出同一请求结构，可再次解析；`round_id` 是对象的派生属性。未知字段和重复的旧入口直接报错。
+
 ## 运行产物
 
 ```text

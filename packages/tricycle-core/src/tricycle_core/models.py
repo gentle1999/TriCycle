@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .errors import InvalidRequestError
+from .validation import validate_fields
 
 if TYPE_CHECKING:
     from .trace import TraceSink
@@ -35,7 +36,6 @@ class ModelMode(StrEnum):
     TRAIN = "train"
     INFER = "infer"
     FINETUNE = "finetune"
-    FINE_TUNE = "finetune"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +158,32 @@ class BohrJobSpec:
                 raise InvalidRequestError(f"{field_name} must not be empty")
         if any(not part.strip() for part in self.command):
             raise InvalidRequestError("command entries must not be empty")
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> BohrJobSpec:
+        """Restore a planned job without request defaults or environment lookups."""
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
+        values = dict(payload)
+        for name in ("command", "tags", "input_artifacts", "output_artifacts"):
+            items = values.get(name, ())
+            if not isinstance(items, (list, tuple)):
+                raise InvalidRequestError(f"{name} must be a list")
+            if name.endswith("_artifacts"):
+                artifacts = []
+                for item in items:
+                    if not isinstance(item, Mapping):
+                        raise InvalidRequestError(f"{name} entries must be artifact tables")
+                    try:
+                        artifacts.append(Artifact(**item))
+                    except TypeError as exc:
+                        raise InvalidRequestError(f"invalid {name} artifact fields") from exc
+                values[name] = tuple(artifacts)
+            else:
+                values[name] = tuple(str(item) for item in items)
+        try:
+            return cls(**values)
+        except TypeError as exc:
+            raise InvalidRequestError("BohrJobSpec requires name, operation and image") from exc
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -26,11 +26,10 @@ project。两批数据应使用两份请求，分别获得两个内部 `project_
 
 MCP live 配置至少需要 `TRICYCLE_REACTION_DB_MCP_URL`、`TRICYCLE_REACTION_DB_MCP_TOKEN` 和
 `TRICYCLE_REACTION_DB_ORGANIZATION_ID`。仓库提供的 MCP adapter 通过 MCP 的 `create_project`
-创建 project；默认 `upload_mode=batch` 随后按服务限制分组，调用数据库的
+创建 project；随后按服务限制分组，调用数据库的
 `POST /api/upload-batches` 和 `POST /api/upload-batches/{batch_id}/files` multipart 接口传输
 日志字节。批量接口只接收文件和队列描述，数据库负责 RustFS staging，并由与单文件接口相同的
-durable worker 解析；同机部署也不得改用共享目录或路径 manifest。需要兼容旧服务时，可设置
-`TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE=mcp`，退回 MCP `upload_calculation_log` 逐文件上传。
+durable worker 解析；同机部署也不得改用共享目录或路径 manifest。
 `staged`、`queued`、`processing` 等状态表示文件已经进入数据库的持久化队列，receipt 状态为
 `submitted`。导入操作只负责完整提交队列，不等待 MolOP 解析完成，因此不会把尚未产生的
 `ingestion_status` 或清洗反应数量误报为结果；receipt 会保留每个 batch/item ID、队列状态和失败

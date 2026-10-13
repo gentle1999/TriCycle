@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
-import tempfile
+import json
+import math
+import re
 import tomllib
 from collections.abc import Mapping
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from .errors import InvalidRequestError
+from .io import atomic_write_text
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -23,8 +24,11 @@ def load_toml(path: Path) -> dict[str, Any]:
 
 
 def _quote(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    return f'"{escaped}"'
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _key(value: str) -> str:
+    return value if re.fullmatch(r"[A-Za-z0-9_-]+", value) else _quote(value)
 
 
 def _value(value: object) -> str:
@@ -32,12 +36,20 @@ def _value(value: object) -> str:
         return '""'
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float) and not math.isfinite(value):
+        raise InvalidRequestError("TOML does not support non-finite floats")
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, Path):
         return _quote(str(value))
     if isinstance(value, str):
         return _quote(value)
+    if isinstance(value, Mapping):
+        return (
+            "{"
+            + ", ".join(f"{_quote(str(key))} = {_value(item)}" for key, item in value.items())
+            + "}"
+        )
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_value(item) for item in value) + "]"
     raise InvalidRequestError(f"unsupported TOML value: {value!r}")
@@ -50,9 +62,9 @@ def _sections(
     nested: list[tuple[tuple[str, ...], Mapping[str, object]]] = []
     for key, value in mapping.items():
         if isinstance(value, Mapping):
-            nested.append(((*prefix, key), value))
+            nested.append(((*prefix, str(key)), value))
         else:
-            scalar_lines.append(f"{key} = {_value(value)}")
+            scalar_lines.append(f"{_key(str(key))} = {_value(value)}")
     return scalar_lines, nested
 
 
@@ -65,7 +77,7 @@ def dump_toml(path: Path, mapping: Mapping[str, object]) -> None:
     for section_path, section in root_sections:
         if lines:
             lines.append("")
-        lines.append("[" + ".".join(section_path) + "]")
+        lines.append("[" + ".".join(_key(part) for part in section_path) + "]")
         scalar_lines, nested = _sections(section, section_path)
         lines.extend(scalar_lines)
         pending = nested
@@ -73,29 +85,9 @@ def dump_toml(path: Path, mapping: Mapping[str, object]) -> None:
             next_pending: list[tuple[tuple[str, ...], Mapping[str, object]]] = []
             for child_path, child in pending:
                 lines.append("")
-                lines.append("[" + ".".join(child_path) + "]")
+                lines.append("[" + ".".join(_key(part) for part in child_path) + "]")
                 child_scalars, child_nested = _sections(child, child_path)
                 lines.extend(child_scalars)
                 next_pending.extend(child_nested)
             pending = next_pending
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_path = handle.name
-            handle.write("\n".join(lines) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            with suppress(FileNotFoundError):
-                os.unlink(temporary_path)
+    atomic_write_text(path, "\n".join(lines) + "\n")

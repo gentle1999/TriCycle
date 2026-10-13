@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,18 +42,26 @@ class SamplingRequest:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> SamplingRequest:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         raw_candidates = payload.get("candidates", ())
-        candidates = tuple(
-            candidate
-            if isinstance(candidate, Candidate)
-            else Candidate(
-                candidate_id=str(candidate.get("candidate_id", candidate.get("id", ""))),
-                payload=dict(candidate.get("payload", {})),
+        if not isinstance(raw_candidates, (list, tuple)):
+            raise InvalidRequestError("candidates must be a list")
+        candidates = []
+        for candidate in raw_candidates:
+            if isinstance(candidate, Candidate):
+                candidates.append(candidate)
+                continue
+            if not isinstance(candidate, Mapping):
+                raise InvalidRequestError("candidate must be a table")
+            validate_fields(candidate, {"candidate_id", "payload"}, context="candidate")
+            candidates.append(
+                Candidate(
+                    candidate_id=str(candidate.get("candidate_id", "")),
+                    payload=dict(candidate.get("payload", {})),
+                )
             )
-            for candidate in raw_candidates
-        )
         return cls(
-            candidates=candidates,
+            candidates=tuple(candidates),
             budget=int(payload.get("budget", 0)),
             strategy=str(payload.get("strategy", "random")),
             seed=payload.get("seed"),

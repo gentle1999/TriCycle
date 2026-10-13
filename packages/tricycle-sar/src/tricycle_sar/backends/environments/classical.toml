@@ -1,0 +1,20 @@
+schema_version = 2
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[models]
+
+[models.classical]
+repository = ""
+revision = ""
+mode = "system-venv"
+package = false
+runtime_only = true
+requirements = ["scikit-learn==1.7.2", "rdkit==2026.3.5"]
+source_paths = []
+modules = ["sklearn", "rdkit"]
+require_cuda = false
+
+[framework]
+bootstrap_build_tools = false
+no_build_isolation = false

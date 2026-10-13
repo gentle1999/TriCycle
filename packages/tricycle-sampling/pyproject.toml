@@ -5,8 +5,15 @@ description = "Candidate-space and sampling-strategy plugin for exploration loop
 requires-python = ">=3.11"
 dependencies = ["tricycle-core"]
 
+[project.optional-dependencies]
+replay = ["tricycle-sar", "tricycle-bohr", "tricycle-bohrsubmit", "tricycle-reactionopt"]
+
 [tool.uv.sources]
 tricycle-core = { workspace = true }
+tricycle-sar = { workspace = true }
+tricycle-bohr = { workspace = true }
+tricycle-bohrsubmit = { workspace = true }
+tricycle-reactionopt = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tricycle_core.errors import InvalidRequestError
+try:
+    from sar_runtime.errors import InvalidRequestError  # pyright: ignore[reportMissingImports, reportMissingModuleSource]  # isort: skip
+except ImportError:
+    from tricycle_core.errors import InvalidRequestError
 
 
 def _non_empty(value: object, *, name: str) -> str:
@@ -47,17 +50,8 @@ def _append_option(
     return command + (option, str(value))
 
 
-def _worker_prefix(project_dir: str) -> tuple[str, ...]:
-    # Bohr executes the command from the uploaded input directory.  Keep the
-    # historical argument for API compatibility, but do not invent a launcher
-    # that is not part of the Bohr worker image.
-    _non_empty(project_dir, name="project_dir")
-    return ()
-
-
 def build_training_command(
     *,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "train.py",
     config: str = "configs/rxnresid.yaml",
@@ -148,7 +142,7 @@ def build_training_command(
     config_value = _optional_text(config, name="config")
     split_manifest = _optional_text(split_manifest, name="split_manifest")
     output = _non_empty(output, name="output")
-    command = _worker_prefix(project_dir) + (
+    command = (
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
     )
@@ -196,7 +190,6 @@ def build_training_command(
 def build_finetune_command(
     *,
     checkpoint: str,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "train.py",
     output: str = "runs/refit",
@@ -228,7 +221,7 @@ def build_finetune_command(
         raise InvalidRequestError("device must be auto or cpu")
     if mixed_precision is not None and mixed_precision not in {"no", "fp16", "bf16"}:
         raise InvalidRequestError("mixed_precision must be no, fp16, or bf16")
-    command = _worker_prefix(project_dir) + (
+    command = (
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
         "--refit",
@@ -246,14 +239,11 @@ def build_finetune_command(
     return command + _extra_args(extra_args)
 
 
-build_refit_command = build_finetune_command
-build_fine_tuning_command = build_finetune_command
 
 
 def build_inference_command(
     *,
     checkpoint: str,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "predict.py",
     data: str = "data/new_full_df_exact_balanced_40ene_40diene.csv",
@@ -273,7 +263,7 @@ def build_inference_command(
     component_id_columns = tuple(str(value) for value in component_id_columns)
     if any(not value.strip() for value in component_id_columns):
         raise InvalidRequestError("component_id_columns must not contain empty values")
-    command = _worker_prefix(project_dir) + (
+    command = (
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
         "--checkpoint",

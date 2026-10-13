@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -26,11 +25,13 @@ from .lifecycle import (
     read_run_config,
     status_run,
     terminate_run,
+    validate_prepared_chemistry_resources,
     watch_run,
 )
 from .models import BatchRequest, DpaBernyRequest, RescueRequest
 from .rescue import prepare_rescue
 from .staging import stage_batch, stage_dpa_berny
+from .training_protocol import validate_training_protocol
 
 
 class BohrSubmitPlugin(PluginBase):
@@ -73,25 +74,27 @@ class BohrSubmitPlugin(PluginBase):
         request: dict[str, Any],
         context: ExecutionContext,
     ) -> TaskPlan:
+        if "only_succeeded" in request:
+            raise InvalidRequestError("only_succeeded is not supported; downloads include every submitted worker")
         if operation == "batch.prepare":
-            parsed = BatchRequest.from_mapping(request)
+            batch_request = BatchRequest.from_mapping(request)
             return TaskPlan(
                 task_id=f"{context.run_id}/bohr-submit/batch",
                 plugin_id=self.manifest.plugin_id,
                 operation=operation,
-                parameters={"request": parsed.to_dict()},
+                parameters={"request": batch_request.to_dict()},
                 metadata={"workflow": "batch", "dry_run": context.dry_run},
             )
         if operation == "dpa-berny.prepare":
-            parsed = DpaBernyRequest.from_mapping(request)
+            dpa_berny_request = DpaBernyRequest.from_mapping(request)
             return TaskPlan(
                 task_id=f"{context.run_id}/bohr-submit/dpa-berny",
                 plugin_id=self.manifest.plugin_id,
                 operation=operation,
-                parameters={"request": parsed.to_dict()},
+                parameters={"request": dpa_berny_request.to_dict()},
                 metadata={
                     "workflow": "dpa-berny",
-                    "engine": parsed.engine,
+                    "engine": dpa_berny_request.engine,
                     "dry_run": context.dry_run,
                 },
             )
@@ -102,7 +105,9 @@ class BohrSubmitPlugin(PluginBase):
             "batch.terminate",
             "batch.watch",
         }:
-            run_dir = str(request.get("run_dir", request.get("run", "")))
+            if "run" in request:
+                raise InvalidRequestError("unknown batch request field: run; use run_dir")
+            run_dir = str(request.get("run_dir", ""))
             if not run_dir.strip():
                 raise InvalidRequestError("run_dir is required")
             return TaskPlan(
@@ -113,12 +118,12 @@ class BohrSubmitPlugin(PluginBase):
                 metadata={"workflow": "batch", "dry_run": context.dry_run},
             )
         if operation == "dpa-berny.rescue":
-            parsed = RescueRequest.from_mapping(request)
+            rescue_request = RescueRequest.from_mapping(request)
             return TaskPlan(
                 task_id=f"{context.run_id}/bohr-submit/rescue",
                 plugin_id=self.manifest.plugin_id,
                 operation=operation,
-                parameters={"request": parsed.to_dict()},
+                parameters={"request": rescue_request.to_dict()},
                 metadata={"workflow": "dpa-berny-rescue", "dry_run": context.dry_run},
             )
         raise InvalidRequestError(f"unsupported Bohr submit operation: {operation}")
@@ -130,17 +135,17 @@ class BohrSubmitPlugin(PluginBase):
         context: ExecutionContext,
     ) -> TaskResult:
         if operation == "batch.prepare":
-            parsed = BatchRequest.from_mapping(request)
+            batch_request = BatchRequest.from_mapping(request)
             staged = stage_batch(
-                parsed,
+                batch_request,
                 run_id=context.run_id,
                 workdir=context.workdir,
                 dry_run=context.dry_run,
             )
         elif operation == "dpa-berny.prepare":
-            parsed = DpaBernyRequest.from_mapping(request)
+            dpa_berny_request = DpaBernyRequest.from_mapping(request)
             staged = stage_dpa_berny(
-                parsed,
+                dpa_berny_request,
                 run_id=context.run_id,
                 workdir=context.workdir,
                 dry_run=context.dry_run,
@@ -185,6 +190,8 @@ class BohrSubmitPlugin(PluginBase):
         continue_on_error: bool = False,
     ) -> TaskResult:
         run_dir = run_dir.resolve()
+        validate_training_protocol(run_dir)
+        validate_prepared_chemistry_resources(run_dir)
         if context.dry_run:
             return TaskResult(
                 task_id=f"{context.run_id}/bohr-submit/submit",
@@ -195,7 +202,7 @@ class BohrSubmitPlugin(PluginBase):
             )
 
         config_path = run_dir / "batch.toml"
-        config = load_toml(config_path) if config_path.is_file() else None
+        config = load_toml(config_path)
         env = read_run_config(run_dir)
         submit_rows = _read_tsv(run_dir / "submit-plan.tsv")
         existing_rows = (
@@ -215,15 +222,11 @@ class BohrSubmitPlugin(PluginBase):
                 str(env.get("job_group_name", run_dir.name)), str(env["project_id"])
             )
             (run_dir / "job-group-id").write_text(f"{group_id}\n", encoding="utf-8")
-            if config is not None:
-                run_config = config.setdefault("run", {})
-                if not isinstance(run_config, dict):
-                    raise InvalidRequestError("batch.toml [run] must be a table")
-                run_config["job_group_id"] = group_id
-                dump_toml(config_path, config)
-            else:
-                env["job_group_id"] = group_id
-                _write_env(run_dir / "batch.env", env)
+            run_config = config.setdefault("run", {})
+            if not isinstance(run_config, dict):
+                raise InvalidRequestError("batch.toml [run] must be a table")
+            run_config["job_group_id"] = group_id
+            dump_toml(config_path, config)
 
         result_rows: list[dict[str, object]] = []
         submitted = failed = reused = skipped = 0
@@ -239,11 +242,7 @@ class BohrSubmitPlugin(PluginBase):
                 "input_dir": row.get("input_dir", ""),
             }
             previous = existing_by_worker.get(worker)
-            if (
-                previous is not None
-                and previous.get("job_id", "")
-                and previous.get("status", "") not in {"FAILED", "PREPARED", "DRY_RUN"}
-            ):
+            if previous is not None and previous.get("job_id", ""):
                 result["job_id"] = previous["job_id"]
                 result["status"] = previous.get("status", "SUBMITTED")
                 reused += 1
@@ -260,6 +259,7 @@ class BohrSubmitPlugin(PluginBase):
                 result["job_id"] = job_id
                 result["status"] = "SUBMITTED"
                 submitted += 1
+                _write_submit_results(run_dir, [*result_rows, result], submit_rows)
                 (run_dir / worker / "submit.out").write_text(
                     f"JobId:  {job_id}\n", encoding="utf-8"
                 )
@@ -312,7 +312,6 @@ class BohrSubmitPlugin(PluginBase):
         gateway: BohrWorkflowGateway,
         context: ExecutionContext,
         *,
-        only_succeeded: bool = False,
         continue_on_error: bool = False,
         resume: bool = False,
     ) -> TaskResult:
@@ -321,7 +320,6 @@ class BohrSubmitPlugin(PluginBase):
         result_file, summary = download_run(
             run_dir.resolve(),
             gateway,
-            only_succeeded=only_succeeded,
             continue_on_error=continue_on_error,
             resume=resume,
         )
@@ -410,33 +408,18 @@ def _read_tsv(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in csv.DictReader(handle, delimiter="\t")]
 
 
-def _read_env(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.is_file():
-        raise InvalidRequestError(f"environment file not found: {path}")
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
-            continue
-        key, raw = line.split("=", 1)
-        parsed = shlex.split(raw, comments=False, posix=True)
-        values[key.strip()] = parsed[0] if parsed else ""
-    return values
-
-
-def _write_env(path: Path, values: Mapping[str, object]) -> None:
-    path.write_text(
-        "".join(f"{key}={shlex.quote(str(value))}\n" for key, value in values.items()),
-        encoding="utf-8",
-    )
-
-
 def _write_submit_results(
     run_dir: Path,
     result_rows: list[dict[str, object]],
     submit_rows: list[dict[str, str]],
 ) -> None:
-    by_worker = {str(row.get("worker", "")): row for row in result_rows}
-    rows = []
+    destination = run_dir / "submit-results.tsv"
+    previous = _read_tsv(destination) if destination.exists() else []
+    by_worker: dict[str, Mapping[str, object]] = {
+        str(row.get("worker", "")): row for row in previous
+    }
+    by_worker.update({str(row.get("worker", "")): row for row in result_rows})
+    rows: list[Mapping[str, object]] = []
     for source in submit_rows:
         row = by_worker.get(source.get("worker", ""))
         if row is None:
@@ -449,8 +432,9 @@ def _write_submit_results(
                 "input_dir": source.get("input_dir", ""),
             }
         rows.append(row)
-    with (run_dir / "submit-results.tsv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
+    temporary = destination.with_suffix(".tsv.tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer: csv.DictWriter[str] = csv.DictWriter(
             handle,
             fieldnames=("worker", "tasks", "job_id", "job_name", "status", "input_dir"),
             delimiter="\t",
@@ -458,3 +442,4 @@ def _write_submit_results(
         )
         writer.writeheader()
         writer.writerows(rows)
+    temporary.replace(destination)

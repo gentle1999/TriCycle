@@ -3,11 +3,23 @@ from __future__ import annotations
 from dataclasses import replace
 
 from tricycle_bohr import BohrModelJobRequest, BohrModelPlugin
-from tricycle_core import ExecutionContext, PluginKind, PluginManifest, TaskPlan
+from tricycle_bohr.model_source import bind_model_source
+from tricycle_core import (
+    Artifact,
+    ExecutionContext,
+    PluginKind,
+    PluginManifest,
+    TaskPlan,
+    TaskResult,
+)
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.protocols import BohrGateway
+from tricycle_core.run_paths import timestamped_run_directory
 
-from .assets import load_default_model_asset
+from .assets import load_model_asset
 from .models import RxnResidJobRequest
+from .sampling_runtime import binding
+from .single_job import bind_request, prepare
 
 
 class SarPlugin(BohrModelPlugin):
@@ -42,55 +54,67 @@ class SarPlugin(BohrModelPlugin):
         """Plan a job and pin its source provenance to the RxnResid repository."""
 
         plan = super().plan_job(request, context)
-        asset = load_default_model_asset()
+        asset = load_model_asset()
+        plan = bind_model_source(
+            plan,
+            mode=request.mode,
+            label="RxnResid",
+            repository=asset.repository,
+            revision=asset.revision,
+            training_entrypoint=asset.training_entrypoint,
+            inference_entrypoint=asset.inference_entrypoint,
+            inference_protocol="predict",
+            finetune_protocol=asset.finetune_protocol,
+        )
         bohr_job = dict(plan.parameters["bohr_job"])
         job_parameters = dict(bohr_job["parameters"])
-        for key, expected in (
-            ("source_repository", asset.repository),
-            ("source_revision", asset.revision),
-            (
-                "upstream_entrypoint",
-                {
-                    "train": asset.training_entrypoint,
-                    "infer": asset.inference_entrypoint,
-                    "finetune": asset.training_entrypoint,
-                }[request.mode.value],
-            ),
-            (
-                "upstream_protocol",
-                {
-                    "train": "train",
-                    "infer": "predict",
-                    "finetune": asset.finetune_protocol,
-                }[request.mode.value],
-            ),
-        ):
-            supplied = job_parameters.get(key)
-            if supplied is not None and (
-                not isinstance(supplied, str) or supplied.strip() != expected
-            ):
-                raise InvalidRequestError(
-                    f"RxnResid {key} must be {expected!r} for the configured upstream repository"
-                )
-            job_parameters[key] = expected
         job_parameters.setdefault("config_path", asset.config_path)
         job_parameters.setdefault("training_entrypoint", asset.training_entrypoint)
         job_parameters.setdefault("inference_entrypoint", asset.inference_entrypoint)
         job_parameters.setdefault("uncertainty_method", asset.uncertainty_method)
         job_parameters.setdefault("uncertainty_fields", list(asset.uncertainty_fields))
+        record = bind_request(request, context)
+        job_parameters["sar_backend"] = record
+        bohr_job["machine_type"] = record["backend"]["environment"]["machine_type"]
         bohr_job["parameters"] = job_parameters
         return replace(
             plan,
             parameters={**plan.parameters, "bohr_job": bohr_job},
-            metadata={
-                **plan.metadata,
-                "source_repository": asset.repository,
-                "source_revision": asset.revision,
-                "uncertainty_method": asset.uncertainty_method,
-                "uncertainty_fields": list(asset.uncertainty_fields),
-            },
         )
 
-
-class RxnResidPlugin(SarPlugin):
-    """Named RxnResid entry point; ``SarPlugin`` remains the registry alias."""
+    def submit_to_bohr(
+        self, plan: TaskPlan, gateway: BohrGateway, context: ExecutionContext
+    ) -> TaskResult:
+        job = dict(plan.parameters["bohr_job"])
+        record = job["parameters"].get("sar_backend")
+        if not isinstance(record, dict):
+            raise InvalidRequestError("SAR submission requires a shared backend binding")
+        if record["backend"] != binding():
+            raise InvalidRequestError("Planned SAR backend binding differs")
+        if (
+            job["image"] != record["backend"]["environment"]["image"]
+            or job["machine_type"] != record["backend"]["environment"]["machine_type"]
+            or list(job["command"]) != record["command"]
+            or plan.operation != record["mode"]
+        ):
+            raise InvalidRequestError("SAR job differs from its planned backend binding")
+        if context.dry_run:
+            return super().submit_to_bohr(plan, gateway, context)
+        supplied = job["parameters"].get("run_dir")
+        output = (
+            (context.workdir / str(supplied)).resolve()
+            if supplied
+            else timestamped_run_directory(context.workdir / "runs", context.run_id)
+        )
+        prepare(record, output)
+        job.update(
+            command=["bash", "worker.sh", "task.toml"],
+            input_artifacts=[Artifact("sar-worker", str(output), kind="directory").to_dict()],
+            parameters={
+                **job["parameters"],
+                "input_directory": str(output),
+                "run_dir": str(output),
+            },
+        )
+        prepared = replace(plan, parameters={**plan.parameters, "bohr_job": job})
+        return super().submit_to_bohr(prepared, gateway, context)

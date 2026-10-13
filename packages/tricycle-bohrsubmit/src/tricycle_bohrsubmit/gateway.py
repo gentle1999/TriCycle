@@ -10,12 +10,14 @@ import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from tricycle_core import BohrJobSpec, load_dotenv
 from tricycle_core.errors import IntegrationNotConfiguredError, InvalidRequestError, TriCycleError
 from tricycle_core.protocols import BohrGateway
+from tricycle_core.validation import validate_fields
 
 from .config import load_toml
 
@@ -132,19 +134,35 @@ class BohrCliConfig:
         if path.suffix.lower() != ".toml":
             raise InvalidRequestError("Bohr adapter configuration must use a .toml file")
         document = load_toml(path)
-        raw_bohr = document.get("bohr", document)
+        validate_fields(document, {"bohr", "retry"}, context="Bohr adapter configuration")
+        raw_bohr = document.get("bohr", {})
         raw_retry = document.get("retry", {})
         if not isinstance(raw_bohr, dict) or not isinstance(raw_retry, dict):
             raise InvalidRequestError("Bohr TOML configuration sections must be tables")
 
+        validate_fields(raw_bohr, {"executable"}, context="bohr")
+        validate_fields(
+            raw_retry,
+            {
+                "max_attempts", "delay", "backoff", "max_delay", "jitter",
+                "submit_mode", "download_mode", "submit_dedup", "submit_lookback",
+                "require_submit_name", "job_group_lookback",
+            },
+            context="retry",
+        )
+
         def integer(value: object, name: str, default: int) -> int:
             try:
+                if not isinstance(value, (str, int, float)):
+                    raise TypeError("expected a numeric value")
                 return int(value)
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError(f"{name} must be an integer") from exc
 
         def number(value: object, name: str, default: float) -> float:
             try:
+                if not isinstance(value, (str, int, float)):
+                    raise TypeError("expected a numeric value")
                 return float(value)
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError(f"{name} must be a number") from exc
@@ -161,7 +179,7 @@ class BohrCliConfig:
             raise InvalidRequestError(f"{name} must be a boolean")
 
         return cls(
-            executable=str(raw_bohr.get("executable", raw_bohr.get("bin", "bohr"))),
+            executable=str(raw_bohr.get("executable", "bohr")),
             retry_max=integer(raw_retry.get("max_attempts", 5), "retry.max_attempts", 5),
             retry_delay=number(raw_retry.get("delay", 5), "retry.delay", 5),
             retry_backoff=number(raw_retry.get("backoff", 2), "retry.backoff", 2),
@@ -201,8 +219,7 @@ class BohrCliGateway:
 
     # The current CLI exposes the public BOHR_ID as ``bohrId``.  The adjacent
     # ``id`` field is the platform's internal job id and is not accepted by
-    # describe/download/terminate.  Keep the two sets separate so a legacy
-    # batch can be migrated explicitly through ``resolve_job_id``.
+    # describe/download/terminate. Only public IDs cross this adapter boundary.
     _PUBLIC_JOB_ID_KEYS = (
         "bohrJobId",
         "bohr_job_id",
@@ -210,7 +227,6 @@ class BohrCliGateway:
         "bohr_id",
         "BOHR_ID",
     )
-    _INTERNAL_JOB_ID_KEYS = ("jobId", "job_id", "JobId", "id", "ID")
     _SUBMIT_GROUP_ID_KEYS = (
         "bohrJobGroupId",
         "bohr_job_group_id",
@@ -252,18 +268,18 @@ class BohrCliGateway:
             load_dotenv(env_file, environ=child_environ)
         self.environ = child_environ
         self.config = config or BohrCliConfig.from_env(environ=self.environ)
-        # ``ACCESS_KEY`` was used by the old CLI.  The current CLI documents
-        # ``BOHR_ACCESS_KEY``; translate only in the child-process environment
-        # so callers do not need to rewrite an existing deployment at once.
-        if not self.environ.get("BOHR_ACCESS_KEY") and self.environ.get("ACCESS_KEY"):
-            self.environ["BOHR_ACCESS_KEY"] = self.environ["ACCESS_KEY"]
-        self._group_job_id_aliases: dict[str, dict[str, str]] = {}
-
     def _run_once(self, args: list[str]) -> _CommandResult:
+        # Bohr API calls and signed artifact transfers use the direct network.
+        # Scope this to the CLI child so model traffic keeps its proxy settings.
+        child_environ = dict(self.environ)
+        for key in tuple(child_environ):
+            if key.lower() in {"http_proxy", "https_proxy", "all_proxy"}:
+                child_environ.pop(key)
+        child_environ.update({"NO_PROXY": "*", "no_proxy": "*"})
         try:
             completed = subprocess.run(
                 [self.config.executable, *args],
-                env=self.environ,
+                env=child_environ,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -422,8 +438,7 @@ class BohrCliGateway:
         Bohr CLI 2.x accepts the result allow-list in its JSON job config as
         ``backward_files`` (the API field is ``outFiles``), but does not expose
         it as a submit flag.  ``output_artifacts`` is the typed TriCycle
-        declaration; an explicit parameter remains available for legacy batch
-        requests that already use the platform terminology.
+        declaration; batch requests use the platform field explicitly.
         """
 
         declared = parameters.get("backward_files")
@@ -511,41 +526,6 @@ class BohrCliGateway:
             raise BohrGatewayError("Bohr group job listing returned a non-object record")
         return records
 
-    def resolve_job_id(self, external_id: str, *, job_group_id: str | None = None) -> str:
-        """Resolve a legacy internal job id to the public current-CLI Bohr ID.
-
-        New submissions already return the public id, so callers without a
-        group context remain a zero-network identity operation.  A group
-        context enables migration of legacy ``submit-results.tsv`` files that
-        recorded the platform ``id`` field.
-        """
-
-        identifier = str(external_id).strip()
-        if not identifier:
-            raise InvalidRequestError("job id must not be empty")
-        group_id = str(job_group_id or "").strip()
-        if not group_id:
-            return identifier
-
-        aliases = self._group_job_id_aliases.get(group_id)
-        if aliases is None:
-            aliases = {}
-            for item in self.list_group_jobs(group_id):
-                public_id = None
-                for key in self._PUBLIC_JOB_ID_KEYS:
-                    public_id = self._identifier(item.get(key))
-                    if public_id is not None:
-                        break
-                if public_id is None:
-                    continue
-                aliases[public_id] = public_id
-                for key in self._INTERNAL_JOB_ID_KEYS:
-                    internal_id = self._identifier(item.get(key))
-                    if internal_id is not None:
-                        aliases[internal_id] = public_id
-            self._group_job_id_aliases[group_id] = aliases
-        return aliases.get(identifier, identifier)
-
     def submit(self, job: BohrJobSpec) -> str:
         if self.config.require_submit_name and not job.name.strip():
             raise InvalidRequestError("Bohr submit requires a stable job name")
@@ -557,7 +537,7 @@ class BohrCliGateway:
             "submit",
             "--job_name",
             job.name,
-            "--project_id",
+            "--project-id",
             str(job.project_id),
             "--machine_type",
             job.machine_type,
@@ -605,12 +585,17 @@ class BohrCliGateway:
         # gives the adapter stable access to the public ``bohrJobId`` field.
         args.extend(["--output", "json"])
 
+        submitted_after = datetime.now().astimezone()
         try:
             output = self._run(args, mode=self.config.submit_retry_mode)
         except BohrGatewayError as exc:
             if not self.config.submit_dedup or not job.name or not self._TRANSIENT.search(str(exc)):
                 raise
-            recovered = self._find_recent_job(job.name, str(parameters.get("job_group_id", "")))
+            recovered = self._find_recent_job(
+                job.name,
+                str(parameters.get("job_group_id", "")),
+                created_after=submitted_after,
+            )
             if recovered is None:
                 raise
             return recovered
@@ -622,7 +607,13 @@ class BohrCliGateway:
             return external_id
         raise BohrGatewayError("Bohr submit succeeded without a JobId in its output")
 
-    def _find_recent_job(self, name: str, group_id: str = "") -> str | None:
+    def _find_recent_job(
+        self,
+        name: str,
+        group_id: str = "",
+        *,
+        created_after: datetime | None = None,
+    ) -> str | None:
         args = [
             "job",
             "list",
@@ -642,10 +633,36 @@ class BohrCliGateway:
             found_name = self._find_value(item, {"job_name", "jobName", "JobName", "name", "Name"})
             if str(found_name or "") != name:
                 continue
+            if created_after is not None:
+                raw_created = self._find_value(
+                    item,
+                    {"create_time", "createTime", "created_at", "createdAt", "submit_time", "submitTime"},
+                )
+                created = self._parse_job_creation_time(raw_created, created_after.tzinfo)
+                if created is None or created < created_after - timedelta(seconds=10):
+                    continue
             found_id = self._job_id(json.dumps(item))
             if found_id is not None:
                 return found_id
         return None
+
+    @staticmethod
+    def _parse_job_creation_time(value: Any, local_timezone: Any) -> datetime | None:
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(value, UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized = value.strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=local_timezone)
+        return parsed
 
     def create_job_group(self, name: str, project_id: str) -> str:
         output = self._run(
@@ -654,7 +671,7 @@ class BohrCliGateway:
                 "create",
                 "--name",
                 name,
-                "--project_id",
+                "--project-id",
                 str(project_id),
                 "--output",
                 "json",
@@ -674,7 +691,7 @@ class BohrCliGateway:
                         "json",
                         "--number",
                         str(self.config.job_group_lookback),
-                        "--projectId",
+                        "--project-id",
                         str(project_id),
                     ],
                     mode="transient",
@@ -726,7 +743,7 @@ class BohrCliGateway:
                 status = candidate
                 break
         if status is None:
-            status = self._find_value(raw, {"status", "Status"})
+            status = str(self._find_value(raw, {"status", "Status"}) or "")
         return {"external_id": str(external_id), "status": str(status or ""), "raw": raw}
 
     def download(self, external_id: str, destination: Path) -> tuple[str, ...]:
@@ -802,12 +819,3 @@ class InMemoryBohrGateway:
     def terminate_group(self, group_id: str) -> str:
         self.terminated.append(group_id)
         return f"terminated {group_id}"
-
-    def resolve_job_id(self, external_id: str, *, job_group_id: str | None = None) -> str:
-        """Keep the in-memory gateway compatible with batch ID resolution."""
-
-        del job_group_id
-        identifier = str(external_id).strip()
-        if not identifier:
-            raise InvalidRequestError("job id must not be empty")
-        return identifier

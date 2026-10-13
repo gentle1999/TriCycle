@@ -9,10 +9,12 @@ from typing import Any, ClassVar, Protocol
 from tricycle_core.errors import InvalidRequestError
 
 from .models import Candidate
+from .protocols import get_baseline_protocol
 
 
 class SamplingStrategy(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def select(
         self,
@@ -109,28 +111,24 @@ def _diversity_weight(metadata: Mapping[str, Any] | None) -> float:
 
 UNCERTAINTY_SCORE_KEYS: dict[str, tuple[str, ...]] = {
     # RxnResid's native evidential regression output is expressed in physical
-    # target units. Prefer variance for acquisition, then accept its standard
-    # deviation and the historical TriCycle/paper-compatible aliases.
+    # target units. Variance, standard deviation and generic scalar uncertainty
+    # are distinct score representations, in that precedence order.
     "predictive": (
         "predictive_variance",
         "predictive_std",
-        "predictive_unc",
         "predictive_uncertainty",
     ),
     "epistemic": (
         "epistemic_variance",
         "epistemic_std",
-        "epistemic_unc",
         "epistemic_uncertainty",
     ),
     "aleatoric": (
         "aleatoric_variance",
         "aleatoric_std",
-        "aleatoric_unc",
         "aleatoric_uncertainty",
     ),
 }
-POSTERIOR_PROBABILITY_KEYS = ("posterior_probabilities", "posterior_probs")
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,9 +141,9 @@ class UncertaintyScores:
 
     def to_dict(self) -> dict[str, float]:
         return {
-            "predictive_unc": self.predictive,
-            "epistemic_unc": self.epistemic,
-            "aleatoric_unc": self.aleatoric,
+            "predictive_uncertainty": self.predictive,
+            "epistemic_uncertainty": self.epistemic,
+            "aleatoric_uncertainty": self.aleatoric,
         }
 
 
@@ -224,25 +222,28 @@ def decompose_binary_uncertainty(
 _MISSING = object()
 
 
+def _validate_uncertainty_fields(payload: Mapping[str, Any]) -> None:
+    obsolete = {"uncertainty", "posterior_probs"}
+    obsolete.update(UNCERTAINTY_SCORE_KEYS)
+    obsolete.update(f"{kind}_unc" for kind in UNCERTAINTY_SCORE_KEYS)
+    invalid = sorted(set(payload) & obsolete)
+    if invalid:
+        raise InvalidRequestError(
+            "unsupported uncertainty fields: " + ", ".join(invalid)
+            + "; use *_variance, *_std, *_uncertainty or posterior_probabilities"
+        )
+
+
 def _raw_score(payload: Mapping[str, Any], kind: str) -> Any:
-    keys = (*UNCERTAINTY_SCORE_KEYS[kind], kind)
-    for key in keys:
+    _validate_uncertainty_fields(payload)
+    for key in UNCERTAINTY_SCORE_KEYS[kind]:
         if key in payload:
             return payload[key]
-
-    nested = payload.get("uncertainty", _MISSING)
-    if isinstance(nested, Mapping):
-        for key in keys:
-            if key in nested:
-                return nested[key]
     return _MISSING
 
 
 def _posterior_probabilities(payload: Mapping[str, Any]) -> tuple[float, ...] | None:
-    raw = next(
-        (payload[key] for key in POSTERIOR_PROBABILITY_KEYS if key in payload),
-        _MISSING,
-    )
+    raw = payload.get("posterior_probabilities", _MISSING)
     if raw is _MISSING:
         return None
     if isinstance(raw, (str, bytes, Mapping)) or not isinstance(raw, Iterable):
@@ -261,7 +262,7 @@ def get_uncertainty_scores(candidate: Candidate) -> UncertaintyScores:
     """Read or derive the three uncertainty scores for a candidate.
 
     A model adapter may provide RxnResid's evidential variance/std fields or
-    the paper-compatible scalar fields directly. Alternatively, it may
+    generic scalar *_uncertainty fields directly. Alternatively, it may
     provide posterior Bernoulli probabilities and let this pure helper
     calculate the entropy decomposition.
     """
@@ -324,18 +325,12 @@ def get_uncertainty_field(candidate: Candidate, kind: str) -> str:
 
     if kind not in UNCERTAINTY_SCORE_KEYS:
         raise InvalidRequestError(f"unknown uncertainty kind: {kind}")
-    keys = (*UNCERTAINTY_SCORE_KEYS[kind], kind)
-    for key in keys:
+    _validate_uncertainty_fields(candidate.payload)
+    for key in UNCERTAINTY_SCORE_KEYS[kind]:
         if key in candidate.payload:
             return key
-    nested = candidate.payload.get("uncertainty", _MISSING)
-    if isinstance(nested, Mapping):
-        for key in keys:
-            if key in nested:
-                return f"uncertainty.{key}"
-    for key in POSTERIOR_PROBABILITY_KEYS:
-        if key in candidate.payload:
-            return key
+    if "posterior_probabilities" in candidate.payload:
+        return "posterior_probabilities"
     # Reuse the canonical validation error when no source field exists.
     get_uncertainty_score(candidate, kind)
     return "derived"
@@ -402,19 +397,23 @@ class UncertaintySamplingStrategy:
 class PredictiveUncertaintySamplingStrategy(UncertaintySamplingStrategy):
     name = "predictive-uncertainty"
     uncertainty_kind = "predictive"
-    score_key = "predictive_unc"
+    score_key = "predictive_uncertainty"
+
+    @property
+    def baseline_protocol(self) -> dict[str, Any]:
+        return get_baseline_protocol(self.name).to_dict()
 
 
 class EpistemicUncertaintySamplingStrategy(UncertaintySamplingStrategy):
     name = "epistemic-uncertainty"
     uncertainty_kind = "epistemic"
-    score_key = "epistemic_unc"
+    score_key = "epistemic_uncertainty"
 
 
 class AleatoricUncertaintySamplingStrategy(UncertaintySamplingStrategy):
     name = "aleatoric-uncertainty"
     uncertainty_kind = "aleatoric"
-    score_key = "aleatoric_unc"
+    score_key = "aleatoric_uncertainty"
 
 
 class PairCoreSetSamplingStrategy:
@@ -490,10 +489,12 @@ class DensityWeightedUncertaintySamplingStrategy(UncertaintySamplingStrategy):
     version = "1.1.0"
 
     def density(self, candidate: Candidate) -> float:
-        raw = candidate.payload.get("pair_density", candidate.payload.get("density", _MISSING))
+        if "density" in candidate.payload:
+            raise InvalidRequestError("unsupported density field: density; use pair_density")
+        raw = candidate.payload.get("pair_density", _MISSING)
         if raw is _MISSING:
             raise InvalidRequestError(
-                f"candidate {candidate.candidate_id!r} is missing pair_density or density"
+                f"candidate {candidate.candidate_id!r} is missing pair_density"
             )
         density = _as_uncertainty_score(
             raw,
@@ -595,24 +596,3 @@ class FirstNSamplingStrategy:
     ) -> tuple[Candidate, ...]:
         del seed
         return tuple(candidates[:budget])
-
-
-STRATEGY_ALIASES: dict[str, str] = {
-    # Names used in the paper's active-learning plots/code.
-    "predictive_unc_based": PredictiveUncertaintySamplingStrategy.name,
-    "epistemic_unc_based": EpistemicUncertaintySamplingStrategy.name,
-    "aleatoric_unc_based": AleatoricUncertaintySamplingStrategy.name,
-    "random_selection": RandomSamplingStrategy.name,
-    # Readable and column-oriented spellings accepted at the request boundary.
-    "predictive_uncertainty": PredictiveUncertaintySamplingStrategy.name,
-    "epistemic_uncertainty": EpistemicUncertaintySamplingStrategy.name,
-    "aleatoric_uncertainty": AleatoricUncertaintySamplingStrategy.name,
-    "predictive_unc": PredictiveUncertaintySamplingStrategy.name,
-    "epistemic_unc": EpistemicUncertaintySamplingStrategy.name,
-    "aleatoric_unc": AleatoricUncertaintySamplingStrategy.name,
-    "pair_core_set": PairCoreSetSamplingStrategy.name,
-    "core_set": PairCoreSetSamplingStrategy.name,
-    "density_weighted_uncertainty": DensityWeightedUncertaintySamplingStrategy.name,
-    "density_uncertainty": DensityWeightedUncertaintySamplingStrategy.name,
-    "uncertainty_diversity": UncertaintyDiversitySamplingStrategy.name,
-}

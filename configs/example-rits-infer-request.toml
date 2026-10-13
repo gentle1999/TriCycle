@@ -2,7 +2,7 @@
 model_name = "rits-smoke"
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 # project_id = "replace-with-bohr-project"
-# machine_type = "replace-with-gpu-machine"
+machine_type = "c6_m60_1 * NVIDIA 4090"
 
 # 任务目录中同时放置 RitS 源码、checkpoint、原生 YAML 和输入数据。
 # 默认权重先放在 TriCycle 根目录 artifacts/rits/rits.ckpt；组装任务目录时复制为
@@ -22,7 +22,7 @@ output_artifacts = [
 [parameters]
 task = "infer"
 source_repository = "https://github.com/gentle1999/RitS"
-source_revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
+source_revision = "07e48da98c4d4f10d0dc1a1cc6b2acad40341c04"
 model_manifest = "packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml"
 checkpoint_name = "rits.ckpt"
 checkpoint_path = "data/rits.ckpt"

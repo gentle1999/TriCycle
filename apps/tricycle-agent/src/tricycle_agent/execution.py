@@ -30,7 +30,6 @@ from tricycle_reaction_db import (
     ReactionDatabasePlugin,
     ReactionFilterRequest,
     ReactionIngestRequest,
-    ReactionSpaceExportRequest,
     RitsDatasetExportRequest,
     RxnResidDatasetExportRequest,
     create_reaction_database_adapter,
@@ -47,7 +46,7 @@ from tricycle_sar import SarPlugin
 
 
 def _run_dir(request: Mapping[str, Any]) -> Path:
-    value = request.get("run_dir") or request.get("run") or ""
+    value = request.get("run_dir") or ""
     if not str(value).strip():
         raise InvalidRequestError("run_dir is required")
     return Path(str(value))
@@ -149,10 +148,10 @@ class CapabilityDispatcher:
 
         if capability_id == "reactionopt.generate":
             component = self._as(provider, ReactionOptPlugin)
-            parsed = ReactionConfigRequest.from_mapping(request)
-            config = component.generate(parsed)
+            reaction_config_request = ReactionConfigRequest.from_mapping(request)
+            config = component.generate(reaction_config_request)
             return TaskResult(
-                task_id=f"{context.run_id}/reactionopt/{parsed.reaction_id}",
+                task_id=f"{context.run_id}/reactionopt/{reaction_config_request.reaction_id}",
                 plugin_id=provider.manifest.plugin_id,
                 status=TaskStatus.SUCCEEDED,
                 message="ReactionOpt configuration generated",
@@ -161,19 +160,19 @@ class CapabilityDispatcher:
 
         if capability_id == "reactionopt.enumerate-da":
             component = self._as(provider, ReactionOptPlugin)
-            parsed = DielsAlderEnumerationRequest.from_mapping(request)
+            diels_alder_enumeration_request = DielsAlderEnumerationRequest.from_mapping(request)
             return component.execute_diels_alder_enumeration(
-                parsed,
+                diels_alder_enumeration_request,
                 context,
                 planned,
             )
 
         if capability_id == "candidate.select":
             component = self._as(provider, SamplingPlugin)
-            parsed = SamplingRequest.from_mapping(request)
-            result = component.select(parsed)
+            sampling_request = SamplingRequest.from_mapping(request)
+            result = component.select(sampling_request)
             return TaskResult(
-                task_id=f"{context.run_id}/sampling/{parsed.strategy}",
+                task_id=f"{context.run_id}/sampling/{sampling_request.strategy}",
                 plugin_id=provider.manifest.plugin_id,
                 status=TaskStatus.SUCCEEDED,
                 message="reaction candidates selected",
@@ -182,7 +181,7 @@ class CapabilityDispatcher:
 
         if capability_id == "reactionopt.export":
             component = self._as(provider, ReactionOptPlugin)
-            parsed = ReactionConfigRequest.from_mapping(request)
+            reaction_config_request = ReactionConfigRequest.from_mapping(request)
             plan = planned
             if context.dry_run:
                 return component.execute(plan, context)
@@ -190,11 +189,11 @@ class CapabilityDispatcher:
                 raise IntegrationNotConfiguredError(
                     "reactionopt.export requires an injected ReactionOptAdapter"
                 )
-            return component.export(parsed, self.reactionopt_adapter, context)
+            return component.export(reaction_config_request, self.reactionopt_adapter, context)
 
         if capability_id == "reactionopt.profile":
             component = self._as(provider, ReactionOptPlugin)
-            parsed = ReactionProfileRequest.from_mapping(request)
+            reaction_profile_request = ReactionProfileRequest.from_mapping(request)
             if context.dry_run:
                 return component.execute(planned, context)
             if self.reactionopt_profile_adapter is None:
@@ -202,20 +201,20 @@ class CapabilityDispatcher:
                     "reactionopt.profile requires an injected RitS TS pipeline sampler"
                 )
             return component.execute_profile(
-                parsed,
+                reaction_profile_request,
                 self.reactionopt_profile_adapter,
                 context,
             )
 
         if capability_id == "reaction-db.ingest":
             component = self._as(provider, ReactionDatabasePlugin)
-            parsed = ReactionIngestRequest.from_mapping(request)
+            reaction_ingest_request = ReactionIngestRequest.from_mapping(request)
             repository = self.reaction_repository or InMemoryReactionRepository()
             if not context.dry_run and self.reaction_repository is None:
                 raise IntegrationNotConfiguredError(
                     "reaction-db.ingest requires an injected ReactionRepository"
                 )
-            return component.ingest(parsed, repository, context)
+            return component.ingest(reaction_ingest_request, repository, context)
 
         if capability_id == "reaction-db.batch-import":
             component = self._as(provider, ReactionDatabasePlugin)
@@ -225,8 +224,8 @@ class CapabilityDispatcher:
                 raise IntegrationNotConfiguredError(
                     "reaction-db.batch-import requires an injected ReactionDatabaseAdapter"
                 )
-            parsed = ReactionBatchImportRequest.from_mapping(request)
-            return component.ingest_batch(parsed, self.reaction_database_adapter, context)
+            reaction_batch_import_request = ReactionBatchImportRequest.from_mapping(request)
+            return component.ingest_batch(reaction_batch_import_request, self.reaction_database_adapter, context)
 
         if capability_id == "reaction-db.filter":
             component = self._as(provider, ReactionDatabasePlugin)
@@ -236,8 +235,8 @@ class CapabilityDispatcher:
                 raise IntegrationNotConfiguredError(
                     "reaction-db.filter requires an injected ReactionDatabaseAdapter"
                 )
-            parsed = ReactionFilterRequest.from_mapping(request)
-            return component.filter_reactions(parsed, self.reaction_database_adapter, context)
+            reaction_filter_request = ReactionFilterRequest.from_mapping(request)
+            return component.filter_reactions(reaction_filter_request, self.reaction_database_adapter, context)
 
         if capability_id == "reaction-db.export-rits":
             component = self._as(provider, ReactionDatabasePlugin)
@@ -247,10 +246,10 @@ class CapabilityDispatcher:
                 raise IntegrationNotConfiguredError(
                     "reaction-db.export-rits requires an injected ReactionDatabaseAdapter"
                 )
-            parsed = RitsDatasetExportRequest.from_mapping(request)
-            return component.export_rits(parsed, self.reaction_database_adapter, context)
+            rits_dataset_export_request = RitsDatasetExportRequest.from_mapping(request)
+            return component.export_rits(rits_dataset_export_request, self.reaction_database_adapter, context)
 
-        if capability_id in {"reaction-db.export-rxnresid", "reaction-db.export-space"}:
+        if capability_id == "reaction-db.export-rxnresid":
             component = self._as(provider, ReactionDatabasePlugin)
             if context.dry_run:
                 return component.execute(planned, context)
@@ -258,11 +257,8 @@ class CapabilityDispatcher:
                 raise IntegrationNotConfiguredError(
                     f"{capability_id} requires an injected ReactionDatabaseAdapter"
                 )
-            if capability_id == "reaction-db.export-space":
-                parsed = ReactionSpaceExportRequest.from_mapping(request)
-                return component.export_space(parsed, self.reaction_database_adapter, context)
-            parsed = RxnResidDatasetExportRequest.from_mapping(request)
-            return component.export_rxnresid(parsed, self.reaction_database_adapter, context)
+            rxn_resid_dataset_export_request = RxnResidDatasetExportRequest.from_mapping(request)
+            return component.export_rxnresid(rxn_resid_dataset_export_request, self.reaction_database_adapter, context)
 
         if capability_id in {"sar.train", "sar.infer", "sar.finetune"}:
             component = self._as(provider, SarPlugin)
@@ -347,7 +343,6 @@ class CapabilityDispatcher:
                     run_dir,
                     gateway,
                     context,
-                    only_succeeded=bool(request.get("only_succeeded", False)),
                     continue_on_error=bool(request.get("continue_on_error", False)),
                     resume=bool(request.get("resume", False)),
                 )

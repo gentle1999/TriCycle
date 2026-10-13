@@ -75,10 +75,11 @@ def _embed(mol: Any, config: ConformerSamplingConfig) -> Any:
     # can be taken into account.  Do not let ETKDG discard candidates first.
     params.pruneRmsThresh = -1.0
     params.enforceChirality = True
-    try:
+    with contextlib.suppress(Exception):
         AllChem.EmbedMultipleConfs(embedded, numConfs=target, params=params)
-    except Exception:
+    if embedded.GetNumConformers() == 0:
         # Some unusual aromatic or macrocyclic inputs need random coordinates.
+        # RDKit can return no conformers without raising an exception.
         retry = AllChem.ETKDGv3()
         retry.randomSeed = int(config.random_seed)
         retry.numThreads = int(config.num_threads)
@@ -88,13 +89,10 @@ def _embed(mol: Any, config: ConformerSamplingConfig) -> Any:
             AllChem.EmbedMultipleConfs(embedded, numConfs=target, params=retry)
 
     if embedded.GetNumConformers() == 0:
-        # A deterministic zero-coordinate conformer is useful for atom-only
-        # or otherwise degenerate smoke inputs.  Real molecular inputs should
-        # normally be handled by ETKDG above.
-        conf = Chem.Conformer(embedded.GetNumAtoms())
-        for atom_index in range(embedded.GetNumAtoms()):
-            conf.SetAtomPosition(atom_index, (float(atom_index) * 1.5, 0.0, 0.0))
-        embedded.AddConformer(conf, assignId=True)
+        raise InvalidRequestError(
+            "RDKit could not embed a conformer with the requested stereochemistry; "
+            "check the molecular graph and stereochemical constraints"
+        )
     return embedded
 
 
@@ -157,9 +155,9 @@ def _optimize_with_rdkit(mol: Any, config: ConformerSamplingConfig) -> Any:
 
 def _optimize_with_gfnff(mol: Any, config: ConformerSamplingConfig, Chem: Any, np: Any) -> Any:
     try:
-        from ase import Atoms
-        from ase.optimize import BFGS
-        from gfnff import GFNFF
+        from ase import Atoms  # pyright: ignore[reportMissingImports]
+        from ase.optimize import BFGS  # pyright: ignore[reportMissingImports]
+        from gfnff import GFNFF  # pyright: ignore[reportMissingImports]
     except ImportError as exc:  # pragma: no cover - depends on installation
         raise InvalidRequestError(
             "force_field = 'gfnff' requires the optional 'gfnff' extra; "

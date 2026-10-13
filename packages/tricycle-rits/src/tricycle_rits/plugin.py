@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from tricycle_bohr import BohrModelJobRequest, BohrModelPlugin
+from tricycle_bohr.model_source import bind_model_source
 from tricycle_core import ExecutionContext, PluginKind, PluginManifest, TaskPlan
-from tricycle_core.errors import InvalidRequestError
 
-from .assets import load_default_model_asset
+from .assets import load_model_asset
 from .models import RitsJobRequest
 
 
@@ -42,44 +40,8 @@ class RitsPlugin(BohrModelPlugin):
         """Plan a job and pin its source provenance to the selected RitS fork."""
 
         plan = super().plan_job(request, context)
-        asset = load_default_model_asset()
-        bohr_job = dict(plan.parameters["bohr_job"])
-        job_parameters = dict(bohr_job["parameters"])
-        for key, expected in (
-            ("source_repository", asset.repository),
-            ("source_revision", asset.revision),
-            (
-                "upstream_entrypoint",
-                {
-                    "train": asset.training_entrypoint,
-                    "infer": asset.inference_entrypoint,
-                    "finetune": asset.training_entrypoint,
-                }[request.mode.value],
-            ),
-            (
-                "upstream_protocol",
-                {
-                    "train": "train",
-                    "infer": "sample_transition_state",
-                    "finetune": asset.finetune_protocol,
-                }[request.mode.value],
-            ),
-        ):
-            supplied = job_parameters.get(key)
-            if supplied is not None and (
-                not isinstance(supplied, str) or supplied.strip() != expected
-            ):
-                raise InvalidRequestError(
-                    f"RitS {key} must be {expected!r} for the configured upstream repository"
-                )
-            job_parameters[key] = expected
-        bohr_job["parameters"] = job_parameters
-        return replace(
-            plan,
-            parameters={**plan.parameters, "bohr_job": bohr_job},
-            metadata={
-                **plan.metadata,
-                "source_repository": asset.repository,
-                "source_revision": asset.revision,
-            },
-        )
+        asset = load_model_asset()
+        return bind_model_source(plan, mode=request.mode, label="RitS", repository=asset.repository,
+            revision=asset.revision, training_entrypoint=asset.training_entrypoint,
+            inference_entrypoint=asset.inference_entrypoint, inference_protocol="sample_transition_state",
+            finetune_protocol=asset.finetune_protocol)

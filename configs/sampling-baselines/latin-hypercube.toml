@@ -1,0 +1,23 @@
+# Slattery et al., Science 2024, DOI: 10.1126/science.adj1817
+# Continuous LHS -> discrete pool mapping is a TriCycle adaptation.
+strategy = "latin-hypercube"
+budget = 2
+seed = 42
+
+[metadata.baseline]
+feature_field = "design_features"
+bounds = [[0.0, 1.0], [0.0, 1.0]]
+design_size = 2
+offset = 0
+
+[[candidates]]
+candidate_id = "rxn-001"
+payload = { design_features = [0.1, 0.2] }
+
+[[candidates]]
+candidate_id = "rxn-002"
+payload = { design_features = [0.5, 0.7] }
+
+[[candidates]]
+candidate_id = "rxn-003"
+payload = { design_features = [0.9, 0.9] }

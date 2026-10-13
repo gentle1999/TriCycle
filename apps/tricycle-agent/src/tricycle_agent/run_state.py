@@ -75,10 +75,10 @@ _RETRYABLE_CAPABILITIES = frozenset(
 
 
 def requested_run_dir(request: Mapping[str, Any], workdir: Path, run_id: str) -> Path:
-    value = request.get("run_dir") or request.get("run")
+    value = request.get("run_dir")
     if value is not None and str(value).strip():
         return Path(str(value)).resolve()
-    output = request.get("out_dir") or request.get("out")
+    output = request.get("out_dir") or request.get("output_dir")
     if output is not None and str(output).strip():
         return Path(str(output)).resolve()
     load_dotenv(keys=("TRICYCLE_RUN_ROOT",))
@@ -308,7 +308,7 @@ def resume_request(store: RunStore) -> tuple[str, dict[str, Any]]:
     if capability_id in {"bohr.job.status", "bohr.job.download"}:
         if not isinstance(remote, dict):
             raise InvalidRequestError(f"run.toml [remote] must be a table: {store.path}")
-        external_id = str(remote.get("job_id", remote.get("external_id", "")))
+        external_id = str(remote.get("job_id", ""))
         if not external_id.strip():
             raise InvalidRequestError(f"run has no remote job id: {store.path}")
         request = {"external_id": external_id}

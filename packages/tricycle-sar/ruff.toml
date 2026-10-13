@@ -1,0 +1,2 @@
+extend = "../../pyproject.toml"
+extend-exclude = ["src/tricycle_sar/backends/assets"]

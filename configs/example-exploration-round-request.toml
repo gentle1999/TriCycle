@@ -47,18 +47,18 @@ candidate_id = "ene-001+diene-001"
 
 [candidates.payload]
 reaction_smiles = "A>>B"
-epistemic_unc = 0.10
+epistemic_uncertainty = 0.10
 
 [[candidates]]
 candidate_id = "ene-001+diene-002"
 
 [candidates.payload]
 reaction_smiles = "C>>D"
-epistemic_unc = 0.80
+epistemic_uncertainty = 0.80
 
 [[candidates]]
 candidate_id = "ene-002+diene-001"
 
 [candidates.payload]
 reaction_smiles = "E>>F"
-epistemic_unc = 0.60
+epistemic_uncertainty = 0.60

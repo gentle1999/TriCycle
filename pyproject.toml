@@ -8,6 +8,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "mypy>=1.11",
+    "pyright>=1.1.414",
     "pytest>=8.0",
     "ruff>=0.8",
 ]
@@ -22,6 +23,7 @@ members = ["packages/*", "apps/*"]
 [tool.pytest.ini_options]
 addopts = "-ra -q"
 testpaths = ["tests", "packages", "apps"]
+norecursedirs = [".*", "__pycache__", "assets", "runs", "outputs"]
 pythonpath = [
     ".",
     "packages/tricycle-core/src",
@@ -50,9 +52,62 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.mypy]
+files = ["packages", "apps", "tools", "tests", "analysis"]
+exclude = ["(^|/)(\\.venv|__pycache__)(/|$)", "(^|/)backends/assets(/|$)"]
+mypy_path = [
+    "packages/tricycle-core/src",
+    "packages/tricycle-bohr/src",
+    "packages/tricycle-bohrsubmit/src",
+    "packages/tricycle-reaction-db/src",
+    "packages/tricycle-sar/src",
+    "packages/tricycle-rits/src",
+    "packages/tricycle-sampling/src",
+    "packages/tricycle-reactionopt/src",
+    "packages/tricycle-exploration/src",
+    "apps/tricycle-agent/src",
+]
 python_version = "3.11"
 check_untyped_defs = true
 disallow_untyped_defs = true
 explicit_package_bases = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+
+[tool.pyright]
+include = ["packages", "apps", "tools", "tests", "analysis"]
+exclude = ["**/__pycache__", "**/.venv", "runs", "outputs", "**/backends/assets"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+extraPaths = [
+    ".",
+    "packages/tricycle-core/src",
+    "packages/tricycle-bohr/src",
+    "packages/tricycle-bohrsubmit/src",
+    "packages/tricycle-reaction-db/src",
+    "packages/tricycle-sar/src",
+    "packages/tricycle-rits/src",
+    "packages/tricycle-sampling/src",
+    "packages/tricycle-reactionopt/src",
+    "packages/tricycle-exploration/src",
+    "apps/tricycle-agent/src",
+]
+
+# Optional chemistry/plotting libraries and the worker-injected RxnResid source
+# are not installed (or do not ship typing metadata) in the base workspace.
+# Keep this exception at the external import boundary; check all local modules.
+[[tool.mypy.overrides]]
+module = [
+    "ase", "ase.*",
+    "gfnff", "gfnff.*",
+    "matplotlib", "matplotlib.*",
+    "rxnresid", "rxnresid.*",
+    "seaborn", "seaborn.*",
+    "torch", "torch.*",
+    "pandas", "pandas.*",
+    "rxngraphormer", "rxngraphormer.*",
+    "torch_geometric", "torch_geometric.*",
+    "yaml", "yaml.*",
+]
+ignore_missing_imports = true

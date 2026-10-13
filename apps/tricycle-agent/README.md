@@ -15,9 +15,10 @@
 - `tricycle.bohr.submit`；
 - `tricycle.reaction-database`；
 - `tricycle.sar`（RxnResid）；
-- `tricycle.rits`；
+- `tricycle.rits` 与 `tricycle.rits.ssh`；
 - `tricycle.sampling`；
-- `tricycle.reactionopt`。
+- `tricycle.reactionopt`；
+- `tricycle.exploration`。
 
 公开 capability 到 plugin operation 的映射集中在 `capabilities.py`，调用方不需要直接导入
 具体组件的内部类。
@@ -63,10 +64,9 @@ Reaction DB 的 live capability 会在执行阶段自动注入
 `McpReactionDatabaseAdapter`。配置数据库的 Streamable HTTP MCP 地址
 `TRICYCLE_REACTION_DB_MCP_URL`、MCP Token `TRICYCLE_REACTION_DB_MCP_TOKEN`、
 `TRICYCLE_REACTION_DB_ORGANIZATION_ID`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入先
-调用 `create_project`，然后默认通过数据库的批量 multipart 接口
+调用 `create_project`，然后通过数据库的批量 multipart 接口
 `/api/upload-batches` 和 `/api/upload-batches/{batch_id}/files` 发送日志字节；该路径与单文件
-上传共用 durable worker，不使用共享目录。需要旧服务兼容时设置
-`TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE=mcp`，使用 `upload_calculation_log` 逐文件上传。live
+上传共用 durable worker，不使用共享目录。live
 导入在所有文件进入持久化队列后返回 `submitted`，不等待异步 MolOP 解析。默认启用 TLS 校验，
 内部 CA 使用 `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
 
@@ -117,7 +117,8 @@ flowchart LR
 | `src/tricycle_agent/capabilities.py` | 公开 capability 定义及 component-operation 映射 |
 | `src/tricycle_agent/execution.py` | adapter 装配和 capability 分发 |
 | `src/tricycle_agent/cli.py` | CLI 参数、plan/run/inspect/resume 生命周期 |
-| `src/tricycle_agent/run_state.py` | `request.toml`、`run.toml` 和恢复状态管理 |
+| `src/tricycle_agent/run_state.py` | 请求、计划及恢复动作的应用层装配；`RunStore` 由 core 提供 |
+| `src/tricycle_agent/campaign.py` / `campaign_cli.py` | 持久化探索监督与 campaign CLI |
 | `src/tricycle_agent/toml_requests.py` | 用户请求读取和输入限制 |
 
 各领域组件的详细说明：[`packages/`](../../packages/)。开发契约见

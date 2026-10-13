@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.validation import validate_fields
 
 DEFAULT_MODEL_MANIFEST = Path(__file__).with_name("assets") / "rxnresid-model.toml"
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -27,9 +28,7 @@ def _text_list(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
         raise InvalidRequestError(f"RxnResid model manifest {key} must be a list of strings")
     values = tuple(item.strip() if isinstance(item, str) else item for item in value)
     if any(not isinstance(item, str) or not item for item in values):
-        raise InvalidRequestError(
-            f"RxnResid model manifest {key} must contain non-empty strings"
-        )
+        raise InvalidRequestError(f"RxnResid model manifest {key} must contain non-empty strings")
     return values
 
 
@@ -47,6 +46,7 @@ class RxnResidModelAsset:
     finetune_protocol: str = "refit"
     uncertainty_method: str = "none"
     uncertainty_fields: tuple[str, ...] = ()
+    revision_kind: str = "git-commit"
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -63,6 +63,8 @@ class RxnResidModelAsset:
             value = getattr(self, field_name)
             if not value.strip():
                 raise InvalidRequestError(f"RxnResid model manifest {field_name} must not be empty")
+        if self.revision_kind != "git-commit":
+            raise InvalidRequestError("RxnResid model revision_kind must be git-commit")
         if not _COMMIT_PATTERN.fullmatch(self.revision):
             raise InvalidRequestError("RxnResid model revision must be a 40-character git commit")
         if any(
@@ -74,6 +76,7 @@ class RxnResidModelAsset:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> RxnResidModelAsset:
+        validate_fields(payload, (item.name for item in fields(cls)), context=cls.__name__)
         return cls(
             model_name=_required_text(payload, "model_name"),
             repository=_required_text(payload, "repository"),
@@ -94,6 +97,7 @@ class RxnResidModelAsset:
                 else "none"
             ),
             uncertainty_fields=_text_list(payload, "uncertainty_fields"),
+            revision_kind=str(payload.get("revision_kind", "git-commit")),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -108,6 +112,7 @@ class RxnResidModelAsset:
             "finetune_protocol": self.finetune_protocol,
             "uncertainty_method": self.uncertainty_method,
             "uncertainty_fields": list(self.uncertainty_fields),
+            "revision_kind": self.revision_kind,
         }
 
 
@@ -123,13 +128,10 @@ def load_model_asset(manifest: str | Path = DEFAULT_MODEL_MANIFEST) -> RxnResidM
     except tomllib.TOMLDecodeError as exc:
         raise InvalidRequestError(f"invalid RxnResid model manifest: {manifest_path}") from exc
 
-    payload = document.get("model", document)
+    validate_fields(document, {"schema", "model"}, context="RxnResid model manifest")
+    if document.get("schema") != "tricycle.rxnresid-model/v1":
+        raise InvalidRequestError("RxnResid model manifest requires schema tricycle.rxnresid-model/v1")
+    payload = document.get("model")
     if not isinstance(payload, Mapping):
         raise InvalidRequestError("RxnResid model manifest must contain a [model] table")
     return RxnResidModelAsset.from_mapping(payload)
-
-
-def load_default_model_asset() -> RxnResidModelAsset:
-    """Load the component's pinned default RxnResid source metadata."""
-
-    return load_model_asset()

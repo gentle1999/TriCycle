@@ -6,6 +6,8 @@ description: "Build an auditable dry-run plan for one Bohr computational chemist
 # 规划单个 Bohr 计算
 
 请求至少包含稳定的 `job_name`、`operation`、`image` 和 `command`，可选输入 artifact、项目和机器类型。
+涉及 DPA 时必须明确选择 GPU 节点；纯 Gaussian 必须选择 CPU 节点。
+检查命令的实际计算引擎与资源是否匹配，不能以 CPU DPA 运行作为 smoke 通过证据。
 
 ```bash
 uv run --package tricycle-agent tricycle-agent plan \

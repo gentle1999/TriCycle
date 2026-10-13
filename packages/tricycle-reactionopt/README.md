@@ -6,6 +6,8 @@
 
 RitS 是 reaction-level 的 TS 生成器，直接消费 mapped reaction connectivity。反应物构象、产物构象和 RitS TS 是三个独立分支，只有最终组合 profile 时才汇总三者。实现也不会使用原 ReactionOpt 的 product-backward、`4+2` 拉伸或其它旧 TS 初猜策略。
 
+请求解析只接受当前字段。Profile 使用 `reaction_smiles`、`sampling`、`rits` 和 `output_dir`；枚举请求使用 `output_dir`。`rits` 中代码与 checkpoint 资产分别为 `code_artifact`、`checkpoint_artifact`，容器内 checkpoint 路径用 `checkpoint_path`，上传目录用 `input_directory`。未知字段直接报错，不接受旧拼写。
+
 ## 输入约定
 
 输入是 mapped reaction SMILES，支持以下两种格式：
@@ -113,7 +115,7 @@ flowchart TD
 
 每一端的基本步骤是：
 
-1. 用 RDKit 根据显式氢完整的分子图进行 ETKDG 3D embedding，并尝试生成目标数量的候选构象。
+1. 用 RDKit 根据显式氢完整的分子图进行 ETKDG 3D embedding，并尝试生成目标数量的候选构象。返回空集合或抛出异常时尝试随机坐标嵌入；仍无构象则明确失败，不制造直线坐标进入优化。
 2. 对候选构象进行力场优化。支持 UFF、MMFF94；安装可选 GFN-FF 依赖时也可以请求 GFN-FF。
 3. 根据优化后的能量窗口和 RMSD 阈值去除高能或重复构象。
 4. 将结果保留为带 atom map 的构象池。
@@ -150,8 +152,10 @@ candidate 组织、stereo 过滤、聚类和 g-xTB 排序逻辑以 fork 中的�
 RitS 仓库就能得到这个入口。
 
 因此，`code_artifact`/`input_directory` 必须指向包含该脚本的 fork checkout。若请求需要记录
-可复现 provenance，应将 fork 的仓库地址和 commit 作为 pipeline 代码来源记录；根 README 中的
-官方 RitS revision 只表示默认模型/checkpoint 来源，不代表 `run_ts_pipeline.py` 的来源。
+可复现 provenance，应将 fork 的仓库地址和 commit 作为 pipeline 代码来源记录；[RitS 模型资产](../tricycle-rits/src/tricycle_rits/assets/rits-model.toml)中的
+模型 revision 只表示默认模型/checkpoint 来源，不代表 `run_ts_pipeline.py` 的来源。
+
+`RitsInferenceConfig()` 与 `from_mapping()` 的默认 `source_repository`、`source_revision` 均从同一模型资产配置读取；请求显式提供的值优先，Python 源码不另存 revision。
 
 ### 3. 分支 C：reaction-level RitS TS pipeline
 
@@ -227,11 +231,13 @@ ReactionOptPlugin.execute_profile(..., sampler, ...)
    └─ sample_transition_states(sampler, ...)
       ├─ RitsTransitionStateInput(...)
       ├─ sampler.sample(request)       # 每个 reaction 一次；adapter 执行完整 pipeline
-      ├─ coerce_sampler_result(...)
+      ├─ 校验 RitsTransitionStateResult 返回类型
       └─ normalize_transition_state_structures(...)
 ```
 
 `plan_profile` 不会实际运行构象采样，只会创建一条 reaction-level RitS pipeline job 描述；计划中的 TS pipeline 输出路径默认为 `outputs/reaction-ts-pipeline`，并在计划参数中记录需要写入 `inputs/reaction.smiles` 的 mapped reaction 内容。真实执行时，adapter 在内部负责 staging 输入文件并调用 `run_ts_pipeline.py`。
+
+sampler 必须提供 `sample(request)` 并返回 `RitsTransitionStateResult`；普通 callable 和裸结构列表不满足该接口。
 
 ## 规划与执行边界
 

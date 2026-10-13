@@ -1,0 +1,35 @@
+n_jobs = 4
+seed = 42
+dataset = "data/snapshots/ground-truth/dataset.csv"
+splits = "data/splits/ground-truth-5fold/assignments.csv"
+row_id = "path_id"
+target = "G_T_activate"
+smiles_column = "rxn_smiles"
+group_columns = ["ene_id", "diene_id"]
+output = "model-runs"
+smoke_output = "smoke-results"
+
+[versions]
+scikit-learn = "1.7.2"
+rdkit = "2026.3.5"
+
+[fingerprint]
+radius = 2
+size = 2048
+include_chirality = true
+
+[models]
+
+[models.fingerprint_rf]
+n_estimators = 300
+max_features = 0.3333333333333333
+min_samples_leaf = 2
+
+[models.fingerprint_extra_trees]
+n_estimators = 300
+max_features = 0.3333333333333333
+min_samples_leaf = 2
+
+[models.fingerprint_ridge]
+alpha = 10.0
+tol = 0.0001

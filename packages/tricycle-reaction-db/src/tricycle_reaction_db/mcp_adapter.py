@@ -9,8 +9,8 @@ between the agent and database.
 
 from __future__ import annotations
 
-import base64
 import csv
+import io
 import json
 import math
 import os
@@ -54,8 +54,6 @@ _MCP_PROTOCOL_VERSION = "2025-03-26"
 _DEFAULT_APP_NAME = "example-chemistry-database"
 _MCP_RATE_LIMIT_RETRIES = 8
 _MCP_MAX_RETRY_AFTER_SECONDS = 60.0
-_DEFAULT_UPLOAD_MODE = "batch"
-_UPLOAD_MODES = frozenset({"batch", "mcp"})
 _BATCH_MAX_FILES = 64
 _BATCH_MAX_BYTES = 64 * 1024 * 1024
 _RITS_MCP_GEOMETRY_PAGE_SIZE = 64
@@ -145,7 +143,7 @@ class ReactionDatabaseMcpConfig:
     """Runtime settings for :class:`McpReactionDatabaseAdapter`.
 
     Calculation-log bytes are transferred through the MCP control plane and
-    either the durable multipart queue API or the legacy MCP upload tool.  No
+    the durable multipart queue API.  No
     path in the database service's filesystem is part of this configuration.
     """
 
@@ -157,7 +155,6 @@ class ReactionDatabaseMcpConfig:
     ca_bundle: Path | None = None
     timeout_seconds: float = 60.0
     page_size: int = 200
-    upload_mode: str = _DEFAULT_UPLOAD_MODE
     rest_token: str | None = None
 
     def __post_init__(self) -> None:
@@ -195,11 +192,6 @@ class ReactionDatabaseMcpConfig:
             raise InvalidRequestError("timeout_seconds must be positive")
         if not 1 <= self.page_size <= 200:
             raise InvalidRequestError("page_size must be between 1 and 200")
-        upload_mode = str(self.upload_mode).strip().casefold()
-        if upload_mode not in _UPLOAD_MODES:
-            raise InvalidRequestError(
-                "upload_mode must be one of: " + ", ".join(sorted(_UPLOAD_MODES))
-            )
         ca_bundle = self.ca_bundle
         if ca_bundle is not None and not isinstance(ca_bundle, Path):
             ca_bundle = Path(str(ca_bundle)).expanduser()
@@ -211,7 +203,6 @@ class ReactionDatabaseMcpConfig:
         object.__setattr__(self, "organization_id", organization_id)
         object.__setattr__(self, "app_name", app_name)
         object.__setattr__(self, "ca_bundle", ca_bundle)
-        object.__setattr__(self, "upload_mode", upload_mode)
 
     @classmethod
     def from_env(
@@ -225,6 +216,8 @@ class ReactionDatabaseMcpConfig:
         values = dict(os.environ if environ is None else environ)
         if environ is None or env_file is not None:
             load_dotenv(env_file, environ=values, keys=_MCP_ENV_KEYS)
+        if "TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE" in values:
+            raise InvalidRequestError("remove TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE; imports use durable multipart uploads")
         raw_endpoint = values.get("TRICYCLE_REACTION_DB_MCP_URL", "").strip()
         token = values.get("TRICYCLE_REACTION_DB_MCP_TOKEN", "").strip()
         rest_token = values.get("TRICYCLE_REACTION_DB_REST_TOKEN", "").strip() or None
@@ -251,7 +244,6 @@ class ReactionDatabaseMcpConfig:
             ca_bundle=Path(ca_bundle_value).expanduser() if ca_bundle_value else None,
             timeout_seconds=_env_float(values, "TRICYCLE_REACTION_DB_MCP_TIMEOUT_SECONDS", 60.0),
             page_size=_env_int(values, "TRICYCLE_REACTION_DB_MCP_PAGE_SIZE", 200),
-            upload_mode=values.get("TRICYCLE_REACTION_DB_MCP_UPLOAD_MODE", _DEFAULT_UPLOAD_MODE),
         )
 
     def ssl_context(self) -> ssl.SSLContext:
@@ -629,14 +621,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             )
         upload_files, archive_sha256 = self._build_upload_files(manifest)
         self._transport.ensure_tool("create_project")
-        if self.config.upload_mode == "mcp":
-            self._transport.ensure_tool("upload_calculation_log")
         idempotency_key = request.resolved_idempotency_key(manifest)
-        file_transfer = (
-            "database.upload-batches.multipart"
-            if self.config.upload_mode == "batch"
-            else "mcp.upload_calculation_log.base64"
-        )
         create_arguments = {
             "organization_id": organization_id,
             "slug": request.project.slug,
@@ -650,7 +635,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                 "archive_sha256": archive_sha256,
                 "batch_metadata": dict(manifest.metadata),
                 "request_metadata": dict(request.metadata),
-                "file_transfer": file_transfer,
+                "file_transfer": "database.upload-batches.multipart",
                 "file_count": len(upload_files),
                 "total_bytes": manifest.total_bytes,
             },
@@ -684,132 +669,15 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             if (upload_file.file_sha256, upload_file.size_bytes) not in existing_keys
         ]
         existing_count = len(upload_files) - len(upload_files_to_submit)
-        if self.config.upload_mode == "batch":
-            return self._ingest_with_batch_upload(
-                request=request,
-                manifest=manifest,
-                project_id=project_id,
-                archive_sha256=archive_sha256,
-                idempotency_key=idempotency_key,
-                upload_files_to_submit=upload_files_to_submit,
-                existing_count=existing_count,
-                reused_project=reused_project,
-            )
-        accepted_count = existing_count
-        failed_count = 0
-        uploaded_count = 0
-        queue_item_status_counts: dict[str, int] = {}
-        queue_batch_status_counts: dict[str, int] = {}
-        queue_submissions: list[dict[str, str]] = []
-        errors: list[str] = []
-        for upload_file in upload_files_to_submit:
-            try:
-                payload = self._read_file_payload(upload_file)
-                result = self._transport.call_tool(
-                    "upload_calculation_log",
-                    {
-                        "project_id": project_id,
-                        "filename": upload_file.path.name,
-                        "content_base64": base64.b64encode(payload).decode("ascii"),
-                        "media_type": "text/plain",
-                        "relative_path": upload_file.relative_path,
-                        "expected_sha256": upload_file.file_sha256,
-                        "expected_size_bytes": upload_file.size_bytes,
-                    },
-                )
-            except (InvalidRequestError, OSError) as exc:
-                failed_count += 1
-                errors.append(f"{upload_file.relative_path}: {exc}")
-                continue
-            except ReactionDatabaseMcpError as exc:
-                if not self._is_file_upload_error(exc):
-                    raise
-                failed_count += 1
-                errors.append(f"{upload_file.relative_path}: {exc}")
-                continue
-
-            uploaded_count += 1
-            try:
-                if not isinstance(result, Mapping):
-                    raise ReactionDatabaseMcpError(
-                        "upload_calculation_log returned no durable queue batch/item",
-                        tool_name="upload_calculation_log",
-                    )
-                batch = result.get("batch")
-                item = result.get("item")
-                if not isinstance(batch, Mapping) or not isinstance(item, Mapping):
-                    raise ReactionDatabaseMcpError(
-                        "upload_calculation_log returned no durable queue batch/item",
-                        tool_name="upload_calculation_log",
-                    )
-                batch_id = self._required_identifier(batch, "upload batch", ("id", "batch_id"))
-                item_id = self._required_identifier(
-                    item,
-                    "upload batch item",
-                    ("id", "item_id", "client_file_id"),
-                )
-            except ReactionDatabaseMcpError as exc:
-                failed_count += 1
-                errors.append(f"{upload_file.relative_path}: {exc}")
-                continue
-
-            item_status = self._status_value(item) or "unknown"
-            batch_status = self._status_value(batch) or "unknown"
-            queue_item_status_counts[item_status] = queue_item_status_counts.get(item_status, 0) + 1
-            queue_batch_status_counts[batch_status] = (
-                queue_batch_status_counts.get(batch_status, 0) + 1
-            )
-            queue_submissions.append(
-                {
-                    "relative_path": upload_file.relative_path,
-                    "batch_id": batch_id,
-                    "item_id": item_id,
-                    "item_status": item_status,
-                    "batch_status": batch_status,
-                }
-            )
-            if item_status in _QUEUE_ACCEPTED_STATUSES:
-                accepted_count += 1
-            else:
-                failed_count += 1
-                status_kind = "failed" if item_status in _QUEUE_FAILED_STATUSES else "unrecognized"
-                errors.append(
-                    f"{upload_file.relative_path}: database queue item status={item_status}"
-                    f" ({status_kind})"
-                )
-
-        status = "submitted" if failed_count == 0 else "failed"
-        metadata: dict[str, object] = {
-            "transport": "mcp",
-            "mcp_endpoint": self.config.endpoint_url,
-            "mcp_app_name": self.config.app_name,
-            "mcp_tools": ["create_project", "upload_calculation_log"],
-            "file_transfer": "base64-per-file-queue",
-            "queue_mode": "durable-upload-batch",
-            "manifest_digest": manifest.manifest_digest,
-            "archive_sha256": archive_sha256,
-            "total_count": len(manifest.files),
-            "existing_count": existing_count,
-            "uploaded_count": uploaded_count,
-            "accepted_count": accepted_count,
-            "failed_count": failed_count,
-            "queue_batch_count": len(queue_submissions),
-            "queue_item_status_counts": queue_item_status_counts,
-            "queue_batch_status_counts": queue_batch_status_counts,
-            "queue_submissions": queue_submissions,
-            "parse_completion": "not_waited",
-            "project_reused": reused_project,
-        }
-        if errors:
-            metadata["errors"] = errors[:20]
-            metadata["error_count"] = len(errors)
-        return ReactionDatabaseImportReceipt(
-            status=status,
+        return self._ingest_with_batch_upload(
+            request=request,
+            manifest=manifest,
             project_id=project_id,
-            accepted_log_count=accepted_count,
-            failed_log_count=failed_count,
-            cleaned_reaction_count=None,
-            metadata=metadata,
+            archive_sha256=archive_sha256,
+            idempotency_key=idempotency_key,
+            upload_files_to_submit=upload_files_to_submit,
+            existing_count=existing_count,
+            reused_project=reused_project,
         )
 
     def _ingest_with_batch_upload(
@@ -1373,6 +1241,126 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             },
         )
 
+    def export_thermodynamics_csv(
+        self, request: ReactionFilterRequest, destination: Path, *,
+        has_activation_gibbs_free_energy: bool | None = None,
+        has_reaction_gibbs_free_energy: bool | None = None,
+    ) -> Mapping[str, Any]:
+        """Download the database's native profile rows without choosing labels.
+
+        The existing RxnResid export retains its profiles[0] contract. This
+        method preserves every row, level of theory, and null in the dedicated
+        database CSV export, including multiple profiles for one reaction.
+        """
+        destination = Path(destination)
+        if destination.suffix.casefold() != ".csv":
+            raise InvalidRequestError("thermodynamics export destination must end in .csv")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        tool = "export_mapped_reaction_thermodynamics_csv"
+        arguments: dict[str, object] = {
+            "project_id": request.project_id,
+            "filter_expression": json.dumps(
+                {"field": "rxn_smarts", "value": request.reaction_smarts}
+            ),
+            "limit": 100,
+        }
+        for name, value in (
+            ("has_activation_gibbs_free_energy", has_activation_gibbs_free_energy),
+            ("has_reaction_gibbs_free_energy", has_reaction_gibbs_free_energy),
+        ):
+            if value is not None:
+                if type(value) is not bool:
+                    raise InvalidRequestError(f"{name} must be a boolean")
+                arguments[name] = value
+        offset = 0
+        pages: list[dict[str, object]] = []
+        columns: list[str] | None = None
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="", dir=destination.parent,
+                prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                while True:
+                    page = self._transport.call_tool(tool, {**arguments, "offset": offset})
+                    if str(page.get("project_id")) != request.project_id:
+                        raise ReactionDatabaseMcpError("CSV export returned a different project")
+                    if not str(page.get("media_type", "")).startswith("text/csv"):
+                        raise ReactionDatabaseMcpError("CSV export returned an invalid media type")
+                    content = page.get("csv")
+                    if not isinstance(content, str):
+                        raise ReactionDatabaseMcpError("CSV export returned no CSV text")
+                    records = list(csv.reader(io.StringIO(content, newline="")))
+                    # Some server versions repeat the header on every page,
+                    # even while header_included is false. Inspect the text.
+                    header_present = bool(records and "mapped_reaction_smiles" in records[0])
+                    if header_present:
+                        header = records.pop(0)
+                        if columns is None:
+                            columns = header
+                            if not {"mapped_reaction_id", "mapped_reaction_smiles"} <= set(header):
+                                raise ReactionDatabaseMcpError("CSV export has no reaction identity")
+                        elif header != columns:
+                            raise ReactionDatabaseMcpError("CSV export schema changed between pages")
+                    elif columns is None:
+                        raise ReactionDatabaseMcpError("CSV export first page has no header")
+                    count = page.get("row_count")
+                    cursor = page.get("next_offset")
+                    more = page.get("has_more")
+                    if (
+                        type(count) is not int or count != len(records)
+                        or type(cursor) is not int or cursor != offset + count
+                        or type(more) is not bool or (more and count == 0)
+                        or any(len(row) != len(columns) for row in records)
+                    ):
+                        raise ReactionDatabaseMcpError("CSV export pagination or row shape is invalid")
+                    for presence, column in (
+                        (has_activation_gibbs_free_energy, "activation_gibbs_free_energy_kcal_mol"),
+                        (has_reaction_gibbs_free_energy, "reaction_gibbs_free_energy_kcal_mol"),
+                    ):
+                        if presence is True and (
+                            column not in columns
+                            or any(not row[columns.index(column)].strip() for row in records)
+                        ):
+                            raise ReactionDatabaseMcpError(
+                                f"database export violated the requested presence filter: {column} (offset={offset})"
+                            )
+                    # Preserve database serialization; only strip a repeated
+                    # header. Never materialize or combine profile values here.
+                    if offset == 0 or not header_present:
+                        handle.write(content)
+                    else:
+                        handle.write(content.split("\n", 1)[1])
+                    pages.append({
+                        "offset": offset, "row_count": count, "next_offset": cursor,
+                        "has_more": more, "sha256": sha256(content.encode()).hexdigest(),
+                    })
+                    offset = cursor
+                    if not more:
+                        break
+            assert temporary_path is not None
+            os.replace(temporary_path, destination)
+        except Exception:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+        receipt: dict[str, Any] = {
+            "api_contract": "reaction-db.mcp.native-thermodynamics-csv.v1",
+            "tool_name": tool, "arguments": arguments, "project_id": request.project_id,
+            "reaction_smarts": request.reaction_smarts, "cleaned_only": True,
+            "profile_policy": "all database-exported profiles; no local selection",
+            "energy_unit": "kcal/mol", "timing_unit": "seconds",
+            "row_count": offset, "page_count": len(pages), "pages": pages,
+            "columns": columns, "destination": str(destination),
+            "sha256": sha256(destination.read_bytes()).hexdigest(),
+            "database_transaction_snapshot": False,
+        }
+        destination.with_suffix(".receipt.json").write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        return receipt
+
     def export_rxnresid_dataset(
         self,
         request: RxnResidDatasetExportRequest,
@@ -1451,7 +1439,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
                             "MCP result has no ReactionEnergyQueryService data"
                         )
                     for index, (summary, mapped_reaction_id) in enumerate(
-                        zip(batch, mapped_reaction_ids)
+                        zip(batch, mapped_reaction_ids, strict=True)
                     ):
                         result = service.get(f"thermodynamics_{index}")
                         if not isinstance(result, Mapping):
@@ -2119,7 +2107,7 @@ class McpReactionDatabaseAdapter(ReactionDatabaseAdapter):
             "products_running_time_seconds }"
         )
         aliases = " ".join(
-            "thermodynamics_{}: get_mapped_reaction_thermodynamics(".format(index)
+            f"thermodynamics_{index}: get_mapped_reaction_thermodynamics("
             + f"project_id: {json.dumps(project_id)} "
             + f"mapped_reaction_id: {json.dumps(mapped_reaction_id)}"
             + f") {{ {profile_fields} }}"

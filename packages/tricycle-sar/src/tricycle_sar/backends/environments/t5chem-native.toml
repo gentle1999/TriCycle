@@ -1,0 +1,26 @@
+schema_version = 1
+base_torch = "2.12.1+cu130"
+base_python = "3.12"
+
+[bootstrap]
+micromamba_url = "https://micro.mamba.pm/api/micromamba/linux-64/2.3.3"
+micromamba_version = "2.3.3"
+micromamba_archive_sha256 = "e7274528ceb9c20d048a428d6c22d7e02e268f8ffb762c4c365422347c8b8ba2"
+micromamba_binary_sha256 = "9496f94a8b78c536573c93d946ec9bba74bd9ff79ee55aaa4b546e30db8f511b"
+
+[models]
+
+[models.t5chem]
+repository = "https://github.com/HelloJocelynLu/t5chem.git"
+revision = "06efc59edeace3005da435d1a118965c6b9c84e0"
+mode = "base-venv"
+package = true
+no_deps = true
+requirements = ["transformers==4.40.2", "tokenizers==0.19.1", "accelerate==0.30.1", "sentencepiece==0.2.0", "wandb==0.18.7", "scikit-learn", "scipy", "pandas", "rdkit"]
+modules = ["t5chem", "transformers", "tokenizers", "rdkit"]
+cli = ["t5chem", "train", "--help"]
+patch_vocab = true
+
+[framework]
+bootstrap_build_tools = false
+no_build_isolation = false

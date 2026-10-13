@@ -4,7 +4,7 @@ model_name = "rits-smoke"
 # 也可以省略 image、project_id 和 machine_type，改由环境变量提供。
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 # project_id = "replace-with-bohr-project"
-# machine_type = "replace-with-gpu-machine"
+machine_type = "c6_m60_1 * NVIDIA 4090"
 
 # input_directory 是 Bohr CLI 上传的本地任务目录，应包含以下代码、数据和配置。
 input_directory = "/path/to/RitS"
@@ -22,6 +22,6 @@ output_artifacts = [
 [parameters]
 task = "train"
 source_repository = "https://github.com/gentle1999/RitS"
-source_revision = "b4fc883a0e97d8946731c4df12e3585cd4e98fd5"
+source_revision = "07e48da98c4d4f10d0dc1a1cc6b2acad40341c04"
 model_manifest = "packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml"
 dataset_root = "data/rits_dataset"

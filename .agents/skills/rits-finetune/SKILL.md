@@ -6,51 +6,27 @@ description: "Plan or explicitly submit a RitS fine-tuning job to Bohr from a TO
 # RitS 微调
 
 RitS 微调使用上游 `scripts/train.py` 的 Hydra override
-`finetune_from=<checkpoint>`（`init_from_ckpt` 是兼容别名）。它只加载 checkpoint
+`finetune_from=<checkpoint>`。它只加载 checkpoint
 权重，并以当前配置创建新的 optimizer、scheduler 和训练运行；不要把它和断点续训
 `resume=<checkpoint-or-run-directory>` 混为一谈。
 
-代码来自 `https://github.com/gentle1999/RitS` 时，必须把实际完整 commit SHA 写入请求的
-`source_revision`；不要仅记录可移动的 `main`。当前已核对的 fork revision 为
-`b4fc883a0e97d8946731c4df12e3585cd4e98fd5`。请求必须包含代码目录、RitS 数据集
+源码来源与预期版本读取[模型资产配置](../../../packages/tricycle-rits/src/tricycle_rits/assets/rits-model.toml)的
+`model.repository`、`model.revision`，把匹配的完整 commit SHA 写入请求的
+`source_revision`，不要仅记录可移动的 `main`。默认预训练权重按配置的 `checkpoint_sha256` 校验；用户提供的训练 checkpoint 按其 artifact/运行记录校验，不拿默认权重的 hash 限制所有 checkpoint。
+技能不绑定具体 commit 或校验值。请求必须包含代码目录、RitS 数据集
 artifact、checkpoint artifact、`input_directory`、worker 镜像和实际 command。数据集
 根目录、输出目录、epoch 等保持为 RitS 原生 Hydra 配置或 override。
 
-推荐使用 `tricycle_rits.build_finetune_command` 生成 command，形如：
+`tricycle_rits.build_finetune_command(checkpoint=..., overrides=...)` 返回原生 Python/Hydra argv，
+不生成 `run.sh`，也不安装依赖。需要启动脚本时由任务准备入口交付，并把构造出的命令放入脚本；
+只有目录中实际存在该脚本时，提交命令才可写成 `bash run.sh`。
 
-```text
-bash run.sh
-```
+解释器、镜像与依赖配方读取所选任务配置和对应源码。按包文档核验 Torch/CUDA、PyG 编译依赖、
+日志依赖和 GPU 可用性；不从技能复制固定 Python/CUDA 版本或临时替换镜像中的 Torch。
 
-The current fork expresses Python dependencies as version ranges in both `pyproject.toml` and
-`requirements.txt`; it does not provide a complete lockfile. For Bohr images that supply PyTorch,
-inspect and log `torch.__version__` and `torch.version.cuda`, install the revision's `requirements.txt`
-with PyG wheels matching that exact Torch/CUDA/Python combination, then install the source with
-`python3.12 -m pip install --no-cache-dir --no-deps --editable .`. If the fork's PyG wheel URL does
-not match the selected image (for example, its `cu132` URL versus a `cu130` image), use an explicit
-task-local requirements override or select a matching image; do not mix compiled CUDA variants.
-Verify `torch_geometric`, `torch_scatter`, and `torch_sparse` imports and CUDA availability before
-preprocessing. Do not download or replace the image's Torch when its version is within the fork's
-declared range. The current training script creates a Lightning `TensorBoardLogger`; ensure
-`tensorboard` or `tensorboardX` is installed even though the fork's runtime requirements omit it.
-
-When starting from mapped-reaction/XYZ source data, run the revision's
-`data_processing/prepare_ts1x_for_training.py` before training. Keep each forward/reverse SMARTS pair
-adjacent and duplicate the same TS XYZ block for both directions; disable the preprocessor's TS1x-specific
-default `ban_index` entries for a different source dataset with `--ban_index -1`. Finally run:
-
-```text
-python3.12 data_processing/prepare_ts1x_for_training.py \
-  --ts_data data/rits_dataset/raw/mapped_transition_states.xyz \
-  --rxn_smarts_file data/rits_dataset/raw/mapped_reactions_AAM.csv \
-  --save_dir data/rits_dataset \
-  --ban_index -1
-
-python3.12 scripts/train.py \
-  --config-path=conf --config-name=rits \
-  data.dataset_root=./data/rits_dataset \
-  finetune_from=./data/rits.ckpt
-```
+数据库导出的 mapped reaction/TS XYZ CSV 是源数据，不是预处理训练目录。按所选 revision 的
+预处理器生成训练输入；如果它要求 AAM 列、正反反应成对、共享 TS XYZ 或排除索引，先核对其实际
+参数与数据含义再转换。验证 atom-map、元素与 XYZ 顺序，保留拒绝清单，不能将文件改名当作预处理。
 
 先规划并确认 artifact、`source_repository`、`source_revision` 和 command：
 
@@ -64,7 +40,7 @@ Bohr；已提交任务使用 `bohr.job.status` 和 `bohr.job.download`，不要�
 
 ## 内网 Docker/SSH 执行
 
-当 Bohr GPU 不可用时，改用 `rits.ssh.finetune`。SSH 仅负责将 `bundle_dir` 上传到内网
+用户选择内网执行时使用 `rits.ssh.finetune`；Bohr 调度失败本身不改变已选执行器。SSH 仅负责将 `bundle_dir` 上传到内网
 GPU 主机并管理生命周期；训练命令必须在 `container_image` 指定的 Docker 镜像中执行。
 镜像需预装与 RitS fork 兼容的 Python/PyTorch/CUDA 运行时及所需系统依赖；远端 Docker
 daemon 必须可用，并配置 NVIDIA Container Toolkit。默认使用 `--gpus all`，可用

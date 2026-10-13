@@ -19,55 +19,39 @@ def _extra_args(values: Sequence[str]) -> tuple[str, ...]:
     return result
 
 
-def _worker_prefix(project_dir: str) -> tuple[str, ...]:
-    # Bohr executes the command from the uploaded input directory.  Keep the
-    # historical argument for API compatibility, but do not invent a launcher
-    # that is not part of the Bohr worker image.
-    _non_empty(project_dir, name="project_dir")
-    return ()
-
-
 def build_training_command(
     *,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "scripts/train.py",
     config_path: str = "conf",
     config_name: str = "rits",
     finetune_from: str | None = None,
-    init_from_ckpt: str | None = None,
     resume: str | None = None,
     overrides: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """Build the official RitS Hydra training command for a Bohr worker.
 
     RitS uses Hydra overrides rather than dedicated argparse switches.  The
-    upstream fork defines ``finetune_from`` (with ``init_from_ckpt`` as an
-    alias) for loading weights into a fresh optimizer, and ``resume`` for
+    upstream fork defines ``finetune_from`` for loading weights into a fresh
+    optimizer, and ``resume`` for
     restoring the complete Lightning training state.  These modes are
     mutually exclusive in the upstream entrypoint and are kept explicit here.
     """
 
     if finetune_from is not None:
         finetune_from = _non_empty(str(finetune_from), name="finetune_from")
-    if init_from_ckpt is not None:
-        init_from_ckpt = _non_empty(str(init_from_ckpt), name="init_from_ckpt")
     if resume is not None:
         resume = _non_empty(str(resume), name="resume")
-    if finetune_from is not None and init_from_ckpt is not None:
-        raise InvalidRequestError("finetune_from and init_from_ckpt are mutually exclusive")
-    if resume is not None and (finetune_from is not None or init_from_ckpt is not None):
+    if resume is not None and finetune_from is not None:
         raise InvalidRequestError("resume and fine-tuning overrides are mutually exclusive")
 
     mode_overrides: tuple[str, ...] = ()
     if finetune_from is not None:
         mode_overrides = (f"finetune_from={finetune_from}",)
-    elif init_from_ckpt is not None:
-        mode_overrides = (f"init_from_ckpt={init_from_ckpt}",)
     elif resume is not None:
         mode_overrides = (f"resume={resume}",)
 
-    return _worker_prefix(project_dir) + (
+    return (
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
         f"--config-path={_non_empty(config_path, name='config_path')}",
@@ -80,7 +64,6 @@ def build_training_command(
 def build_finetune_command(
     *,
     checkpoint: str,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "scripts/train.py",
     config_path: str = "conf",
@@ -96,7 +79,6 @@ def build_finetune_command(
 
     checkpoint = _non_empty(checkpoint, name="checkpoint")
     return build_training_command(
-        project_dir=project_dir,
         python_executable=python_executable,
         script=script,
         config_path=config_path,
@@ -109,7 +91,6 @@ def build_finetune_command(
 def build_resume_command(
     *,
     checkpoint: str,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "scripts/train.py",
     config_path: str = "conf",
@@ -120,7 +101,6 @@ def build_resume_command(
 
     checkpoint = _non_empty(checkpoint, name="checkpoint")
     return build_training_command(
-        project_dir=project_dir,
         python_executable=python_executable,
         script=script,
         config_path=config_path,
@@ -132,7 +112,6 @@ def build_resume_command(
 
 def build_inference_command(
     *,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "scripts/sample_transition_state.py",
     config: str = "scripts/conf/rits.yaml",
@@ -206,7 +185,7 @@ def build_inference_command(
         input_args = (f"--{name}", _non_empty(str(value), name=name))
     else:
         raise InvalidRequestError("no valid RitS input mode")
-    return _worker_prefix(project_dir) + (
+    return (
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
         *input_args,
@@ -234,7 +213,6 @@ def build_inference_command(
 
 def build_ts_pipeline_command(
     *,
-    project_dir: str = "/workspace/job",
     python_executable: str = "python3.12",
     script: str = "scripts/run_ts_pipeline.py",
     reactions: str = "inputs/reaction.smiles",
@@ -291,7 +269,6 @@ def build_ts_pipeline_command(
         raise InvalidRequestError("pipeline energy settings must be positive")
 
     command = [
-        *_worker_prefix(project_dir),
         _non_empty(python_executable, name="python_executable"),
         _non_empty(script, name="script"),
         "--reactions",
@@ -353,7 +330,3 @@ def build_ts_pipeline_command(
         command.extend(("--uhf", str(uhf)))
     command.extend(_extra_args(extra_args))
     return tuple(command)
-
-
-# Keep both spellings available to callers that use a prose-derived name.
-build_fine_tuning_command = build_finetune_command

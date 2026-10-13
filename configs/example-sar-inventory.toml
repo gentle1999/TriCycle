@@ -1,0 +1,11 @@
+# Read-only image inventory. Fill in the current project/group before submission.
+# Prepare with tricycle_sar.preparation.inventory --config <copy> --out-dir <new-dir>.
+project_id = "your-project-id"
+job_group_id = "your-job-group-id"
+auto_job_group = false
+machine_type = "c6_m60_1 * NVIDIA 4090"
+image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
+job_prefix = "sar-inventory"
+max_run_time = "15"
+max_reschedule_times = "0"
+backward_files = "worker.log,results"

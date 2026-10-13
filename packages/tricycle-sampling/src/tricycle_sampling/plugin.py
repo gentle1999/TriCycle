@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, cast
 
 from tricycle_core import (
     ExecutionContext,
@@ -12,9 +13,17 @@ from tricycle_core import (
 from tricycle_core.errors import InvalidRequestError
 
 from .acquisition import AgentAuthoredAcquisitionSamplingStrategy
-from .models import SamplingRequest, SamplingResult
+from .literature import (
+    BayesUCBSamplingStrategy,
+    DistanceUncertaintyProductSamplingStrategy,
+    KrigingBelieverFactory,
+    LatinHypercubeSamplingStrategy,
+    LiteratureSamplingStrategy,
+    UncertaintyKrigingBelieverSamplingStrategy,
+)
+from .models import Candidate, SamplingRequest, SamplingResult
+from .protocols import protocol_hash
 from .strategies import (
-    STRATEGY_ALIASES,
     AleatoricUncertaintySamplingStrategy,
     DensityWeightedUncertaintySamplingStrategy,
     EpistemicUncertaintySamplingStrategy,
@@ -42,19 +51,27 @@ class SamplingPlugin(PluginBase):
         capabilities=("candidate.validate", "candidate.select", "strategy.register"),
     )
 
-    def __init__(self, strategies: tuple[SamplingStrategy, ...] = ()) -> None:
+    def __init__(
+        self, strategies: tuple[SamplingStrategy, ...] = (), *,
+        kriging_believer_factory: KrigingBelieverFactory | None = None,
+    ) -> None:
         self._strategies: dict[str, SamplingStrategy] = {}
-        for strategy in (
+        defaults: tuple[SamplingStrategy, ...] = (
             RandomSamplingStrategy(),
             FirstNSamplingStrategy(),
             PredictiveUncertaintySamplingStrategy(),
             EpistemicUncertaintySamplingStrategy(),
             AleatoricUncertaintySamplingStrategy(),
+            LatinHypercubeSamplingStrategy(),
+            BayesUCBSamplingStrategy(),
+            DistanceUncertaintyProductSamplingStrategy(),
+            UncertaintyKrigingBelieverSamplingStrategy(kriging_believer_factory),
             PairCoreSetSamplingStrategy(),
             DensityWeightedUncertaintySamplingStrategy(),
             UncertaintyDiversitySamplingStrategy(),
             AgentAuthoredAcquisitionSamplingStrategy(),
-        ):
+        )
+        for strategy in defaults:
             self._strategies[strategy.name] = strategy
         for strategy in strategies:
             self.register_strategy(strategy)
@@ -78,9 +95,6 @@ class SamplingPlugin(PluginBase):
         try:
             return self._strategies[name]
         except KeyError:
-            canonical_name = STRATEGY_ALIASES.get(name)
-            if canonical_name is not None:
-                return self._strategies[canonical_name]
             raise InvalidRequestError(f"unknown sampling strategy: {name}") from None
 
     def plan(
@@ -114,8 +128,17 @@ class SamplingPlugin(PluginBase):
             "dry_run": context.dry_run,
             "strategy_version": getattr(strategy, "version", self.manifest.version),
         }
-        if callable(contextual_planner):
-            contextual_parameters = contextual_planner(
+        if isinstance(strategy, LiteratureSamplingStrategy):
+            parameters["baseline"] = strategy.prepare(
+                request.candidates, request.budget, request.seed, request.metadata,
+            )
+            parameters["baseline_inputs"] = dict(request.metadata.get("baseline", {}))
+        elif callable(contextual_planner):
+            plan_with_context = cast(
+                Callable[[Sequence[Candidate], int, Mapping[str, Any]], dict[str, Any]],
+                contextual_planner,
+            )
+            contextual_parameters = plan_with_context(
                 request.candidates,
                 request.budget,
                 request.metadata,
@@ -124,7 +147,7 @@ class SamplingPlugin(PluginBase):
             acquisition = contextual_parameters.get("acquisition_function", {})
             metadata.update(
                 {
-                    "strategy_version": strategy.version,
+                    "strategy_version": getattr(strategy, "version", self.manifest.version),
                     "selection": "highest-score",
                     "acquisition_function_hash": (
                         acquisition.get("function_hash", "")
@@ -136,7 +159,7 @@ class SamplingPlugin(PluginBase):
         elif isinstance(strategy, UncertaintySamplingStrategy):
             score_fields = [
                 get_uncertainty_field(candidate, strategy.uncertainty_kind)
-                for candidate in request.candidates
+                for candidate in request.candidates if request.budget
             ]
             distinct_score_fields = tuple(dict.fromkeys(score_fields))
             parameters["score_field"] = (
@@ -148,14 +171,17 @@ class SamplingPlugin(PluginBase):
                     "candidate_id": candidate.candidate_id,
                     "score": strategy.score(candidate),
                 }
-                for candidate in request.candidates
+                for candidate in request.candidates if request.budget
             ]
             metadata.update(
                 {
-                    "strategy_version": strategy.version,
+                    "strategy_version": getattr(strategy, "version", self.manifest.version),
                     "selection": "highest-score",
                 }
             )
+        provenance = self._baseline_provenance(strategy, request, parameters)
+        if provenance:
+            metadata["sampling_protocol"] = provenance
         return TaskPlan(
             task_id=f"{context.run_id}/sampling/{request.strategy}",
             plugin_id=self.manifest.plugin_id,
@@ -166,9 +192,18 @@ class SamplingPlugin(PluginBase):
 
     def select(self, request: SamplingRequest) -> SamplingResult:
         strategy = self._resolve_strategy(request.strategy)
+        details: dict[str, Any] = {}
         contextual_select = getattr(strategy, "select_with_context", None)
-        if callable(contextual_select):
-            selected = contextual_select(
+        if isinstance(strategy, LiteratureSamplingStrategy):
+            selected, details = strategy.select_detailed(
+                request.candidates, request.budget, request.seed, request.metadata,
+            )
+        elif callable(contextual_select):
+            select_with_context = cast(
+                Callable[[Sequence[Candidate], int, int | None, Mapping[str, Any]], tuple[Candidate, ...]],
+                contextual_select,
+            )
+            selected = select_with_context(
                 request.candidates,
                 request.budget,
                 request.seed,
@@ -176,16 +211,46 @@ class SamplingPlugin(PluginBase):
             )
         else:
             selected = strategy.select(request.candidates, request.budget, request.seed)
+        if isinstance(strategy, PredictiveUncertaintySamplingStrategy):
+            details = {
+                "candidate_scores": [
+                    {"candidate_id": candidate.candidate_id,
+                     "score_field": get_uncertainty_field(candidate, "predictive"),
+                     "score": strategy.score(candidate)}
+                    for candidate in request.candidates if request.budget
+                ],
+            }
         selected_ids = {candidate.candidate_id for candidate in selected}
         remaining = tuple(
             candidate
             for candidate in request.candidates
             if candidate.candidate_id not in selected_ids
         )
+        result_metadata = dict(request.metadata)
+        provenance = self._baseline_provenance(strategy, request, details)
+        if provenance:
+            result_metadata["sampling_protocol"] = provenance
+            result_metadata["sampling_details"] = details
         return SamplingResult(
             strategy=request.strategy,
             selected=selected,
             remaining=remaining,
             seed=request.seed,
-            metadata=dict(request.metadata),
+            metadata=result_metadata,
         )
+
+    @staticmethod
+    def _baseline_provenance(
+        strategy: SamplingStrategy, request: SamplingRequest, details: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        record = getattr(strategy, "baseline_protocol", None)
+        if not isinstance(record, dict):
+            return {}
+        return {
+            **record,
+            "strategy_version": getattr(strategy, "version", ""),
+            "requested_strategy": request.strategy,
+            "seed": request.seed,
+            "budget": request.budget,
+            "decision_sha256": protocol_hash(details),
+        }

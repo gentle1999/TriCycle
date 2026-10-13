@@ -1,48 +1,30 @@
 ---
 name: sar-infer
-description: "Plan or explicitly submit a SAR inference job to Bohr from a TOML request."
+description: Plan or explicitly submit RxnResid inference with the current backend using shared inputs and compact records.
 ---
 
 # SAR 推理
 
-推理入口只读取 checkpoint 并生成预测 CSV；从 checkpoint 训练/重拟合使用独立的
-`sar-finetune` skill。
+遵循 [SAR 模块记录约定](../../../packages/tricycle-sar/README.md#实验记录与归档)：源码、checkpoint、数据与预测协议引用一次，每任务只保存实际差异及输出。日志/回执/设备证据留在 `runs/`，不加入正式结果包或逐轮重复。
 
-这里的 `request.toml` 是 TriCycle 的任务请求；RxnResid 的模型配置和输入清单属于随任务
-上传的输入 artifact，格式由 RxnResid 入口决定，不要求统一改成 TriCycle TOML。
-
-请求应包含 `model_name`、`image`、checkpoint artifact 和推理参数。长期 SAR 实现使用已构建的
-`registry.dp.tech/dptech/dp/native/prod-23278/dl:260828` Bohr worker runtime；当前 RxnResid
-代码和推理入口随任务 artifact 上传，worker 使用系统 Python 直接安装项目，不创建虚拟环境。
-当前上游固定为 `https://github.com/gentle1999/RxnResid`，commit 为
-`9deebde39b38df1085dbac3a379c2a59edd7c97d`；该版本启用原生 evidential 不确定度推理。官方推理入口是 `predict.py`，配置为
-`configs/rxnresid.yaml`。可使用 `tricycle_sar.build_inference_command` 生成命令。
-默认只规划，不访问 Bohr：
+使用原生 `predict.py`，checkpoint 和推理数据以 artifact 传递；训练/refit 使用对应 skill。源码版本由模型资产固定，worker 复用已验证的镜像与安装入口，不能在任务中临时重写环境配方。命令由 `tricycle_sar.build_inference_command` 构造。
 
 ```bash
 uv run --package tricycle-agent tricycle-agent plan sar.infer request.toml --run-id <id>
 ```
 
-真实执行需显式使用 `--live`，并通过环境变量或项目 `.env` 提供 Bohr 认证。完成后用 `bohr.job.status` 和下载能力继续。
+默认只规划。已有授权时通过 Bohr adapter 使用 `--live`；已有 job ID 先查询/下载，不盲目重提。
 
-推理命令通过输入目录中的 `bash run.sh` 安装当前任务代码后执行，脚本中的实际命令形式为
-`python3.12 predict.py --checkpoint ... --data ... --output ...`。TriCycle
-请求使用 TOML，任务原生配置作为输入 artifact 传递；不要把代码版本或任务配置假设写死在镜像中。
-新版预测 CSV 会生成 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、
-对应 `*_std` 以及 `lower_95`/`upper_95`。将预测行放入 candidate payload 后，
-`epistemic-uncertainty` 策略会优先选择 `epistemic_variance` 最大的候选。
+预测 CSV 包含 `aleatoric_variance`、`epistemic_variance`、`predictive_variance`、对应标准差和95%区间。校验 ID 覆盖后交给 sampling；统一 route 词表与 checkpoint 一致。`agent-authored-acquisition` 使用其已固化 SAR worker 生成 `candidate-model-signals.csv` 与模型质量材料，不在推理步骤选择或提交反应候选，继续遵循该 skill 的决策边界。
 
-`agent-authored-acquisition` 模式可将 SAR worker 命令设为
-`bash agent_acquisition_worker.sh agent-acquisition-worker.toml`，调用
-`tools/agent_acquisition_worker.py`。该 worker 对剩余候选空间和有标签验证集分别运行 `predict.py`，
-校验预测 ID 覆盖后生成 `candidate-model-signals.csv`、`model-metrics.json` 和 `worker-report.json`；
-把 `outputs/agent-acquisition/` 声明为回传 artifact。它不选择或提交反应候选。下载后由本地流程将
-`candidate-model-signals.csv` 中的预测字段并入候选 payload，再执行智能体采集函数。输入示例见
-[`configs/example-agent-acquisition-worker.toml`](../../../configs/example-agent-acquisition-worker.toml)，
-Bohr 请求模板见 [`configs/example-agent-acquisition-sar-infer-request.toml`](../../../configs/example-agent-acquisition-sar-infer-request.toml)，
-worker 代码见 [`tools/agent_acquisition_worker.py`](../../../tools/agent_acquisition_worker.py)。
+使用 `tricycle_sar` 包内环境与 runner；不保留 `tools/` 兼容入口，也不另建 protocols 源码树。worker 默认合并 predictions/metrics/status，checkpoint 按需显式保留；train/refit/infer 链条必须保留其后续使用的模型文件。
 
-## 不适用与失败恢复
+采样推理复用 `get_backend("rxnresid").inference_command`，通过 `source_directory` 和
+`route_vocabulary` 使用同一原生入口与词表。独立 worker 需要交付 SAR 包及其依赖；
+`tricycle_sar.sampling_runtime.stage(root)` 提供经校验的包、源码与原环境资产，默认不执行。
 
-没有 checkpoint 或稳定输入 artifact 时先修正 TOML 并重新规划。提交失败时检查 `run.toml` 和 Bohr
-状态；无公开 job ID 才可在确认后恢复，有 job ID 则先查询，不要盲目重提。
+当前新任务通过 `backends/catalog.json` 绑定共享环境引擎和执行入口；共同 core 文件按相同哈希随任务交付。只维护当前 catalog、源码与方法，不保留历史实现或兼容变体。结果中的方法 ID 仅记录计算来源；`results verify` 独立复算科学结果，`results prepare` 始终使用当前后端生成新输入，不执行训练或提交。
+
+RxnResid 通用 train/refit/infer 与数据来源无关，使用请求提供的原生配置、CSV 和 checkpoint；反应数据库只是可选输入 adapter。当前采样与五折实验的列名、分组和路径聚合属于实验协议，不作为通用模型的数据约束。
+
+`sar.train/infer/finetune` 使用共享命令 builder，镜像和机器类型匹配后端。本地输入目录中的源码与固定归档一致；规划记录输入哈希，提交再次核验。单任务执行复用 `single_job.py` 与 `sampling_runtime` 的共享初始化和源码，缺失输入的 dry-run 计划不能直接提交。累计标签训练按全 train 划分选择 from-scratch 模式，预测按逐路径身份校验覆盖。
