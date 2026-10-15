@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 from tricycle_bohrsubmit import InMemoryBohrGateway
 from tricycle_core import Artifact, ExecutionContext, ModelMode
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.io import file_sha256
 from tricycle_core.toml import dump_toml, load_toml
@@ -220,7 +221,7 @@ def test_uam_subset_uses_registered_template_without_molclr_checkpoint(
     output = prepare(run, tmp_path / "prepared", group_name="review-regression", group_config=group)
     order = load_toml(output / "submit-order.toml")
     assert [m["name"] for m in order["models"]] == ["uam"]
-    bundle = output / "model-bundles/molecular/uam/molecular_bundle"
+    bundle = resolve_input(output / "model-bundles/molecular/uam", "molecular_bundle")
     config = load_toml(bundle / "configs/tricycle-uam.toml")
     assert config["dataset_sha256"] == file_sha256(bundle / config["dataset"])
     assert not (bundle / "assets/molclr").exists()
@@ -563,15 +564,20 @@ def test_sar_submission_stages_the_shared_environment_and_verified_api(
     assert result.external_id is not None
     workers = list((tmp_path / "runs").glob("*/*/submit"))
     assert len(workers) == 1
-    record = verify_runtime(workers[0])
+    from tricycle_sar.delivery import materialize
+
+    execution = tmp_path / "execution"
+    materialize(workers[0], execution)
+    assert not (workers[0] / "job-inputs").exists()
+    record = verify_runtime(execution)
     assert record == plan.parameters["bohr_job"]["parameters"]["sar_backend"]["backend"]
-    task = load_toml(workers[0] / "task.toml")
+    task = load_toml(execution / "task.toml")
     assert task["command"] == list(native_request.command)
     assert native_request.dataset is not None
-    assert (workers[0] / "job-inputs/inputs/custom.csv").read_bytes() == Path(
+    assert (execution / "job-inputs/inputs/custom.csv").read_bytes() == Path(
         native_request.dataset.location
     ).read_bytes()
-    assert "tricycle_sar.single_job" in (workers[0] / "worker.sh").read_text()
+    assert "tricycle_sar.single_job" in (execution / "worker.sh").read_text()
 
 
 def test_current_catalog_validates_the_shared_runtime() -> None:
@@ -583,3 +589,34 @@ def test_current_catalog_validates_the_shared_runtime() -> None:
         entry for entry in method["files"] if entry["path"] == "common/sar_model_envs/engine.py"
     )
     assert engine["sha256"] == file_sha256(CATALOG.parent / "environments/engine.py")
+
+
+def test_single_job_returns_only_generated_training_results(tmp_path: Path) -> None:
+    from tricycle_sar.single_job import input_hashes, run
+
+    inputs = tmp_path / "job-inputs"
+    inputs.mkdir()
+    (inputs / "previous.pt").write_bytes(b"uploaded")
+    task = tmp_path / "task.toml"
+    dump_toml(task, {
+        "mode": "finetune", "backend": {}, "input_hashes": input_hashes(inputs),
+        "command": ["python", "train.py", "--refit", "--checkpoint", "previous.pt",
+                    "--output", "outputs/refit"],
+    })
+
+    def train(command: list[str], **kwargs: Any) -> None:
+        work = Path(command[command.index("--output") + 1])
+        assert work == tmp_path / "job-work/training"
+        work.mkdir(parents=True)
+        for name in ("checkpoint.pt", "refit_summary.json", "refit-input.pt", "preprocessed.csv"):
+            (work / name).write_text(name)
+        raise subprocess.CalledProcessError(7, command)
+
+    with patch("tricycle_sar.single_job.verify"), patch(
+        "tricycle_sar.single_job.subprocess.run", side_effect=train
+    ), pytest.raises(subprocess.CalledProcessError):
+        run(task)
+    assert {p.name for p in (tmp_path / "outputs/refit").iterdir()} == {
+        "checkpoint.pt", "refit_summary.json"
+    }
+    assert (inputs / "previous.pt").read_bytes() == b"uploaded"

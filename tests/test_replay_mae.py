@@ -322,6 +322,12 @@ class MaeWorkerTests(unittest.TestCase):
                       'evaluation_sha256': digest(private / 'evaluation.csv'),
                       'assets_hashes': replay_campaign.hashes(assets), 'private_hashes': replay_campaign.hashes(private),
                       'bohr': {'project_id': 'test', 'image': 'test', 'machine_type': 'test'}}
+            from tricycle_core.asset_store import externalize_tree
+            config['asset_store'] = str(root / 'shared-assets')
+            config['asset_references'] = {
+                'assets': externalize_tree(assets, Path(config['asset_store'])),
+                'private': externalize_tree(private, Path(config['asset_store'])),
+            }
             save(root / 'experiment.json', config)
             save(root / 'experiment-hash.json', {'sha256': digest(root / 'experiment.json')})
             jobs: dict[str, Path] = {}
@@ -346,7 +352,10 @@ class MaeWorkerTests(unittest.TestCase):
                     return 'one-group'
 
                 def submit(self, job: Any) -> str:
-                    directory = Path(job.parameters['input_directory'])
+                    from tricycle_core.asset_store import materialize_input
+                    directory = root / f'remote-{len(jobs)}'
+                    materialize_input(Path(job.parameters['input_assets_manifest']),
+                                      None, directory)
                     old_cwd, old_root = Path.cwd(), replay_sar_worker.baseline.ROOT
                     try:
                         with patch.object(replay_sar_worker, 'fit', side_effect=fake_fit), patch.object(replay_sar_worker, 'predict', side_effect=fake_predict):

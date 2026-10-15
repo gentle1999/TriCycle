@@ -93,18 +93,38 @@ def stage(
     validate_source_spec(spec)
     record = binding()
     root.mkdir(parents=True, exist_ok=True)
+    backend = get_backend("rxnresid")
     for name in packages:
         module = name.replace("-", "_")
         module_spec = importlib.util.find_spec(module)
         if module_spec is None or module_spec.origin is None:
             raise ValueError(f"Required SAR runtime package is unavailable: {name}")
+        package_source = Path(module_spec.origin).parent
         shutil.copytree(
-            Path(module_spec.origin).parent,
+            package_source,
             root / name / "src" / module,
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", *(
+                ("backends",) if name == "tricycle-sar" else ()
+            )),
         )
-    backend = get_backend("rxnresid")
+    # A validated projection keeps the exact method fingerprint and file bytes.
+    # The worker does not need the registry or assets of unrelated models.
+    staged_catalog = root / "tricycle-sar/src/tricycle_sar/backends/catalog.json"
+    staged_catalog.parent.mkdir(parents=True, exist_ok=True)
+    for name in ("__init__.py", "registry.py"):
+        shutil.copyfile(CATALOG.parent / name, staged_catalog.parent / name)
+    for entry in backend.method["files"]:
+        source = protocol_file_source(CATALOG, entry)
+        destination = staged_catalog.parent / entry["source"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    method_id = backend.method["method_id"]
+    staged_catalog.write_text(json.dumps({
+        "schema": "tricycle.sar.backends/v2",
+        "models": {"rxnresid": {"default_method": method_id}},
+        "methods": {method_id: backend.method},
+    }, indent=2, sort_keys=True) + "\n")
     entries = {item["path"]: item for item in backend.method["files"]}
     runtime = root / "sar-runtime"
     for path in _ENVIRONMENT_FILES:

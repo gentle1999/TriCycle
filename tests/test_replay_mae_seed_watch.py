@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,12 @@ class SeedRecoveryTests(unittest.TestCase):
             self.assertEqual(watch.watch_seed(self.root, "autonomous", 1)["phase"], "submit")
             tick.assert_not_called()
         self.assertFalse((self.seed / ".recovery-supervisor.lock").exists())
+
+    def test_recovery_accepts_only_variants_bound_by_the_suite(self) -> None:
+        self.plan['experiments'][0]['variant'] = 'predictive-uncertainty'
+        self.assertEqual(watch.watch_seed(self.root, 'predictive-uncertainty', 1)['phase'], 'submit')
+        with self.assertRaisesRegex(ValueError, 'invalid suite trajectory'):
+            watch.watch_seed(self.root, 'intelligent', 1)
 
     def test_recovery_binds_selection_and_prevents_a_second_watcher(self) -> None:
         save(self.record, {**self.state, "phase": "blocked", "new_ids": ["changed"]})
@@ -142,6 +149,23 @@ class SeedRecoveryTests(unittest.TestCase):
             self.assertEqual(watch.watch_seed(self.root, 'autonomous', 1, recovery_record=self.record,
                                              live=True, allow_submit=True)['phase'], 'complete')
             tick.assert_not_called()
+
+    def test_manifest_only_recovery_preserves_checkpoint_validation(self) -> None:
+        from tricycle_core.asset_store import put_tree
+
+        current = self.advanced_fixture()
+        directory = self.seed / 'round-0017'
+        reference = put_tree(directory / 'input', self.root / 'store')
+        save(directory / 'input-assets.json', {'schema': 'tricycle.asset-input/v1',
+                                              'trees': [reference], 'files': {}})
+        save(directory / 'input-assets-hash.json',
+             {'sha256': digest(directory / 'input-assets.json')})
+        shutil.rmtree(directory / 'input')
+        with patch('tricycle_sampling.replay.audit.audit_decision'):
+            watch.validate_recovery(self.seed, current, self.record)
+            (self.seed / 'round-0016/result/checkpoint.pt').write_bytes(b'foreign')
+            with self.assertRaisesRegex(ValueError, 'different trajectory'):
+                watch.validate_recovery(self.seed, current, self.record)
 
     def test_premature_completion_is_rejected(self) -> None:
         current = self.advanced_fixture()

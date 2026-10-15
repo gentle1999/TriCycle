@@ -5,6 +5,8 @@ import pytest
 from tricycle_bohrsubmit.models import BatchRequest
 from tricycle_bohrsubmit.staging import stage_batch
 from tricycle_bohrsubmit.task_table import expand_task_specs
+from tricycle_bohrsubmit.training_protocol import worker_input
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_sar.backends.native_runner import validate_task
 from tricycle_sar.preparation.native import prepare
@@ -34,7 +36,7 @@ def test_shared_task_configuration_expands_for_pinned_workers_and_rejects_drift(
         value = load_toml(path)
         assert len(value["task_defaults"]["hashes"]) > 0
         assert all(set(row) == {"name", "fold"} for row in value["task_specs"])
-        bundle = path.parent / "native_bundle"
+        bundle = resolve_input(path.parent, "native_bundle")
         staged = stage_batch(
             BatchRequest.from_mapping({**value, "out_dir": str(tmp_path / f"batch-{index}")}),
             run_id=f"model-{index}",
@@ -43,11 +45,16 @@ def test_shared_task_configuration_expands_for_pinned_workers_and_rejects_drift(
         )
         assert staged.task_count == 5
         assert staged.worker_task_counts == (1, 1, 1, 1, 1)
-        expanded = list(staged.run_dir.glob("worker-*/tasks/*.toml"))
+        expanded = [task for worker in sorted(staged.run_dir.glob("worker-*"))
+                    for task in worker_input(staged.run_dir, worker.name).glob("tasks/*.toml")]
         assert len(expanded) == 5
         for task in expanded:
             validate_task(load_toml(task), bundle)
         task_record = expand_task_specs(value["task_defaults"], value["task_specs"])[0][1]
+        from tricycle_sar.delivery import materialize
+
+        materialize(path.parent, tmp_path / f"mutable-{index}")
+        bundle = tmp_path / f"mutable-{index}" / "native_bundle"
         (bundle / task_record["hashes"][0]["path"]).write_text("tampered")
         with pytest.raises(ValueError, match="checksum mismatch"):
             validate_task(task_record, bundle)

@@ -20,6 +20,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import zipfile
@@ -31,6 +32,7 @@ from typing import Any, Protocol
 from tricycle_bohrsubmit.archives import extract_archive
 from tricycle_bohrsubmit.lifecycle import classify_status
 from tricycle_core import BohrJobSpec, timestamped_run_directory
+from tricycle_core.asset_store import externalize_tree, put_file, put_tree, resolve_tree
 from tricycle_core.io import copy_snapshot_tree as copy_tree
 from tricycle_core.io import file_sha256 as digest
 from tricycle_core.io import write_json as save
@@ -54,6 +56,7 @@ from tricycle_sampling.replay.decision import reject as reject_decision
 from tricycle_sampling.replay.decision import validate as validate_decision
 from tricycle_sampling.replay.worker import pair
 
+from .inputs import input_file, verify_inputs
 from .selection import select_round
 
 ROOT = Path.cwd().resolve()
@@ -89,9 +92,36 @@ def check_hashes(directory: Path, expected: dict[str, str]) -> None:
             raise ValueError(f"frozen artifact changed or missing: {path}")
 
 
+def check_controller(root: Path) -> None:
+    """Validate original bindings plus an explicitly audited storage transition."""
+    config_path = root / "experiment.json"
+    config = read(config_path)
+    expected = dict(config.get("controller_hashes", {}))
+    record = root / "storage-compatibility.json"
+    if record.exists():
+        binding = read(record)
+        if (binding.get("schema") != "tricycle.replay-storage-compatibility/v1"
+                or binding.get("experiment_sha256") != digest(config_path)
+                or not binding.get("authorization") or not binding.get("reason")):
+            raise ValueError("Invalid audited storage compatibility binding")
+        evidence = Path(binding["evidence_path"])
+        if digest(evidence) != binding["evidence_sha256"]:
+            raise ValueError("Storage compatibility evidence changed")
+        for name, change in binding["changes"].items():
+            if name not in expected or change["before"] != expected[name]:
+                raise ValueError("Storage compatibility original controller differs")
+            expected[name] = change["after"]
+    check_hashes(PACKAGE_ROOT, expected)
+
+
 
 
 def prepare(config_path: Path, directory: Path | None) -> Path:
+    with tempfile.TemporaryDirectory(prefix="tricycle-replay-prepare-") as temporary:
+        return _prepare(config_path, directory, Path(temporary))
+
+
+def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Path:
     config = tomllib.loads(config_path.read_text())
     if "acquisition_policy" in config:
         raise ValueError("acquisition_policy is no longer supported; prepare a new run with decision_protocol")
@@ -121,7 +151,7 @@ def prepare(config_path: Path, directory: Path | None) -> Path:
         directory or timestamped_run_directory(ROOT / "runs", config["experiment_id"])
     ).resolve()
     directory.mkdir(parents=True, exist_ok=False)
-    private = directory / "private"
+    private = input_root / "private"
     private.mkdir()
     project = str(readiness["project"])
     if project not in {"autode", "dpa-fined-rits-da", "rits-zero-shot-da"}:
@@ -138,7 +168,7 @@ def prepare(config_path: Path, directory: Path | None) -> Path:
     if digest(evaluation) != readiness["evaluation"]["ground_truth_sha256"]:
         raise ValueError("ground truth snapshot changed")
     shutil.copyfile(evaluation, private / "evaluation.csv")
-    assets = directory / "assets"
+    assets = input_root / "assets"
     assets.mkdir()
     sar_backend = stage_sar_runtime(assets, config.get("rxnresid"))
     model_revision = sar_backend["source_revision"]
@@ -253,6 +283,13 @@ def prepare(config_path: Path, directory: Path | None) -> Path:
             "private_hashes": hashes(private),
         }
     )
+    store = Path(config.get("asset_store", ROOT / "artifacts/task-assets")).resolve()
+    config["asset_store"] = str(store)
+    config["asset_references"] = {
+        "assets": put_tree(assets, store),
+        "private": put_tree(private, store),
+    }
+    save(directory / "asset-references.json", config["asset_references"])
     shutil.copyfile(readiness_path, directory / "readiness.toml")
     save(directory / "experiment.json", config)
     save(directory / "experiment-hash.json", {"sha256": digest(directory / "experiment.json")})
@@ -260,28 +297,39 @@ def prepare(config_path: Path, directory: Path | None) -> Path:
 
 
 def stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[str, Any]) -> Path:
+    with tempfile.TemporaryDirectory(prefix="tricycle-round-prepare-") as temporary:
+        return _stage_round(root, seed_dir, state, config, Path(temporary) / "input")
+
+
+def _stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[str, Any],
+                 bundle: Path) -> Path:
     current = seed_dir / f"round-{state['round']:04d}"
     current.mkdir(exist_ok=True)
-    bundle = current / "input"
     if (current / "input-hashes.json").exists():
-        check_hashes(bundle, read(current / "input-hashes.json"))
+        verify_inputs(current)
         return current
     if bundle.exists():
         # Only an unsubmitted, partially staged directory is disposable.
         shutil.rmtree(bundle)
-    copy_tree(root / "assets", bundle)
+    bundle.mkdir()
+    references = config["asset_references"]
+    assets = resolve_tree(references["assets"])
+    private = resolve_tree(references["private"])
+    store = Path(config["asset_store"])
+    fixed: dict[str, Any] = {"schema": "tricycle.asset-input/v1", "trees": [references["assets"]],
+             "files": {"evaluation.csv": put_file(private / "evaluation.csv", store)}}
     selected = set(state["selected_ids"])
-    pool = table(root / "private/pair-pool.csv")
+    pool = table(private / "pair-pool.csv")
     if not selected.issubset({r["pair_id"] for r in pool}) or len(selected) != 40 * (
         state["round"] + 1
     ):
         raise ValueError("selected set violates round budget or candidate space")
-    labels = [r for r in table(root / "private/project-labels.csv") if pair(r) in selected]
+    labels = [r for r in table(private / "project-labels.csv") if pair(r) in selected]
     write_table(bundle / "training.csv", labels, list(baseline.NATIVE_COLUMNS))
-    candidates = [r for r in table(bundle / "prior-structures.csv") if pair(r) not in selected]
+    candidates = [r for r in table(assets / "prior-structures.csv") if pair(r) not in selected]
     write_table(bundle / "candidates.csv", candidates, list(baseline.NATIVE_COLUMNS))
     # Keep the true evaluation data in the worker/evaluation boundary only.
-    shutil.copyfile(root / "private/evaluation.csv", bundle / "evaluation.csv")
+    # Evaluation bytes are referenced, never repeated in each local round.
     if state["round"]:
         previous = seed_dir / f"round-{state['round'] - 1:04d}" / "result/checkpoint.pt"
         receipt = read(previous.parent / "worker-report.json")
@@ -290,7 +338,7 @@ def stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[
             raise ValueError("previous checkpoint belongs to a different SAR backend")
         if digest(previous) != receipt["outputs"]["checkpoint.pt"]:
             raise ValueError("previous trajectory checkpoint changed")
-        shutil.copyfile(previous, bundle / "previous.pt")
+        fixed["files"]["previous.pt"] = put_file(previous, store)
     new_labels = [r for r in labels if pair(r) in state["new_ids"]]
     if config.get('decision_protocol'):
         write_table(bundle / 'newly-revealed.csv', new_labels, list(baseline.NATIVE_COLUMNS))
@@ -302,13 +350,18 @@ def stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[
         "evaluation_sha256": config["evaluation_sha256"],
         "reuse_checkpoint": bool(state["round"] and not new_labels),
         "need_decision": state["round"] + 1 < config["round_count"],
-        "input_hashes": hashes(bundle),
+        "input_hashes": {**config["assets_hashes"],
+                         **{name: ref["sha256"] for name, ref in fixed["files"].items()},
+                         **hashes(bundle)},
     }
     if config.get('decision_protocol'):
         request['validation_pair_ids'] = config['validation_panels'][str(state['seed'])]
         request['mae_protocol'] = config['decision_protocol']
     save(bundle / "request.json", request)
+    fixed["trees"].append(put_tree(bundle, store))
+    save(current / "input-assets.json", fixed)
     save(current / "input-hashes.json", hashes(bundle))
+    save(current / "input-assets-hash.json", {"sha256": digest(current / "input-assets.json")})
     save(
         current / "reveal.json",
         {
@@ -403,7 +456,8 @@ def job_spec(
         project_id=str(config["bohr"]["project_id"]),
         machine_type=config["bohr"]["machine_type"],
         parameters={
-            "input_directory": str(current / "input"),
+            "input_assets_manifest": str(current / "input-assets.json"),
+            **({"input_directory": str(current / "input")} if (current / "input").is_dir() else {}),
             "job_group_id": group_id,
             "backward_files": ["outputs/round/"],
             "extra_submit_args": ["--yes"],
@@ -425,30 +479,55 @@ def extract_result(current: Path) -> Path:
         raise ValueError("need exactly one complete SAR worker report")
     result = reports[0].parent
     report = read(reports[0])
-    if report["request_sha256"] != digest(current / "input/request.json"):
+    if report["request_sha256"] != digest(input_file(current, "request.json")):
         raise ValueError("worker result belongs to a different request")
     required = {"checkpoint.pt", "evaluation.json", "evaluation-predictions.csv"}
-    if read(current / "input/request.json")["need_decision"]:
+    if read(input_file(current, "request.json"))["need_decision"]:
         required |= {
             "model-metrics.json",
             "candidate-predictions.csv",
             "validation-predictions.csv",
         }
-    if read(current / 'input/request.json').get('mae_protocol'):
+    if read(input_file(current, "request.json")).get('mae_protocol'):
         required.add('pre-update-metrics.json')
     if not required.issubset(report["outputs"]):
         raise ValueError("incomplete worker report")
-    check_hashes(result, report["outputs"])
+    references = report.get("output_references", {})
+    request = read(input_file(current, "request.json"))
+    for name, ref in references.items():
+        if (name != "checkpoint.pt" or ref.get("input") != "previous.pt"
+                or not request["reuse_checkpoint"] or request["round_index"] == 0
+                or ref.get("sha256") != request["input_hashes"].get("previous.pt")
+                or report["outputs"].get(name) != ref["sha256"]):
+            raise ValueError("Invalid inherited worker result reference")
+        if digest(input_file(current, ref["input"])) != ref["sha256"]:
+            raise ValueError("Inherited checkpoint changed")
+    check_hashes(result, {name: checksum for name, checksum in report["outputs"].items()
+                          if name not in references})
     destination = current / "result"
     if not destination.exists():
         copy_tree(result, destination)
+        for name, ref in references.items():
+            shutil.copyfile(input_file(current, ref["input"]), destination / name)
     check_hashes(destination, report["outputs"])
     files = [str(p.relative_to(download)) for p in download.rglob("*") if p.is_file()]
-    (download / "download-manifest.txt").write_text("\n".join(files) + "\n")
+    if not download.is_symlink():
+        (download / "download-manifest.txt").write_text("\n".join(files) + "\n")
     write_tsv(
         current / "download-results.tsv",
         [{"worker": "sar", "status": "DOWNLOADED", "download_dir": str(download)}],
     )
+    config = read(current.parent.parent / "experiment.json")
+    store = Path(config["asset_store"])
+    for name in ("result", "download"):
+        directory = current / name
+        reference_path = current / f"{name}-asset-reference.json"
+        if not directory.is_symlink():
+            reference = externalize_tree(directory, store)
+            save(reference_path, reference)
+        else:
+            if resolve_tree(read(reference_path)) != directory.resolve():
+                raise ValueError("Result asset reference differs")
     return destination
 
 
@@ -468,8 +547,8 @@ def analyze(current: Path, state: dict[str, Any]) -> Path:
     if decision.exists():
         shutil.rmtree(decision)
     decision.mkdir()
-    candidates = table(current / "input/candidates.csv")
-    labeled = table(current / "input/training.csv")
+    candidates = table(input_file(current, "candidates.csv"))
+    labeled = table(input_file(current, "training.csv"))
     # Only acquisition-approved files enter this directory. Oracle labels,
     # evaluation metrics and private paths are deliberately absent.
     write_table(
@@ -633,10 +712,10 @@ def analyze(current: Path, state: dict[str, Any]) -> Path:
             # The controller knows the replay oracle; decisions receive only timings
             # already revealed by the current selected set, never future costs.
             selected_ids = state['selected_ids']
-            root = current.parent.parent
+            config = read(current.parent.parent / "experiment.json")
             selected_set = set(selected_ids)
             route_counts: dict[str, list[dict[str, str]]] = defaultdict(list)
-            for row in table(root / 'assets/prior-structures.csv'):
+            for row in table(resolve_tree(config["asset_references"]["assets"]) / "prior-structures.csv"):
                 if pair(row) in selected_set:
                     route_counts[pair(row)].append(row)
             from rdkit import Chem
@@ -654,7 +733,7 @@ def analyze(current: Path, state: dict[str, Any]) -> Path:
                  'realized_core_hours': float(row['materialized_sampling_cost_core_hours']),
                  'cost_was_missing': row.get('cost_was_missing', 'false') == 'true',
                  'structural_cost_proxy': structural_costs[row['pair_id']]}
-                for row in table(root / 'private/pair-pool.csv') if row['pair_id'] in selected_set
+                for row in table(resolve_tree(config["asset_references"]["private"]) / "pair-pool.csv") if row['pair_id'] in selected_set
             ]
             spent = float(read(current / 'reveal.json')['cumulative_sampling_cost_core_hours'])
             resource = replay_core_hours.cost_evidence(observations, payloads, selected_ids, spent,
@@ -997,7 +1076,7 @@ def tick(
             return state
         config = read(root / "experiment.json")
         if config.get('controller_hashes'):
-            check_hashes(PACKAGE_ROOT, config['controller_hashes'])
+            check_controller(root)
         if digest(root / "experiment.json") != read(root / "experiment-hash.json")["sha256"]:
             raise ValueError("frozen experiment configuration changed")
         pilot_rounds = int(config.get("rollout", {}).get("pilot_evaluations", 0))
@@ -1013,14 +1092,14 @@ def tick(
         phase = state["phase"]
         try:
             if phase == "prepare":
-                check_hashes(root / "assets", config["assets_hashes"])
-                check_hashes(root / "private", config["private_hashes"])
+                check_hashes(resolve_tree(config["asset_references"]["assets"]), config["assets_hashes"])
+                check_hashes(resolve_tree(config["asset_references"]["private"]), config["private_hashes"])
                 stage_round(root, seed_dir, state, config)
                 state["phase"] = "submit"
             elif phase == "submit":
                 if not allow_submit:
                     return state
-                check_hashes(current / "input", read(current / "input-hashes.json"))
+                verify_inputs(current)
                 receipt = current / "submission.json"
                 if receipt.exists():
                     external_id = read(receipt)["external_id"]
@@ -1066,7 +1145,11 @@ def tick(
                 else:
                     state["next_check"] = time.time() + int(config.get("poll_seconds", 60))
             elif phase == "download":
-                gateway.download(state["external_id"], current / "download")
+                saved_download = current / "download-asset-reference.json"
+                if saved_download.exists():
+                    resolve_tree(read(saved_download))
+                else:
+                    gateway.download(state["external_id"], current / "download")
                 if state["remote_result"] != "SUCCEEDED":
                     raise ValueError(
                         "SAR worker failed; partial artifacts downloaded for diagnosis"

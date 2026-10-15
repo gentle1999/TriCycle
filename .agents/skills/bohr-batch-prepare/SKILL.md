@@ -33,6 +33,6 @@ uv run --package tricycle-agent tricycle-agent inspect --run-dir 'runs/<date>/<t
 
 ## 已绑定 SAR 协议的 batch
 
-包含当前 method 引用的请求在 run 根目录只生成一份 `training-protocol.json`，绑定公共输入和逐 worker 任务哈希；`batch.toml` 保存其 SHA256。公共文件先独立复制，再在 worker 之间复用硬链接，不支持时回退普通复制。修改任何已绑定文件会在提交前被拒绝。提交只接受 run 根目录的当前 marker 和绑定，不读取逐 worker 历史格式；新任务使用当前包内后端配置。
+包含当前 method 引用的请求在 run 根目录只生成一份 `training-protocol.json`，绑定公共输入和逐 worker 任务哈希；`batch.toml` 保存其 SHA256。worker 输入先在临时目录生成，再按内容保存到项目资产库；`batch.toml.input_assets` 与每个 worker 的 `input-assets.json` 绑定完整输入，run 不保留输入实体或软链接。硬链接仅作为资产库内部可选优化。修改任何已绑定文件会在提交前被拒绝。提交只接受 run 根目录的当前 marker 和绑定，不读取逐 worker 历史格式；新任务使用当前包内后端配置。
 
 任务参数相同时优先使用内嵌任务表：公共参数写一次，每行只记录唯一 `name` 与 fold/seed 等差异。不能在任务行覆盖公共字段。准备时自动展开为 worker 所需的 TOML，按表顺序均衡分片；不用额外创建逐任务源 TOML 或改文件名配平 worker。

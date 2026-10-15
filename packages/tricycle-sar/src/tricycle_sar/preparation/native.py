@@ -6,7 +6,10 @@ import argparse
 import shutil
 from pathlib import Path
 
+from tricycle_core.asset_store import resolve_input
+
 from tricycle_sar.backends.native_runner import validate_task
+from tricycle_sar.delivery import freeze
 from tricycle_sar.modelling_benchmark import check, run_models
 from tricycle_sar.submission import bundle_hashes, write_bohr_request
 from tricycle_sar.training import (
@@ -33,7 +36,7 @@ def prepare(
         root = output / model
         root.mkdir(parents=True, exist_ok=False)
         bundle = root / "native_bundle"
-        shutil.copytree(run / "workspace/data", bundle / "data")
+        shutil.copytree(resolve_input(run, "workspace/data"), bundle / "data")
         stage_protocol_bundle(model, bundle)
         hashes = bundle_hashes(bundle)
         source_hash = digest(protocol_file(model, f"common/{environment}.tar.gz"))
@@ -64,6 +67,7 @@ def prepare(
                 group_config=group_config,
             )
 
+        freeze(root, (bundle, root / "protocol-runtime"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)

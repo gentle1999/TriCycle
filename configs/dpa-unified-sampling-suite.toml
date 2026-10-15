@@ -1,7 +1,7 @@
 # Matched experiment: only acquisition strategy differs; preparation submits nothing.
 suite_id = "dpa-unified-sampling-suite-v3"
 readiness = "runs/2026-09-25/23-25-15.990993+0800/dpa-smart-experiment-readiness/readiness.toml"
-sampling_strategies = ["predictive-uncertainty", "latin-hypercube", "ucb", "distance-uncertainty-product", "uncertainty-kriging-believer", "cost-aware"]
+sampling_strategies = ["predictive-uncertainty", "latin-hypercube", "ucb", "distance-uncertainty-product", "uncertainty-kriging-believer", "intelligent"]
 # The adaptive agent uses structure coverage, cost estimates, revealed-label feedback and one batch review.
 fixed_seed = 42
 poll_seconds = 60

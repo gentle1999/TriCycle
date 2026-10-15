@@ -5,13 +5,15 @@ import json
 import os
 import shlex
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from tricycle_core import timestamped_run_directory
+from tricycle_core.asset_store import put_tree
 from tricycle_core.errors import InvalidRequestError
-from tricycle_core.io import write_delimited
+from tricycle_core.io import write_delimited, write_json
 
 from .config import dump_toml
 from .dpa import build_dpa_tasks, render_task_files
@@ -262,7 +264,28 @@ def _base_run_config(
     }
 
 
+def publish_worker_inputs(
+    output: Path, workers: list[Path], config: dict, store: Path,
+) -> None:
+    """Persist only immutable input references in worker run records."""
+    references = {worker.name: put_tree(worker, store) for worker in workers}
+    config["input_assets"] = references
+    for name, reference in references.items():
+        record = output / name
+        record.mkdir(parents=True, exist_ok=True)
+        write_json(record / "input-assets.json", {
+            "schema": "tricycle.asset-input/v1", "trees": [reference], "files": {},
+        })
+
+
 def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: bool) -> StagedRun:
+    with tempfile.TemporaryDirectory(prefix="tricycle-batch-prepare-") as temporary:
+        return _stage_batch(request, run_id=run_id, workdir=workdir, dry_run=dry_run,
+                            input_root=Path(temporary))
+
+
+def _stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: bool,
+                 input_root: Path) -> StagedRun:
     # Local staging is explicit; dry-run only suppresses remote effects.
     tasks = _expand_patterns(request.task_patterns)
     task_specs = expand_task_specs(request.task_defaults, request.task_specs)
@@ -279,7 +302,7 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
 
     job_prefix = compact_name(request.job_prefix or f"bohr-batch-{run_id}")
     job_group_name = compact_name(request.job_group_name or job_prefix)
-    worker_dirs = _stage_common_worker_dirs(output, request.workers)
+    worker_dirs = _stage_common_worker_dirs(input_root, request.workers)
     counts = [0] * request.workers
     for index, worker_dir in enumerate(worker_dirs):
         (worker_dir / "tasks").mkdir()
@@ -317,15 +340,15 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
         label = worker_label(worker, request.workers)
         cloud_path = f"tasks/{short_hash(identity)}_{name}"
         if values is not None:
-            dump_toml(output / label / cloud_path, values)
+            dump_toml(input_root / label / cloud_path, values)
         else:
             if task_path is None:
                 raise InvalidRequestError("Missing task input path")
-            _copy_path(task_path, output / label / cloud_path)
-        with (output / label / "manifest.txt").open("a", encoding="utf-8") as manifest:
+            _copy_path(task_path, input_root / label / cloud_path)
+        with (input_root / label / "manifest.txt").open("a", encoding="utf-8") as manifest:
             manifest.write(f"{cloud_path}\n")
         if values is None or "manifest.tsv" in request.backward_files.split(","):
-            with (output / label / "manifest.tsv").open("a", encoding="utf-8") as manifest:
+            with (input_root / label / "manifest.tsv").open("a", encoding="utf-8") as manifest:
                 manifest.write(f"{identity}\t{cloud_path}\n")
         task_rows.append({"worker": label, "source_path": identity, "cloud_path": cloud_path})
         counts[worker] += 1
@@ -339,11 +362,11 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
             source = common.resolve()
             if not source.exists():
                 raise InvalidRequestError(f"common path does not exist: {source}")
-            destination = worker_dir / "common" / source.name
+            destination = worker_dir / "common" / common.name
             if destination.exists():
                 raise InvalidRequestError(f"duplicate staged common basename: {source.name}")
             if binding is not None and index:
-                _reuse_staged_path(worker_dirs[0] / "common" / source.name, destination)
+                _reuse_staged_path(worker_dirs[0] / "common" / common.name, destination)
             else:
                 _copy_path(source, destination)
 
@@ -372,6 +395,7 @@ def stage_batch(request: BatchRequest, *, run_id: str, workdir: Path, dry_run: b
     )
     if any((directory / "common/training-protocol.json").exists() for directory in worker_dirs):
         batch_config["run"]["training_protocol_required"] = True
+    publish_worker_inputs(output, worker_dirs, batch_config, workdir / "artifacts/task-assets")
     dump_toml(output / "batch.toml", batch_config)
     _write_tsv(output / "tasks.tsv", ("worker", "source_path", "cloud_path"), task_rows)
 
@@ -410,11 +434,15 @@ def _dpa_env(request: DpaBernyRequest) -> dict[str, object]:
 
 
 def stage_dpa_berny(
-    request: DpaBernyRequest,
-    *,
-    run_id: str,
-    workdir: Path,
-    dry_run: bool,
+    request: DpaBernyRequest, *, run_id: str, workdir: Path, dry_run: bool
+) -> StagedRun:
+    with tempfile.TemporaryDirectory(prefix="tricycle-chemistry-prepare-") as temporary:
+        return _stage_dpa_berny(request, run_id=run_id, workdir=workdir, dry_run=dry_run,
+                                input_root=Path(temporary))
+
+
+def _stage_dpa_berny(
+    request: DpaBernyRequest, *, run_id: str, workdir: Path, dry_run: bool, input_root: Path
 ) -> StagedRun:
     tasks = build_dpa_tasks(request)
     if request.engine == "dpa":
@@ -429,7 +457,7 @@ def stage_dpa_berny(
     _assert_empty_output(output)
     job_prefix = compact_name(request.job_prefix or f"dpa-berny-{run_id}")
     job_group_name = compact_name(request.job_group_name or job_prefix)
-    worker_dirs = _stage_common_worker_dirs(output, request.workers)
+    worker_dirs = _stage_common_worker_dirs(input_root, request.workers)
     counts = [0] * request.workers
     for worker_dir in worker_dirs:
         (worker_dir / "work.sh").write_text(_chemistry_worker(request.engine), encoding="utf-8")
@@ -489,7 +517,7 @@ def stage_dpa_berny(
     task_rows: list[dict[str, object]] = []
     for task in tasks:
         label = worker_label(task.worker, request.workers)
-        worker_dir = output / label
+        worker_dir = input_root / label
         file_contents = render_task_files(request, task)
         for filename, contents in file_contents.items():
             (worker_dir / filename).write_text(contents, encoding="utf-8")
@@ -528,4 +556,6 @@ def stage_dpa_berny(
         output / "submit-plan.tsv", ("worker", "tasks", "job_name", "input_dir"), submit_rows
     )
     _prepared_results(output, submit_rows, "DRY_RUN" if dry_run else "PREPARED")
+    publish_worker_inputs(output, worker_dirs, batch_config, workdir / "artifacts/task-assets")
+    dump_toml(output / "batch.toml", batch_config)
     return StagedRun(run_id, output, request.workers, len(tasks), tuple(counts), "dpa-berny")

@@ -66,6 +66,29 @@ uv run --all-packages python -m tricycle_sar benchmark publish --run-dir /path/t
 
 GT 总体活化自由能与底物组残差绘图复用 `python -m analysis.sar distributions --result-dir /path/to/result-package --out-dir /path/to/distributions`，并使用根目录 `analysis/` 隔离环境。总体及组内残差按路径等权，组内残差为路径值减去 `(ene_id, diene_id)` 组均值；单路径组保留零残差，另展示多路径组。组均值残差按组等权、中心取全部组均值的平均值。使用总体方差 ddof=0，保留全部尾部；不得将这些残差标为模型误差，或将路径加权组内方差混同各组方差的等权平均。输出在报告外，生成 PNG/PDF/SVG 与统计 JSON，拒绝覆盖非空目录。
 
+用户直接提供原生 reaction collection CSV 且仅需总体/组内残差时，使用 `python -m analysis.sar collection-distributions --dataset /path/to/reaction-collection.csv --out-dir /path/to/empty-output --aspect-ratio 4 --width-inches 8`。读取 `activation_gibbs_free_energy_kcal_mol`，以 `(ene_id, diene_id)` 分组，所有行和单路径组均保留，不增加多路径组对比或其他面板。`aspect-ratio` 指完整画布的横纵比；该入口不依赖模型结果包、不改变运行包或计算协议。
+
 科研绘图技能重绘时使用同一命令的 `--style publication`，不另建绘图源码树或安装环境。主图为 183 mm 三面板直方图，ECDF 为辅助图；导出 SVG/PDF/PNG/TIFF 及图注、alt text、规格、来源哈希、文字/面板布局。审计导出的文字边界、字体和面板对齐后再标记完整性通过；未经期刊指南核验不宣称期刊合规。
 
 `sar.train/infer/finetune` 使用共享命令 builder，镜像和机器类型匹配后端。本地输入目录中的源码与固定归档一致；规划记录输入哈希，提交再次核验。单任务执行复用 `single_job.py` 与 `sampling_runtime` 的共享初始化和源码，缺失输入的 dry-run 计划不能直接提交。累计标签训练按全 train 划分选择 from-scratch 模式，预测按逐路径身份校验覆盖。
+
+benchmark 工作区、模型准备目录与 batch 公共输入通过项目资产库按内容共享，
+引用清单用于定位与核验，不复制逐 run 固定权重。内网执行先用
+`tricycle_sar.delivery.materialize` 生成临时输入；Bohr adapter 自动展开后上传并清理。
+运行结果允许保存诊断日志，`retain_checkpoint` 按模型的最终权重路径白名单保留，
+上传输入、预处理表和中间权重不回传。正式科学结果包仍遵循上面的精简归档约定。
+
+已完成但当前后端已更新的任务可直接绘制五折 MAE 箱线图：
+`python -m analysis.sar boxplot --run-dir /path/to/benchmark --prediction-dir /path/to/compact-predictions --out-dir /path/to/empty-figures`。
+使用 analysis 隔离环境；SAR `collect` 独立核对冻结数据/划分和完整预测，
+不修改旧 run 的方法绑定或将其替换为当前方法。每个散点代表一折测试 MAE，
+必须五折齐全，均值和样本 SD 与 pooled OOF 指标分别保存。
+
+
+### 输入与运行记录
+
+新准备目录通过 `input-assets.json` 引用共享资产，不保留数据、权重或执行输入目录软链接。
+`results prepare` 返回 `run_dir` 和 `input_assets_manifest`，不能把 run 目录直接上传。
+本地读取使用 `tricycle_core.asset_store.resolve_input`；内部执行器使用
+`tricycle_sar.delivery.materialize` 展开到临时目录，执行后清理；Bohr 提交由 adapter 自动展开。
+保持原始内容、协议与划分哈希，禁止为迁移存储而重新生成已有科学绑定。历史 run 不自动迁移或删除。

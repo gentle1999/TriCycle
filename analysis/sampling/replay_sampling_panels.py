@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from tricycle_core.asset_store import resolve_tree
+
 SPACES = {
     "dpa-fined-rits-da": "DPA fine-tuned RitS",
     "rits-zero-shot-da": "RitS zero-shot",
@@ -30,7 +32,7 @@ METHODS = {
     "distance-uncertainty-product": ("A Score · Nat Commun 2024", "#AA793E", False),
     "uncertainty-kriging-believer": ("Uncertainty + KB · JACS 2025", "#357E90", False),
     "uncertainty-cost": ("Uncertainty / cost", "#D87588", False),
-    "cost-aware": ("Cost-aware agent", "#008775", True),
+    "intelligent": ("Intelligent sampling", "#008775", True),
     "autonomous": ("Autonomous", "#174E8C", True),
     "feedback": ("+ Feedback", "#C74F21", True),
     "reviewed": ("+ Feedback + review", "#008775", True),
@@ -191,12 +193,24 @@ def freeze(root: Path, output: Path) -> dict:
         experiment = read(config_path)
         if sha(config_path) != read(experiment_root / "experiment-hash.json")["sha256"]:
             raise ValueError("frozen experiment hash mismatch")
-        if sha(config_path) != item["config_sha256"]:
+        expected_config = item.get("config_sha256")
+        if expected_config is None:
+            suite_root = Path(item["suite"])
+            suite_path = suite_root / "suite.json"
+            if sha(suite_path) != read(suite_root / "suite-hash.json")["sha256"]:
+                raise ValueError("frozen suite hash mismatch")
+            bound = next(e for e in read(suite_path)["experiments"]
+                         if Path(e["root"]) == experiment_root and e["variant"] == item["variant"])
+            expected_config = bound["config_sha256"]
+            sources[str(suite_path)] = sha(suite_path)
+        if sha(config_path) != expected_config:
             raise ValueError("sampling plan/experiment hash mismatch")
         sources[str(config_path)] = sha(config_path)
         if item["project"] != experiment["project"] or item["variant"] not in METHODS:
             raise ValueError("unexpected experiment identity")
-        pool_path = experiment_root / "private/pair-pool.csv"
+        private = (resolve_tree(experiment["asset_references"]["private"])
+                   if "asset_references" in experiment else experiment_root / "private")
+        pool_path = private / "pair-pool.csv"
         if sha(pool_path) != experiment["private_hashes"]["pair-pool.csv"]:
             raise ValueError("cost pool hash mismatch")
         sources[str(pool_path)] = sha(pool_path)

@@ -24,7 +24,8 @@ uv run --package tricycle-agent tricycle-agent run \
 
 先检查救援计划和被跳过的成功任务，再使用 `bohr.batch.submit`。源目录不会被覆盖。
 救援同样要求 DPA 使用 GPU、纯 Gaussian 使用 CPU；源配置不符合时拒绝准备。
-新 run 从包内当前实现生成 Bash worker，复用源任务输入和模型资产，不复制旧启动脚本。
+新 run 从包内当前实现生成 Bash worker，从源 `batch.toml.input_assets` 解析任务输入和模型资产；
+临时准备后将新输入按内容入库，run 只保存引用，不复制旧启动脚本。既有物理输入目录仍可读取。
 从修正后的请求创建新 run，保留源记录；不能把 DPA 的 CPU 结果作为 GPU smoke 通过证据。
 
 ## 失败与恢复

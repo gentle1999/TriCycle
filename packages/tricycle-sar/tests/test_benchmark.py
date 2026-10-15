@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import dump_toml
 from tricycle_core.training_protocol import verify_asset_files
 
@@ -81,7 +82,7 @@ class BenchmarkTests(unittest.TestCase):
         config, run = self.root / "request.toml", self.root / "prepared"
         dump_toml(config, value)
         prepare(config, run)
-        self.assertEqual((run / "splits.csv").read_bytes(), source.read_bytes())
+        self.assertEqual(resolve_input(run, "splits.csv").read_bytes(), source.read_bytes())
         source.write_bytes(source.read_bytes() + b"\n")
         with self.assertRaisesRegex(ValueError, "split SHA-256 mismatch"):
             prepare(config, self.root / "rejected")
@@ -178,7 +179,7 @@ class BenchmarkTests(unittest.TestCase):
                 "row_id": "id",
                 "target": "y",
                 "group_columns": ["a", "b"],
-                "dataset_sha256": sha256(run / "dataset.csv"),
+                "dataset_sha256": sha256(resolve_input(run, "dataset.csv")),
             },
         )
         for fold in range(5):
@@ -227,8 +228,8 @@ seed = 42
 validation_fraction = 0.125
 ''')
         run = prepare(cfg, self.root / "run")
-        self.assertEqual(sha256(run / "dataset.csv"), sha256(self.data))
-        self.assertEqual(len(read_rows(run / "splits.csv")), len(self.rows) * 5)
+        self.assertEqual(sha256(resolve_input(run, "dataset.csv")), sha256(self.data))
+        self.assertEqual(len(read_rows(resolve_input(run, "splits.csv"))), len(self.rows) * 5)
         with self.assertRaisesRegex(ValueError, "empty"):
             prepare(cfg, run)
 

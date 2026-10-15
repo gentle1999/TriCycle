@@ -6,6 +6,7 @@ from tricycle_bohrsubmit.models import BatchRequest
 from tricycle_bohrsubmit.plugin import BohrSubmitPlugin
 from tricycle_bohrsubmit.staging import stage_batch
 from tricycle_bohrsubmit.task_table import expand_task_specs
+from tricycle_bohrsubmit.training_protocol import worker_input
 from tricycle_core import ExecutionContext
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.toml import dump_toml, load_toml
@@ -69,7 +70,10 @@ def test_roundtrip_expansion_preserves_shared_hashes_seed_and_balanced_assignmen
     staged = stage_batch(copied, run_id="seeds", workdir=tmp_path, dry_run=True)
     assert staged.worker_task_counts == (1, 1, 1)
     assert not list(staged.run_dir.glob("worker-*/manifest.tsv"))
-    tasks = sorted(staged.run_dir.glob("worker-*/tasks/*.toml"))
+    tasks = [task for worker in sorted(staged.run_dir.glob("worker-*"))
+             for task in worker_input(staged.run_dir, worker.name).glob("tasks/*.toml")]
+    assert len(tasks) == 3
+    assert not list(staged.run_dir.glob("worker-*/tasks"))
     for seed, task in enumerate(tasks):
         assert load_toml(task) == {**defaults, "fold": 0, "seed": seed}
     assert (staged.run_dir / "tasks.tsv").is_file()

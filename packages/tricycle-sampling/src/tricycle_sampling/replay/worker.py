@@ -26,6 +26,7 @@ from tricycle_sar.predictions import validate_rows
 from tricycle_sar.sampling_runtime import verify as verify_sar_runtime
 
 from tricycle_sampling import trajectory_worker as baseline
+from tricycle_sampling.replay.results import publish_training_results
 
 
 def pair(row: dict[str, Any]) -> str:
@@ -65,6 +66,16 @@ def metrics(rows: list[dict[str, str]]) -> dict[str, float | int]:
 
 
 def run(request_path: Path) -> None:
+    work = request_path.resolve().parent / "work/round"
+    work.mkdir(parents=True, exist_ok=True)
+    try:
+        _run(request_path, work)
+    except BaseException:
+        publish_training_results(work, request_path.resolve().parent / "outputs/round")
+        raise
+
+
+def _run(request_path: Path, work: Path) -> None:
     root = request_path.resolve().parent
     request = json.loads(request_path.read_text())
     for name, digest in request["input_hashes"].items():
@@ -106,20 +117,25 @@ def run(request_path: Path) -> None:
     else:
         checkpoint = fit(
             root / "training.csv",
-            output / "full-fit",
+            work / "full-fit",
             recipe,
             previous if previous.exists() else None,
         )
-    shutil.copyfile(checkpoint, output / "checkpoint.pt")
+    output_references = {}
+    if request["reuse_checkpoint"] and request["round_index"] > 0:
+        output_references["checkpoint.pt"] = {"input": "previous.pt", "sha256": _sha256_file(previous)}
+    else:
+        shutil.copyfile(checkpoint, output / "checkpoint.pt")
+        checkpoint = output / "checkpoint.pt"
     if request["need_decision"]:
         predict(
-            output / "checkpoint.pt",
+            checkpoint,
             root / "candidates.csv",
             output / "candidate-predictions.csv",
             recipe,
         )
     evaluation = predict(
-        output / "checkpoint.pt",
+        checkpoint,
         root / "evaluation.csv",
         output / "evaluation-predictions.csv",
         recipe,
@@ -149,15 +165,15 @@ def run(request_path: Path) -> None:
         training = [r for r in labels if pair(r) not in heldout]
         validation = [r for r in labels if pair(r) in heldout]
         baseline._write_csv(
-            output / "validation-train.csv", list(baseline.NATIVE_COLUMNS), training
+            work / "validation-train.csv", list(baseline.NATIVE_COLUMNS), training
         )
         baseline._write_csv(
-            output / "validation-labels.csv", list(baseline.NATIVE_COLUMNS), validation
+            work / "validation-labels.csv", list(baseline.NATIVE_COLUMNS), validation
         )
-        auxiliary = fit(output / "validation-train.csv", output / "validation-fit", recipe, None)
+        auxiliary = fit(work / "validation-train.csv", work / "validation-fit", recipe, None)
         predictions = predict(
             auxiliary,
-            output / "validation-labels.csv",
+            work / "validation-labels.csv",
             output / "validation-predictions.csv",
             recipe,
         )
@@ -180,6 +196,7 @@ def run(request_path: Path) -> None:
                 "by_pair": {p: metrics(rows) for p, rows in grouped.items()},
             },
         )
+    publish_training_results(work, output)
     _write_json(
         output / "worker-report.json",
         {
@@ -190,10 +207,11 @@ def run(request_path: Path) -> None:
             "full_fit_infer_seconds": full_elapsed,
             "validation_seconds": time.monotonic() - started - full_elapsed - pre_update_seconds,
             **({'pre_update_seconds': pre_update_seconds} if request.get('mae_protocol') else {}),
+            "output_references": output_references,
             "outputs": {
-                str(p.relative_to(output)): _sha256_file(p)
-                for p in sorted(output.rglob("*"))
-                if p.is_file()
+                **{str(p.relative_to(output)): _sha256_file(p)
+                   for p in sorted(output.rglob("*")) if p.is_file()},
+                **{name: ref["sha256"] for name, ref in output_references.items()},
             },
         },
     )

@@ -280,3 +280,133 @@ class BohrCliGatewayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_shared_inputs_are_expanded_only_for_upload_and_cleaned(tmp_path: Path) -> None:
+    from tricycle_core.asset_store import put_tree
+    from tricycle_core.io import write_json
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "fixed.dat").write_bytes(b"fixed")
+    ref = put_tree(assets, tmp_path / "store")
+    overlay = tmp_path / "input"
+    overlay.mkdir()
+    (overlay / "request.json").write_text("{}")
+    manifest = tmp_path / "input-assets.json"
+    write_json(manifest, {"schema": "tricycle.asset-input/v1", "trees": [ref], "files": {}})
+    job = BohrJobSpec(name="compact", operation="test", image="test", command=("true",),
+                      project_id="1", machine_type="test", parameters={
+                          "input_directory": str(overlay), "input_assets_manifest": str(manifest)})
+    gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"), environ={})
+    paths = []
+
+    def upload(args: list[str], *, mode: str) -> str:
+        directory = Path(args[args.index("--input_directory") + 1])
+        paths.append(directory)
+        assert directory != overlay
+        assert (directory / "fixed.dat").read_bytes() == b"fixed"
+        assert (directory / "request.json").read_text() == "{}"
+        return '{"bohrJobId":22}'
+
+    with patch.object(gateway, "_run", side_effect=upload):
+        assert gateway.submit(job) == "22"
+    assert not paths[0].exists()
+    assert not (overlay / "fixed.dat").exists()
+    with patch.object(gateway, "_run", side_effect=BohrGatewayError("invalid input")):
+        import pytest
+        with pytest.raises(BohrGatewayError):
+            gateway.submit(job)
+    assert ref["sha256"]
+
+
+def test_shared_directory_views_upload_as_independent_writable_files(tmp_path: Path) -> None:
+    from tricycle_core.asset_store import externalize_tree, resolve_tree
+
+    root = tmp_path / "worker"
+    common = root / "common"
+    common.mkdir(parents=True)
+    (common / "weights.pt").write_bytes(b"input weights")
+    (common / "empty").mkdir()
+    ref = externalize_tree(common, tmp_path / "store")
+    job = BohrJobSpec(name="shared", operation="test", image="test", command=("true",),
+                     project_id="1", machine_type="test",
+                     parameters={"input_directory": str(root)})
+    gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"), environ={})
+    uploads = []
+
+    def upload(args: list[str], *, mode: str) -> str:
+        directory = Path(args[args.index("--input_directory") + 1])
+        uploads.append(directory)
+        assert not (directory / "common").is_symlink()
+        assert (directory / "common/empty").is_dir()
+        path = directory / "common/weights.pt"
+        assert path.read_bytes() == b"input weights"
+        path.write_bytes(b"worker modification")
+        return '{"bohrJobId":22}'
+
+    with patch.object(gateway, "_run", side_effect=upload):
+        assert gateway.submit(job) == "22"
+    assert not uploads[0].exists()
+    assert (resolve_tree(ref) / "weights.pt").read_bytes() == b"input weights"
+
+
+def test_reference_only_batch_submits_original_inputs_and_cleans_on_failure(tmp_path: Path) -> None:
+    from tricycle_bohrsubmit.lifecycle import job_for_row, read_submit_rows
+    from tricycle_bohrsubmit.models import BatchRequest
+    from tricycle_bohrsubmit.staging import stage_batch
+
+    script = tmp_path / "task.sh"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    request = BatchRequest.from_mapping({
+        "script": str(script), "task_specs": [{"name": "fold-0", "fold": 0}],
+        "workers": 1, "project_id": "1", "machine_type": "cpu",
+    })
+    run = stage_batch(request, run_id="compact", workdir=tmp_path, dry_run=True).run_dir
+    assert not list(run.rglob("*.sh"))
+    assert not list(run.glob("worker-*/tasks"))
+    assert not any(p.is_symlink() for p in run.rglob("*"))
+    job = job_for_row(run, read_submit_rows(run)[0])
+    assert "input_directory" not in job.parameters
+    gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"), environ={})
+    uploaded = []
+
+    def upload(args: list[str], *, mode: str) -> str:
+        directory = Path(args[args.index("--input_directory") + 1])
+        uploaded.append(directory)
+        assert (directory / "common/__bohr_task_script.sh").read_bytes() == script.read_bytes()
+        assert len(list((directory / "tasks").glob("*.toml"))) == 1
+        assert (directory / "run_worker.sh").stat().st_mode & 0o111
+        raise BohrGatewayError("upload interrupted")
+
+    import pytest
+    with patch.object(gateway, "_run", side_effect=upload), pytest.raises(
+        BohrGatewayError, match="upload interrupted"
+    ):
+        gateway.submit(job)
+    assert uploaded and not uploaded[0].exists()
+    assert (run / "worker-000/input-assets.json").is_file()
+
+
+def test_missing_worker_manifest_rejects_before_group_creation(tmp_path: Path) -> None:
+    from unittest.mock import Mock
+
+    import pytest
+    from tricycle_bohrsubmit.models import BatchRequest
+    from tricycle_bohrsubmit.plugin import BohrSubmitPlugin
+    from tricycle_bohrsubmit.staging import stage_batch
+    from tricycle_core import ExecutionContext
+    from tricycle_core.errors import InvalidRequestError
+
+    script = tmp_path / "task.sh"
+    script.write_text("exit 0\n")
+    request = BatchRequest.from_mapping({
+        "script": str(script), "task_specs": [{"name": "task", "fold": 0}],
+        "workers": 1, "project_id": "1", "machine_type": "cpu",
+    })
+    run = stage_batch(request, run_id="missing", workdir=tmp_path, dry_run=True).run_dir
+    (run / "worker-000/input-assets.json").unlink()
+    gateway = Mock()
+    with pytest.raises(InvalidRequestError, match="Shared worker input assets rejected"):
+        BohrSubmitPlugin().submit_prepared(run, gateway, ExecutionContext("submit", tmp_path, False))
+    assert not gateway.mock_calls

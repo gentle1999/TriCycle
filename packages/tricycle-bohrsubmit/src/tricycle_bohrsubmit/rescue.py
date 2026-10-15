@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import tempfile
 from pathlib import Path
 
 from tricycle_core import timestamped_run_directory
@@ -16,7 +17,9 @@ from .staging import (
     _copy_path,
     _prepared_results,
     _write_tsv,
+    publish_worker_inputs,
 )
+from .training_protocol import worker_input
 from .utils import compact_name, posix_cksum, worker_label
 
 
@@ -86,6 +89,11 @@ def _copy_worker_support(source: Path, target: Path, workflow: dict[str, object]
 
 
 def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> StagedRun:
+    with tempfile.TemporaryDirectory(prefix="tricycle-rescue-prepare-") as temporary:
+        return _prepare_rescue(request, run_id=run_id, workdir=workdir, input_root=Path(temporary))
+
+
+def _prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path, input_root: Path) -> StagedRun:
     source_run = request.source_run.resolve()
     if not source_run.is_dir():
         raise InvalidRequestError(f"source run directory not found: {source_run}")
@@ -107,7 +115,7 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
         )
 
     source_workers = {
-        row.get("worker", ""): Path(row.get("input_dir", ""))
+        row["worker"]: worker_input(source_run, row["worker"], source_config)
         for row in source_submit_plan
         if row.get("worker") and row.get("input_dir")
     }
@@ -122,7 +130,7 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
     ).resolve()
     _assert_empty_output(output)
     worker_dirs = [
-        output / worker_label(index, request.workers) for index in range(request.workers)
+        input_root / worker_label(index, request.workers) for index in range(request.workers)
     ]
     for worker_dir in worker_dirs:
         (worker_dir / "results").mkdir(parents=True)
@@ -222,6 +230,7 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
         }
     )
     new_config["run"] = run_section
+    publish_worker_inputs(output, worker_dirs, new_config, workdir / "artifacts/task-assets")
     dump_toml(output / "batch.toml", new_config)
     _write_tsv(output / "tasks.tsv", ("worker", "source_xyz", "gjf", "json", "traj"), task_rows)
     submit_rows = [
@@ -229,7 +238,7 @@ def prepare_rescue(request: RescueRequest, *, run_id: str, workdir: Path) -> Sta
             "worker": worker_label(index, request.workers),
             "tasks": counts[index],
             "job_name": f"{job_prefix}-{worker_label(index, request.workers)}",
-            "input_dir": str(worker_dirs[index]),
+            "input_dir": str(output / worker_dirs[index].name),
         }
         for index in range(request.workers)
     ]

@@ -19,7 +19,7 @@ description: "Select the next batch of reaction candidates with a registered, au
 
 当前文献 profile 为 `LITERATURE_BASELINE_STRATEGIES` 的五个规范 ID：predictive-uncertainty、latin-hypercube、ucb、distance-uncertainty-product、uncertainty-kriging-believer。每条线绑定不同主引用，定义在 `packages/tricycle-sampling/src/tricycle_sampling/protocols.py`；具体文章和证据见[方法清单](../../../docs/sampling-baselines.md)。random/epistemic/aleatoric 是独立策略，未进入该主比较。
 
-新匹配实验使用[六方法套件配置](../../../configs/dpa-unified-sampling-suite.toml)：五条文献基线与 cost-aware 智能策略，固定共同池、初始集合、主训练、评价、seed、批量及核时口径。cost-aware 以覆盖与成本的初始化提案为起点，利用已揭示反馈调整规则，并进行一次批次复核。需要编写表达式时遵循[智能采集 skill](../agent-authored-acquisition/SKILL.md)。不要将工程覆盖策略或自定成本公式直接归于五篇文章。
+新匹配实验使用[六方法套件配置](../../../configs/dpa-unified-sampling-suite.toml)：五条文献基线与 intelligent 智能策略，固定共同池、初始集合、主训练、评价、seed、批量及核时口径。intelligent 以覆盖与成本的初始化提案为起点，利用已揭示反馈调整规则，并进行一次批次复核。需要编写表达式时遵循[智能采集 skill](../agent-authored-acquisition/SKILL.md)。不要将工程覆盖策略或自定成本公式直接归于五篇文章。
 
 ## 执行流程
 
@@ -53,3 +53,7 @@ checkpoint 更新交给 `tricycle_sar.rxnresid`。新 worker 使用 `tricycle_sa
 当前 random 先规范排序再局部抽样，first-n 保留输入顺序；已有实验保留其选择记录，不加载旧实现重建。请求与实验清单只使用注册的规范 ID；旧策略别名直接报错。
 
 缺失预测、无效参数或 hash 不匹配应停止并修正原因，不能随机回退、读未来真值或刷新 hash 放行。恢复保留既有选择、模型链及远程回执。新增采样规则不授权修改 SAR 训练协议、镜像、Torch/CUDA 或历史实验定义。
+
+逐轮固定资产通过项目级 `asset_store` 共享，RxnResid staging 只包含所选模型后端。
+每轮记录输入引用及 hash，完整交付由 Bohr adapter 临时组装；操作与恢复见 exploration-campaign
+的共享资产说明。资产轻量化不改变训练、先验路线、评价隔离或 checkpoint 继承规则。

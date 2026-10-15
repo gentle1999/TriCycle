@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.training_protocol import protocol_file_source
 
 from tricycle_sar import get_backend, list_backends
@@ -152,11 +153,17 @@ def test_environment_preparation_delivers_shared_runtime_and_rejects_tampering(
     task = load_toml(output / "task.toml")
     assert task["environment_model"] == "rxnresid"
     assert task["input_hashes"]["sar_model_envs/engine.py"] == file_sha256(
-        output / "common/sar_model_envs/engine.py"
+        resolve_input(output, "common/sar_model_envs/engine.py")
     )
-    (output / "common/sar_model_envs/engine.py").write_text("modified")
+    import shutil
+
+    mutable = tmp_path / "mutable-common"
+    shutil.copytree(resolve_input(output, "common"), mutable)
+    engine = mutable / "sar_model_envs/engine.py"
+    engine.chmod(0o644)
+    engine.write_text("modified")
     with pytest.raises(ValueError, match="input hash mismatch"):
-        execute(output / "task.toml", output / "common", output / "results", initialize_only=True)
+        execute(output / "task.toml", mutable, output / "results", initialize_only=True)
     assert not (output / "results").exists()
 
 
@@ -173,7 +180,7 @@ def test_published_data_is_prepared_with_current_backend(
     assert result["method_id"] == get_backend("rxnresid").method["method_id"]
     recorded = read_method_bindings(published / "METHOD_BINDINGS.csv")["rxnresid", 0]
     assert result["method_id"] != recorded
-    task = load_toml(Path(result["input_dir"]) / result["task"])
+    task = load_toml(resolve_input(Path(result["run_dir"]), result["task"]))
     assert task["bundle_name"] == "training_bundle"
     assert task["environment_model"] == "rxnresid"
     assert not result["submitted"]

@@ -12,6 +12,7 @@ from tricycle_core.training_protocol import protocol_file_source, verify_asset_f
 
 from tricycle_sar import get_backend, list_backends
 from tricycle_sar.backends.registry import CATALOG
+from tricycle_sar.delivery import freeze
 
 
 def prepare(model: str, output: Path, *, assets: Path | None = None, group_config: Path) -> Path:
@@ -90,6 +91,7 @@ exec python3 "$PWD/common/sar_execution.py" --task "$1" --common "$PWD/common" -
         "backward_files": "worker.log,results",
     }
     dump_toml(output / "bohr-smoke.toml", request)
+    freeze(output, (common,))
     return output / "bohr-smoke.toml"
 
 

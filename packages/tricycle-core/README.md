@@ -111,3 +111,34 @@ uv run --frozen --all-packages pytest packages/tricycle-core/tests
 ```
 
 开发约束见 [`docs/plugin-contract.md`](../../docs/plugin-contract.md)。
+
+## 共享不可变资产
+
+`asset_store` 将文件按 SHA-256 保存到调用方指定的项目级存储：`blobs/` 保存唯一字节，
+`manifests/` 记录树的路径、hash、大小和执行位，`trees/` 提供只读目录视图。同内容文件跨树
+共享 inode；发布前独立复制可变来源，修改 checkout 不会改变已冻结资产。读取时校验 hash，
+缺失或漂移直接失败，不回填当前源码、不自动刷新历史绑定。
+
+`put_file` / `put_tree` 返回可序列化引用；`externalize_tree` 用于结果目录的共享视图链接；新输入使用下述引用记录接口。
+`materialize_input` 将 `tricycle.asset-input/v1` 或 v2 的树引用、文件引用和可选 overlay 展开成独立的
+临时上传目录，拒绝越界与路径冲突。引用包含存储根路径，移动资产库时须显式迁移引用；
+不能只复制 run 后删除共享存储。当前无自动垃圾回收，任何仍被 run 引用的对象都应保留。
+
+资产树清单还绑定目录结构，包括空目录；新写入采用 `tricycle.asset-tree/v2`，
+既有 v1 运行引用仍可按原哈希读取。`materialize_directory` 将已核验的目录视图展开为
+独立可写执行副本；引用核验由调用方在展开前完成。
+
+
+## 运行记录与输入存储边界
+
+新 run 只长期保存请求/协议绑定、输入引用与哈希、执行状态、日志和结果。输入数据、
+划分、权重及 worker 交付树保存到共享资产库，不在 run 下保留输入实体或输入软链接。
+硬链接只用于资产库内部的本地去重；不可用时复制，不是调用方接口的要求。
+
+`freeze_inputs(directory, paths, store)` 先发布并校验 `input-assets.json`，再移除对应输入实体。
+`tricycle.asset-input/v2` 的 `trees` 按交付相对路径映射树引用，引用中的 `path` 选择树内目录；
+`files` 按交付相对路径映射文件引用，并记录执行位。v1 的树列表仍按根目录合并读取。
+`resolve_input` 供本地分析/准备按逻辑路径读取并校验输入；
+`materialize_input(manifest, None, destination)` 在执行/上传前展开独立可写副本，保留空目录及执行位。
+调用方负责临时目录生命周期。共享资产缺失或损坏时拒绝执行，不从当前源码或其他数据回填。
+历史 run 不自动改写或清理；资产清理必须考虑所有仍被引用的对象。

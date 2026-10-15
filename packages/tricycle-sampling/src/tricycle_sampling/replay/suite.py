@@ -24,9 +24,8 @@ from tricycle_sampling.replay import core_hours as replay_core_hours
 from tricycle_sampling.replay import cost_guidance as replay_cost_guidance
 from tricycle_sampling.replay import mae as replay_mae
 from tricycle_sampling.replay.campaign import (
-    PACKAGE_ROOT,
     ROOT,
-    check_hashes,
+    check_controller,
     prepare,
     read,
     stage_round,
@@ -41,7 +40,7 @@ VARIANTS = {
 }
 AGENT_VARIANTS = {
     **VARIANTS,
-    'cost-aware': {'name': replay_core_hours.NAME, 'feedback': True, 'review': True,
+    'intelligent': {'name': replay_core_hours.NAME, 'feedback': True, 'review': True,
                    'guidance': replay_cost_guidance.NAME},
 }
 
@@ -90,7 +89,7 @@ def prepare_suite(config_path: Path, directory: Path | None = None) -> Path:
         request = {**config, 'experiment_id': execution_id + '-' + variant,
                    'sampling_strategy': 'intelligent' if variant in AGENT_VARIANTS else variant,
                    'decision_protocol': protocol}
-        if variant == 'cost-aware':
+        if variant == 'intelligent':
             replay_mae.settings(request)
         path = root / 'configs' / f'{variant}.toml'
         path.parent.mkdir(exist_ok=True)
@@ -114,7 +113,7 @@ def prepare_suite(config_path: Path, directory: Path | None = None) -> Path:
             **({'shared_protocol': {key: frozen[key] for key in (
                 'sampling_experiment', 'fixed_seed', 'round_count', 'batch_size', 'private_hashes', 'assets_hashes')},
                 'sampling_protocol': (get_baseline_protocol(variant).to_dict() if variant in LITERATURE_BASELINE_STRATEGIES
-                                      else replay_cost_guidance.protocol() if variant == 'cost-aware'
+                                      else replay_cost_guidance.protocol() if variant == 'intelligent'
                                       else {'strategy': variant})}),
         })
         print(f'prepared {variant}', flush=True)
@@ -148,7 +147,7 @@ def verified_plan(root: Path) -> dict[str, Any]:
         experiment = Path(item['root'])
         if digest(experiment / 'experiment.json') != item['config_sha256']:
             raise ValueError('frozen experiment changed')
-        check_hashes(PACKAGE_ROOT, read(experiment / 'experiment.json')['controller_hashes'])
+        check_controller(experiment)
     return plan
 
 

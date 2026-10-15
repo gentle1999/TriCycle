@@ -66,7 +66,7 @@ select_experiment_candidates(
 )  # 返回 SamplingResult
 ```
 
-两者仅接受上述五个规范策略 ID。逐轮回放的 [baselines.py](src/tricycle_sampling/replay/baselines.py) 与整条轨迹 [trajectory_worker.py](src/tricycle_sampling/trajectory_worker.py) 均调用此接口。统一套件的 cost-aware 智能策略沿用采集表达式接口，共享同一主模型、候选空间、初始化、训练和评价流程。它使用版本化的覆盖/成本初始化提案、已揭示模型反馈和一次批次复核；参照由 [cost_guidance.py](src/tricycle_sampling/replay/cost_guidance.py) 生成，最终排序由智能体公式决定。
+两者仅接受上述五个规范策略 ID。逐轮回放的 [baselines.py](src/tricycle_sampling/replay/baselines.py) 与整条轨迹 [trajectory_worker.py](src/tricycle_sampling/trajectory_worker.py) 均调用此接口。统一套件的 intelligent 智能策略沿用采集表达式接口，共享同一主模型、候选空间、初始化、训练和评价流程。它使用版本化的覆盖/成本初始化提案、已揭示模型反馈和一次批次复核；参照由 [cost_guidance.py](src/tricycle_sampling/replay/cost_guidance.py) 生成，最终排序由智能体公式决定。
 
 ### 共同输入
 
@@ -207,3 +207,31 @@ uv run --frozen --all-packages pytest packages/tricycle-sampling/tests
 ```
 
 候选重复、预算超界、未知策略、非有限分数或不完整后验会使请求失败。基础选择 API 没有远程副作用；包内回放控制器的任务恢复见[统一实验说明](../../docs/mae-intelligent-sampling.md)。
+
+## 逐轮资产存储与传递
+
+Replay 配置的 `asset_store` 指定项目级不可变资产库，缺省为工作目录的
+`artifacts/task-assets`。固定 RxnResid runtime、先验结构、词表和私有数据仅保存唯一字节；
+实验的 `asset-references.json` 记录引用，run 中不再保留 `assets/`、`private/` 输入目录或软链接。
+
+每轮 CSV 与 worker 请求在临时目录生成后按 hash 入库；`input-assets.json` 引用完整交付内容，
+包括该轮输入、固定 runtime、评价数据和本轨迹上一轮 checkpoint，
+`input-assets-hash.json` 绑定该清单。run 中不再保留 `input/`，读取统一使用 `input_file`。
+worker 请求仍绑定最终完整输入的逐文件 hash。Bohr adapter 提交时临时展开完整输入，
+结束或失败后清理临时目录；当前 CLI 每个作业仍上传必要固定文件，不宣称跨作业远端缓存。
+
+结果核验后，`result/` 和 `download/` 同样使用共享存储，保留原始下载包、日志、checkpoint、
+原文件路径及逐文件校验记录；相同 checkpoint 在多个输出位置只占一份物理空间。
+恢复和审计同时核对共享引用、完整输入及上一轮模型链。默认拒绝源码漂移，不刷新旧实验绑定。
+仅在用户明确授权继续、逐项确认变更限于存储适配并验证输入字节等价后，可在实验目录
+写入独立的 `storage-compatibility.json` 审计回执：schema 为
+`tricycle.replay-storage-compatibility/v1`，记录原 `experiment_sha256`、`authorization`、
+`reason`、`evidence_path`/`evidence_sha256`，以及 `changes` 中每个原控制器路径的
+`before`/`after` 哈希。原配置和历史 manifest 保持不变；未列明的文件仍按原 hash 校验，
+后续漂移再次拒绝。该回执不适用于算法、数据、训练或评价协议变更。
+
+Worker 将训练临时文件放在 `work/round/`，下载选择器仅包含 `outputs/round/`。结果目录按明确清单
+发布：主模型权重一份、辅助模型权重、预测、指标、生成的配置和必要训练日志/摘要。
+上一轮上传权重、`refit-input.pt`、原始/预处理训练数据和主模型重复权重不进入结果目录。
+无新标签而复用上一轮模型时，worker 在 `output_references` 中记录输入权重的 hash，不回传权重；
+控制器核对同轨迹输入绑定后，在本地结果视图恢复该引用。失败时仍发布已有诊断日志。

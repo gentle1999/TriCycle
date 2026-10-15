@@ -16,6 +16,7 @@ from tricycle_bohrsubmit import (
     InMemoryBohrGateway,
     RescueRequest,
 )
+from tricycle_bohrsubmit.training_protocol import worker_input
 from tricycle_core import ExecutionContext, TaskStatus
 
 
@@ -58,7 +59,8 @@ class BohrSubmitTests(unittest.TestCase):
                 ExecutionContext(run_id="dpa-run"),
             )
             self.assertEqual(result.status, TaskStatus.PLANNED)
-            gjf = next((root / "run").glob("worker-*/**/*.gjf"))
+            inputs = worker_input(root / "run", "worker-000")
+            gjf = next(inputs.glob("*.gjf"))
             content = gjf.read_text(encoding="utf-8")
             self.assertIn("%chk=case_ts.", content)
             self.assertIn("%oldchk=case_ts.", content)
@@ -69,8 +71,8 @@ class BohrSubmitTests(unittest.TestCase):
                 config = tomllib.load(handle)
             self.assertEqual(config["run"]["workers"], 1)
             self.assertEqual(config["workflow"]["engine"], "dpa")
-            self.assertTrue(next((root / "run").glob("worker-*/dpa-berny.env")).is_file())
-            next((root / "run").glob("worker-*/work.sh")).write_text("exit 99\n")
+            self.assertTrue((inputs / "dpa-berny.env").is_file())
+            (root / "run/worker-000/work.sh").write_text("exit 99\n")
 
             rescue = BohrSubmitPlugin().rescue(
                 RescueRequest(
@@ -86,7 +88,7 @@ class BohrSubmitTests(unittest.TestCase):
                 rescue_config = tomllib.load(handle)
             self.assertEqual(rescue_config["workflow"]["engine"], "dpa")
             self.assertFalse((root / "rescue" / "submit-extra-args.txt").exists())
-            rescue_worker = next((root / "rescue").glob("worker-*/work.sh")).read_text()
+            rescue_worker = (worker_input(root / "rescue", "worker-000") / "work.sh").read_text()
             self.assertIn("DPA requires CUDA; CPU fallback is disabled", rescue_worker)
             self.assertNotIn("exit 99", rescue_worker)
 

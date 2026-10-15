@@ -67,4 +67,5 @@ def test_analysis_cli_help_does_not_load_plotting_or_model_dependencies(tmp_path
         capture_output=True,
         check=True,
     )
-    assert "{render,distributions}" in completed.stdout
+    for command in ("boxplot", "render", "distributions", "collection-distributions"):
+        assert command in completed.stdout

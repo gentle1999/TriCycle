@@ -83,7 +83,7 @@ RxnResid 按环境配置使用指定源码并继承镜像环境；两种 Chempro
 发布结果的 `manifest.json` 使用 `backend.sha256` 记录计算来源。缺失该字段或携带旧哈希字段均报错；
 核验不改写已有结果，也不要求其记录的哈希等于当前后端哈希。
 
-`prepare_modelling` 使用包内当前后端及其完整性绑定。公共设置、方法选择及派生输入校验只记录在一份 `run.toml` 中，数据与统一划分各一份；不另写 request/source/commands/scope/preflight/integrity 摘要。原生 snapshot/split/bundle 文件只在执行准备目录派生，供当前 runner 使用，不作为另一套模型定义或正式结果。
+`prepare_modelling` 使用包内当前后端及其完整性绑定。公共设置、方法选择及派生输入校验只记录在一份 `run.toml` 中，数据与统一划分通过共享资产引用保存；不另写 request/source/commands/scope/preflight/integrity 摘要。原生 snapshot/split/bundle 文件只在执行准备目录派生，供当前 runner 使用，不作为另一套模型定义或正式结果。
 
 `tricycle_sar.submission` 使用 `records.compact_tasks` 提取相同字段，包括嵌套配置与哈希表。请求只包含 `task_defaults` 和逐 fold/seed/round 的 `task_specs`；完整逐折 TOML 在 Bohr staging 派生。`tricycle_sar.preparation` 统一调用包内方法装配 CPU、分子、原生及补充模型；调用方直接使用包内接口，`tools/` 中的 SAR Python 薄转发已移除。
 
@@ -108,7 +108,7 @@ Python API 对应 `group_config=Path(...)`，配置提供 `project_id` 与 `job_
 
 模型 smoke 使用各准备模块的 `--include-smoke`；RxnResid/ReactionT5 的前向与反向 probe 使用 `python -m tricycle_sar.preparation.smoke`。probe 和环境检查直接交付共享执行入口，以 Bohr staging 的 `__bohr_task_script.sh` 文件名记录输入哈希，不调用要求完整预测表的训练结果收集器。
 
-环境检查先生成完整、可独立上传的目录；固定资产在本地校验，执行时使用同一个初始化引擎：
+环境检查先生成输入引用与提交请求；固定资产在本地校验，上传时临时展开，执行时使用同一个初始化引擎：
 
 ```bash
 uv run --all-packages python -m tricycle_sar.preparation.environment --model rxnresid --out-dir /path/to/environment-inputs --group-config /path/to/group.toml
@@ -308,3 +308,36 @@ make check
 
 操作边界见 [`.agents/skills/sar-infer/SKILL.md`](../../.agents/skills/sar-infer/SKILL.md) 以及
 对应的 train/finetune skill。
+
+采样 runtime 只交付 RxnResid 的已校验方法及所需资产。staging 生成当前后端的单模型目录投影，
+保留原 method ID、文件 hash、源码、环境与训练参数；不交付其他模型的 tokenizer、源码归档或权重。
+该目录是 worker 交付产物，不是另一份维护中的后端定义。跨 run 的资产去重由 core 的资产库负责，
+采样控制器记录共享引用，提交 adapter 只在上传期间展开它们。
+
+所有 SAR 后端的 benchmark 工作区、单模型准备目录和 batch `common/` 使用
+`artifacts/task-assets` 内容寻址资产库；相同数据、源码、tokenizer 和固定权重跨 fold/run
+共享文件，准备目录仅保留 `input-assets.json` 与请求记录，不保留输入目录软链接。batch 的完整输入引用记录在
+`batch.toml.input_assets`，提交前同时校验方法、输入和共享资产。
+benchmark 的 dataset、splits 和 workspace 通过 `tricycle_core.asset_store.resolve_input` 读取；
+分析与结果发布保留原始数据/划分哈希，不再直接读取 run 下的输入路径。
+`results prepare` 返回 `run_dir` 与 `input_assets_manifest`；命令中的路径相对于展开后的执行目录。
+内部执行器调用 `tricycle_sar.delivery.materialize` 将记录展开到自行管理的临时目录。
+Bohr adapter 只在上传期间展开独立可写输入并清理临时目录。内网或本地执行器先调用
+`tricycle_sar.delivery.materialize(prepared, disposable)`，再传送或执行该临时目录，
+避免传送指向本机资产库的符号链接；执行结束仅保存结果并清理临时输入。
+当前 Bohr CLI 仍需逐作业上传必需资产，这不等于远端跨作业缓存。
+
+worker 的 `results/` 仅收集合并预测、指标、状态和诊断。`retain_checkpoint=true`
+按各模型 runner 的最终保存路径选择新模型：经典模型的 `model.joblib`，MolCLR/UAM/
+ReactionT5/RXNGraphormer 的 `best.pt`，RxnResid 的 `checkpoint.pt`，Chemprop 的
+`train/model_*/best.pt`，以及 T5Chem 最终模型与配套 tokenizer/config。
+不按文件扩展名递归归档；上传权重、refit 输入、预处理数据、优化器和中间 checkpoint
+不属于下载结果。未请求的模型/折不会被本任务新收集。
+
+原生 `sar.train/finetune/infer` 必须声明相对 `--output`，且与上传输入及运行源码目录分离。
+原生计算先写临时工作目录，再把新 checkpoint、预测和诊断发布到声明的结果路径；
+下载选择器固定为该结果路径与 `worker.log`，不会回传 `job-inputs/` 或运行资产。
+
+已完成任务的 `modelling_benchmark.collect` 使用 `check_data` 核对冻结数据/划分及输入哈希，
+随后校验全模型五折预测的覆盖、行身份、目标与有限指标；科学评估不要求当前后端仍与历史
+执行版本相同。用于准备/执行的 `check` 仍须校验精确方法与资产绑定，不能用结果核验替代它。

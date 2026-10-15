@@ -25,6 +25,7 @@ from .archives import validate_archive as _validate_archive
 from .config import flatten_sections, load_toml
 from .gateway import BohrWorkflowGateway
 from .models import validate_chemistry_resources
+from .training_protocol import worker_input
 
 SUBMIT_FIELDS = ("worker", "tasks", "job_id", "job_name", "status", "input_dir")
 STATUS_FIELDS = (
@@ -116,7 +117,8 @@ def job_for_row(run_dir: Path, row: dict[str, str], *, job_group_id: str | None 
     input_dir = row.get("input_dir", "")
     if not input_dir:
         raise InvalidRequestError(f"submit row has no input_dir: {worker}")
-    is_dpa = (run_dir / worker / "work.sh").is_file() and (run_dir / worker / "dpa-berny.env").is_file()
+    source = worker_input(run_dir, worker)
+    is_dpa = (source / "work.sh").is_file() and (source / "dpa-berny.env").is_file()
     log_file = str(config.get("log_file", "worker.log"))
     command = f"bash {'work.sh' if is_dpa else 'run_worker.sh'} > {log_file} 2>&1"
     dataset_paths = _run_list(config, "dataset_paths")
@@ -141,10 +143,18 @@ def job_for_row(run_dir: Path, row: dict[str, str], *, job_group_id: str | None 
         "dataset_paths": dataset_paths,
         "extra_submit_args": extra_submit_args,
     }
+    manifest = run_dir / worker / "input-assets.json"
+    if manifest.is_file():
+        expected = load_toml(run_dir / "batch.toml").get("input_assets", {}).get(worker)
+        value = json.loads(manifest.read_text())
+        if value != {"schema": "tricycle.asset-input/v1", "trees": [expected], "files": {}}:
+            raise InvalidRequestError("Worker input manifest differs from batch record")
+        parameters.pop("input_directory")
+        parameters["input_assets_manifest"] = str(manifest)
     input_artifact = Artifact(
         artifact_id=f"{run_dir.name}-{worker}-input",
-        location=input_dir,
-        kind="directory",
+        location=str(manifest) if manifest.is_file() else input_dir,
+        kind="manifest" if manifest.is_file() else "directory",
     )
     return BohrJobSpec(
         name=row.get("job_name", "") or f"{config.get('job_prefix', run_dir.name)}-{worker}",

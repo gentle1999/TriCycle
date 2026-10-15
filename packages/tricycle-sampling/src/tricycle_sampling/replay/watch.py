@@ -10,8 +10,9 @@ from typing import Any
 
 from tricycle_sampling.replay.campaign import ReplayGateway, check_hashes, digest, read, save, tick
 from tricycle_sampling.replay.report import update as update_reports
-from tricycle_sampling.replay.suite import AGENT_VARIANTS as VARIANTS
 from tricycle_sampling.replay.suite import status, verified_plan
+
+from .inputs import input_file, verify_inputs
 
 
 def validate_recovery(directory: Path, initial: dict[str, Any], record: Path) -> None:
@@ -51,16 +52,15 @@ def validate_recovery(directory: Path, initial: dict[str, Any], record: Path) ->
             raise ValueError('recovery evaluation ancestry differs')
         if index == archived['round'] and read(current / 'reveal.json')['new_ids'] != archived['new_ids']:
             raise ValueError('archived recovery additions differ from the recorded reveal')
-        check_hashes(current / 'input', read(current / 'input-hashes.json'))
-        request = read(current / 'input/request.json')
+        request = read(input_file(current, "request.json"))
         if request['round_index'] != index:
             raise ValueError('recovery worker round differs')
-        check_hashes(current / 'input', request['input_hashes'])
+        verify_inputs(current)
         worker = read(current / 'result/worker-report.json')
-        if worker['request_sha256'] != digest(current / 'input/request.json'):
+        if worker['request_sha256'] != digest(input_file(current, "request.json")):
             raise ValueError('recovery worker request binding differs')
         check_hashes(current / 'result', worker['outputs'])
-        if index and digest(current / 'input/previous.pt') != digest(
+        if index and digest(input_file(current, 'previous.pt')) != digest(
                 directory / f'round-{index-1:04d}' / 'result/checkpoint.pt'):
             raise ValueError('recovery checkpoint belongs to a different trajectory')
         if index < initial['round']:
@@ -82,7 +82,7 @@ def watch_seed(
     gateway: ReplayGateway | None = None,
 ) -> dict[str, Any]:
     plan = verified_plan(root)
-    if variant not in VARIANTS or seed not in range(5):
+    if variant not in {item["variant"] for item in plan["experiments"]} or seed not in range(5):
         raise ValueError("invalid suite trajectory")
     experiment = Path(next(e["root"] for e in plan["experiments"] if e["variant"] == variant))
     directory = experiment / f"seed-{seed:02d}"
@@ -132,7 +132,7 @@ def watch_seed(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--variant", choices=VARIANTS, required=True)
+    parser.add_argument("--variant", required=True)
     parser.add_argument("--seed", type=int, choices=range(5), required=True)
     parser.add_argument("--recovery-record", type=Path)
     parser.add_argument("--live", action="store_true")

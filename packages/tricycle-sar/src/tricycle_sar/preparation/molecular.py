@@ -6,8 +6,10 @@ import argparse
 import shutil
 from pathlib import Path
 
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import load_toml
 
+from tricycle_sar.delivery import freeze
 from tricycle_sar.modelling_benchmark import check, run_models
 from tricycle_sar.submission import write_bohr_request
 from tricycle_sar.training import (
@@ -36,7 +38,7 @@ def prepare(
         for entry in record["files"]:
             if entry["external"]:
                 relative = entry["path"].removeprefix(prefix)
-                source = run / "workspace" / relative
+                source = resolve_input(run, "workspace") / relative
                 if not source.is_file() or digest(source) != entry["sha256"]:
                     raise ValueError(f"missing or changed {model} asset: {relative}")
                 external[model].append((source, relative))
@@ -51,7 +53,7 @@ def prepare(
         for relative in (config["dataset"], config["splits"]):
             destination = bundle / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(run / "workspace" / relative, destination)
+            shutil.copy2(resolve_input(run, "workspace") / relative, destination)
         for source, relative in external[model]:
             destination = bundle / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -75,6 +77,7 @@ def prepare(
                 group_config=group_config,
             )
 
+        freeze(directory, (bundle, directory / "protocol-runtime"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)

@@ -29,6 +29,48 @@ def write(path: Path, rows: list[dict]) -> None:
         write_delimited(path, list(rows[0]), rows, project_fields=False)
 
 
+
+def checkpoint_files(model: str, fold_root: Path) -> list[Path]:
+    """Select the final trained artifact locations owned by each current runner."""
+    if model.startswith("fingerprint_"):
+        names = ("model.joblib",)
+    elif model in {"uam", "molclr", "reactiont5", "rxngraphormer"}:
+        names = ("best.pt",)
+    elif model == "rxnresid":
+        names = ("checkpoint.pt",)
+    elif model.startswith("chemprop_"):
+        names = tuple(p.relative_to(fold_root).as_posix()
+                      for p in (fold_root / "train").glob("model_*/best.pt"))
+    elif model == "t5chem":
+        names = ("model/pytorch_model.bin", "model/model.safetensors", "model/config.json",
+                 "model/tokenizer.json", "model/tokenizer_config.json", "model/special_tokens_map.json",
+                 "simple_vocab.txt")
+    else:
+        raise ValueError(f"No SAR result contract for model: {model}")
+    files = [fold_root / name for name in names if (fold_root / name).is_file()]
+    for path in files:
+        if path.is_symlink() or not path.resolve().is_relative_to(fold_root.resolve()):
+            raise ValueError("Checkpoint output points outside the trained fold")
+    return files
+
+
+def export_diagnostics(bundle: Path, result: Path, models: list[str], fold: int) -> None:
+    names = ("training.json", "training_summary.json", "training_protocol.json", "history.json",
+             "resolved_run.json", "accelerator-runtime.json", "native-runtime.json", "train.log")
+    for root in (bundle / "model-runs", bundle / "smoke-results"):
+        for directory in root.rglob(f"fold_{fold}"):
+            if not any(model in directory.relative_to(root).parts for model in models):
+                continue
+            files = [directory / name for name in names if (directory / name).is_file()]
+            files += list((directory / "logs").glob("*.log"))
+            for path in files:
+                if path.is_symlink() or not path.resolve().is_relative_to(directory.resolve()):
+                    raise ValueError("Diagnostic output escapes trained fold")
+                target = result / "diagnostics" / path.relative_to(bundle)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+
+
 def collect(bundle: Path, task_path: Path, result: Path, exit_code: int) -> None:
     task = tomllib.loads(task_path.read_text())
     models = task.get("models", [task.get("model")])
@@ -112,21 +154,40 @@ def collect(bundle: Path, task_path: Path, result: Path, exit_code: int) -> None
             **runtime_fields,
         }
     write(result / "status.csv", [status[key] for key in sorted(status)])
+    export_diagnostics(bundle, result, models, fold)
     if task.get("retain_checkpoint", False):
-        allowed = {".pt", ".pth", ".ckpt", ".safetensors", ".joblib", ".json", ".yaml", ".yml"}
-        for checkpoint in (bundle / "model-runs").rglob("*"):
-            if (
-                checkpoint.is_file()
-                and checkpoint.suffix in allowed
-                and f"fold_{fold}" in checkpoint.parts
-            ):
-                target = result / "checkpoints" / checkpoint.relative_to(bundle / "model-runs")
+        root = bundle / "model-runs"
+        for directory in root.rglob(f"fold_{fold}"):
+            model = next((name for name in models if name in directory.relative_to(root).parts), None)
+            if model is None:
+                continue
+            for checkpoint in checkpoint_files(model, directory):
+                target = result / "checkpoints" / checkpoint.relative_to(root)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(checkpoint, target)
     for path in result.iterdir():
-        if path.name in {"predictions.csv", "metrics.csv", "status.csv", "checkpoints"}:
+        if path.name in {"predictions.csv", "metrics.csv", "status.csv", "checkpoints", "diagnostics"}:
             continue
-        if path.is_dir():
+        if path.is_file() and (path.suffix == ".log" or path.name.endswith((
+            "-state.toml", "-pip-check.txt", "-pip-freeze.txt", "-environment-smoke.toml"
+        ))):
+            target = result / "diagnostics" / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(path, target)
+        elif path.is_dir() and path.name == "stages":
+            target = result / "diagnostics/stages"
+            for diagnostic in path.iterdir():
+                if diagnostic.is_file() and diagnostic.suffix in {".log", ".toml"}:
+                    target.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(diagnostic, target / diagnostic.name)
+            shutil.rmtree(path)
+        elif path.is_dir():
+            if path.name == f"{task.get('model', models[0])}-fold-{fold}":
+                diagnostic = path / "accelerator.toml"
+                if diagnostic.is_file():
+                    target = result / "diagnostics" / path.name
+                    target.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(diagnostic, target / diagnostic.name)
             shutil.rmtree(path)
         else:
             path.unlink()

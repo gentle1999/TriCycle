@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from tricycle_bohrsubmit.models import BatchRequest
 from tricycle_bohrsubmit.staging import stage_batch
+from tricycle_bohrsubmit.training_protocol import worker_input
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.io import file_sha256
 from tricycle_core.toml import load_toml
 
@@ -44,7 +46,7 @@ print(json.dumps({{'request': str(request)}}))
     assert "tricycle_sampling.acquisition_worker" in (tmp_path / "acquisition/run.sh").read_text()
     subprocess.run(["bash", "-n", str(tmp_path / "acquisition/run.sh")], check=True)
     assert (tmp_path / "accelerator/scripts/sar_accelerator_exec.py").is_file()
-    assert (tmp_path / "probe/common/probe_bundle/scripts/sar_additional_probe.py").is_file()
+    assert (resolve_input(tmp_path / "probe", "common/probe_bundle/scripts/sar_additional_probe.py")).is_file()
 
 
 def test_inventory_preparation_stages_the_package_diagnostic(tmp_path: Path) -> None:
@@ -53,7 +55,7 @@ def test_inventory_preparation_stages_the_package_diagnostic(tmp_path: Path) -> 
     request_path = inventory_preparation.prepare(config, tmp_path / "inventory")
     staged = stage_batch(BatchRequest.from_mapping(load_toml(request_path)),
                          run_id="inventory", workdir=tmp_path, dry_run=True)
-    probe = staged.run_dir / "worker-000/common/inventory.py"
+    probe = worker_input(staged.run_dir, "worker-000") / "common/inventory.py"
     assert probe.is_file()
     result = subprocess.run([sys.executable, "-I", "-S", str(probe), "--help"],
                             cwd=tmp_path, capture_output=True, text=True, check=True)
@@ -79,7 +81,7 @@ def test_smoke_inputs_survive_bohr_task_script_staging(tmp_path: Path, probe: bo
         workdir=tmp_path,
         dry_run=True,
     )
-    worker = staged.run_dir / "worker-000"
+    worker = worker_input(staged.run_dir, "worker-000")
     task = load_toml(worker / (worker / "manifest.txt").read_text().strip())
     hashes = task["input_hashes"]
     assert "__bohr_task_script.sh" in hashes

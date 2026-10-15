@@ -14,12 +14,15 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from tricycle_core.asset_store import resolve_tree
 from tricycle_core.io import file_sha256 as digest
 from tricycle_core.io import write_json as save
 
 from tricycle_sampling import AgentAuthoredAcquisitionSamplingStrategy, Candidate
 from tricycle_sampling.replay.campaign import check_hashes
 from tricycle_sampling.replay.suite import verified_plan
+
+from .inputs import input_file, verify_inputs
 
 
 def audit_decision(selection_path: Path) -> dict[str, Any]:
@@ -147,12 +150,12 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
         directory = Path(experiment['root'])
         config = json.loads((directory / 'experiment.json').read_text())
         try:
-            check_hashes(directory / 'assets', config['assets_hashes'])
-            check_hashes(directory / 'private', config['private_hashes'])
+            check_hashes(resolve_tree(config["asset_references"]["assets"]), config['assets_hashes'])
+            check_hashes(resolve_tree(config["asset_references"]["private"]), config['private_hashes'])
         except (OSError, ValueError) as exc:
             failures.append({'experiment': str(directory), 'error': str(exc)})
             continue
-        with (directory / 'private/pair-pool.csv').open() as handle:
+        with (resolve_tree(config["asset_references"]["private"]) / "pair-pool.csv").open() as handle:
             pool_ids = {row['pair_id'] for row in csv.DictReader(handle)}
         for seed in sorted(directory.glob('seed-*')):
             state = json.loads((seed / 'state.json').read_text())
@@ -169,9 +172,9 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
                     if not 0 <= index < config['round_count']:
                         raise ValueError('evaluation round exceeds frozen experiment budget')
                     seen_indices.append(index)
-                    check_hashes(current / 'input', json.loads((current / 'input-hashes.json').read_text()))
-                    request_path = current / 'input/request.json'
+                    request_path = input_file(current, "request.json")
                     request = json.loads(request_path.read_text())
+                    verify_inputs(current)
                     if request['round_index'] != index:
                         raise ValueError('worker request round mismatch')
                     worker = json.loads((current / 'result/worker-report.json').read_text())
@@ -198,9 +201,9 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
                         raise ValueError('initial set differs from frozen matched set')
                     if point['selected_ids'] != reveal['selected_ids']:
                         raise ValueError('evaluation selected set differs from reveal')
-                    if index == 0 and (current / 'input/previous.pt').exists():
+                    if index == 0 and 'previous.pt' in request['input_hashes']:
                         raise ValueError('initial model must start from scratch')
-                    if index and digest(current / 'input/previous.pt') != previous_checkpoint:
+                    if index and digest(input_file(current, 'previous.pt')) != previous_checkpoint:
                         raise ValueError('previous checkpoint does not belong to this trajectory')
                     checkpoint = digest(current / 'result/checkpoint.pt')
                     if request['reuse_checkpoint']:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_core.training_protocol import (
     expand_training_config,
@@ -88,12 +89,9 @@ def experiment(tmp_path: Path) -> Any:
 def test_new_run_uses_pinned_methods_and_one_record(experiment: Any, tmp_path: Path) -> None:
     config, _, _ = experiment
     run = prepare_modelling(config, run_dir=tmp_path / "run")
-    assert {p.name for p in run.iterdir()} == {
-        "run.toml",
-        "dataset.csv",
-        "splits.csv",
-        "workspace",
-    }
+    assert (run / "input-assets.json").is_file()
+    assert not any((run / name).exists() for name in ("dataset.csv", "splits.csv", "workspace"))
+    assert not any(path.is_symlink() for path in run.rglob("*"))
     state = load_toml(run / "run.toml")
     assert state["models"] == ["fingerprint_rf"]
     assert state["methods"]["fingerprint_rf"].startswith("fingerprint_rf/train/")
@@ -132,8 +130,8 @@ def test_benchmark_template_prepares_explicit_data_and_existing_splits(
 
     run = prepare_modelling(config, run_dir=tmp_path / "bound-run")
     check(run)
-    assert (run / "dataset.csv").read_bytes() == dataset.read_bytes()
-    assert (run / "splits.csv").read_bytes() == splits.read_bytes()
+    assert (resolve_input(run, "dataset.csv")).read_bytes() == dataset.read_bytes()
+    assert (resolve_input(run, "splits.csv")).read_bytes() == splits.read_bytes()
     assert load_toml(run / "run.toml")["models"] == ["fingerprint_rf"]
 
 
@@ -260,11 +258,11 @@ def test_published_input_preparation_uses_current_method(
     assert recorded != expected
     result = prepare_training(archive, model, fold, tmp_path / "inputs")
     assert result["method_id"] == expected
-    output = Path(result["input_dir"])
-    task = load_toml(output / result["task"])
+    output = Path(result["run_dir"])
+    task = load_toml(resolve_input(output, result["task"]))
     assert task["fold"] == fold
     assert file_sha256(
-        output / "common" / task["bundle_name"] / "data/splits/ground-truth-5fold/assignments.csv"
+        resolve_input(output, "common") / task["bundle_name"] / "data/splits/ground-truth-5fold/assignments.csv"
     ) == file_sha256(archive / "data/splits.csv")
 
 
@@ -366,14 +364,14 @@ def test_training_inputs_use_method_and_original_split_without_upload_extras(
         0,
         tmp_path / "input",
     )
-    output = Path(result["input_dir"])
+    output = Path(result["run_dir"])
     assert file_sha256(
-        output / "common/training_bundle/data/splits/ground-truth-5fold/assignments.csv"
+        resolve_input(output, "common/training_bundle/data/splits/ground-truth-5fold/assignments.csv")
     ) == file_sha256(archive / "data/splits.csv")
     assert not list(output.glob("common/sar_model_envs/init_*.sh"))
     assert not (output / "provenance").exists()
-    assert load_toml(output / result["task"])["fold"] == 0
-    manifest = json.loads((output / "common/training_bundle/training-bundle.json").read_text())
+    assert load_toml(resolve_input(output, result["task"]))["fold"] == 0
+    manifest = json.loads((resolve_input(output, "common/training_bundle/training-bundle.json")).read_text())
     assert manifest["dataset_sha256"] == file_sha256(archive / "data/dataset.csv")
 
 

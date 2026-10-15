@@ -23,10 +23,13 @@ prepare 仅生成本地产物，不读凭据或访问网络；核验 suite/prefl
 未知真实成本不用于采集；核时节点不是硬费用保证。配置指定的固定代理辅助面板反馈不等于主模型全池 GT 误差。种子启动门槛读取 `rollout.pilot_evaluations`；不按评价误差淘汰策略。
 
 全部任务复用一个持久 Bohr 任务组；故障按 seed 隔离，保留 inflight、已接受决策和回执，
-不得盲目重提。源码、配置、数据或 worker hash 不匹配时拒绝接续，旧实验不刷新 hash 迁移。
+不得盲目重提。源码、配置、数据或 worker hash 不匹配时默认拒绝接续，旧实验不刷新 hash 迁移。
+用户明确授权存储适配后继续时，先比对与原 hash 一致的资产源码、验证输入字节等价，
+再按包 README 的 `storage-compatibility.json` 契约记录独立审计回执。
+仅允许已审核的存储兼容变化，保留原配置/历史 hash，不扩大科学协议或预算。
 可选智能策略由 `replay.suite.AGENT_VARIANTS` 定义，比较集合以当前配置为准；任务数、审计
 与绘图布局须匹配实际配置。seed-watch 按所选策略监督，公式恢复按各工具的协议范围执行。
-智能 DSL 审计支持 cost-aware 参照与表达式，不能替代五条确定性基线的完整数值验收；
+智能 DSL 审计支持 intelligent 参照与表达式，不能替代五条确定性基线的完整数值验收；
 平台审计单页上限也须检查。详见
 [统一实验与恢复指南](../../../docs/mae-intelligent-sampling.md)、
 [方法与文章](../../../docs/sampling-baselines.md)和
@@ -171,7 +174,7 @@ Bohr 原始下载报告位于 `downloads/download-results.tsv`；编排器将其
 ### 单空间对照套件
 
 `python -m tricycle_sampling.replay.suite prepare --config configs/dpa-unified-sampling-suite.toml`
-在本地准备五条文献基线与 cost-aware 智能策略的统一套件。`suite.json` 记录根目录、配置 hash 和初始集合，
+在本地准备五条文献基线与 intelligent 智能策略的统一套件。`suite.json` 记录根目录、配置 hash 和初始集合，
 `preflight.json` 记录全部首轮输入准备与初始集合一致性。旧的硬编码 DPA 一次性准备脚本已移除。
 用户授权启动后，使用包内 suite 的 `watch --live --allow-submit` 或 `service-file` 入口。
 
@@ -213,3 +216,18 @@ rits-zero-shot-da 与 autode 的 aleatoric-uncertainty、predictive-uncertainty 
 静态虚线、智能实线，误差带为样本标准差；未完成轨迹逐点记录可用 seed 数，
 覆盖不足完整 seed 集合时按绘图接口标记，n=1 不画带。使用最新已完成且预算内 checkpoint，不超出实际成本覆盖，
 不外推；下排只汇总配对 seed 差值。固定辅助面板 MAE 与全池 GT MAE 分开报告。
+
+### 共享资产与精简输入
+
+新 replay 的 `asset_store` 指向项目级共享存储；未设置时使用当前工作目录下
+`artifacts/task-assets`。检查 `asset-references.json`、逐轮 `input-assets.json` 及其绑定，
+用当前控制器/adapter 提交；新 run 不保留 `assets/`、`private/`、逐轮 `input/` 或它们的软链接。
+`input-assets.json` 绑定该轮完整交付内容，本地读取使用 `input_file`，adapter 上传时临时展开。
+提交会临时组装完整输入并自动清理。恢复/审计核对共享资产与 checkpoint 链；缺失或变更时停止，
+不得改 hash 或借用另一轨迹模型。下载和结果通过 hash 共享保存，移动/归档 run 时须同时保留其引用的
+资产库。旧实验不刷新绑定；结构修改后按原科学协议准备新 run。
+
+采样下载仅选择 worker 的 `outputs/round/`；训练暂存目录与上传资产不属于结果。
+worker 按结果清单发布新权重、预测、指标和日志；复用上一轮权重时只返回绑定 hash 的
+`output_references`，控制器从该轨迹输入恢复本地引用，不再次下载同一模型。
+不要扩大 backward_files 到整个工作目录，也不要把 refit 输入权重或预处理数据加入结果清单。

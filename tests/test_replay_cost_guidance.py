@@ -130,7 +130,7 @@ def test_final_suite_has_one_agent_and_keeps_shared_main_inputs(tmp_path: Path) 
     config = tomllib.loads(path.read_text())
     assert [
         name for name in config["sampling_strategies"] if name in replay_mae_suite.AGENT_VARIANTS
-    ] == ["cost-aware"]
+    ] == ["intelligent"]
     requests = []
 
     def prepare(request_path: Path, root: Path) -> Path:
@@ -211,20 +211,20 @@ def test_matched_core_hour_differences_do_not_need_legacy_autonomous() -> None:
             "mae": mae,
             "rmse": mae,
         }
-        for variant in ("predictive-uncertainty", "cost-aware")
+        for variant in ("predictive-uncertainty", "intelligent")
         for seed in range(5)
         for index, (cost, mae) in enumerate(((10, 3), (30, 1)))
     ]
     for point in points:
-        if point["variant"] == "cost-aware":
+        if point["variant"] == "intelligent":
             point["mae"] -= 0.5
-    report = core.aggregate(points, ["predictive-uncertainty", "cost-aware"], [20])
+    report = core.aggregate(points, ["predictive-uncertainty", "intelligent"], [20])
     difference = report["paired_differences"][0]
     assert difference["reference"] == "predictive-uncertainty"
     assert difference["seed_deltas"] == [-0.5] * 5
 
 
-class CostAwareWorkerTests(MaeWorkerTests):
+class IntelligentSamplingWorkerTests(MaeWorkerTests):
     protocol_name = core.NAME
     protocol_guidance = guidance.NAME
     protocol_review = True
@@ -233,7 +233,7 @@ class CostAwareWorkerTests(MaeWorkerTests):
 def test_success_requires_all_baselines_and_all_preregistered_budgets() -> None:
     from tricycle_sampling.protocols import LITERATURE_BASELINE_STRATEGIES
 
-    variants = [*LITERATURE_BASELINE_STRATEGIES, "cost-aware"]
+    variants = [*LITERATURE_BASELINE_STRATEGIES, "intelligent"]
     points = [
         {
             "variant": variant,
@@ -244,7 +244,7 @@ def test_success_requires_all_baselines_and_all_preregistered_budgets() -> None:
             "unit": "kcal/mol",
             "role": "evaluation-only",
             "cumulative_sampling_cost_core_hours": cost,
-            "mae": (2 if variant == "cost-aware" else 3),
+            "mae": (2 if variant == "intelligent" else 3),
             "rmse": 4,
         }
         for variant in variants
@@ -257,7 +257,7 @@ def test_success_requires_all_baselines_and_all_preregistered_budgets() -> None:
     assert all(len(row["comparisons"]) == 5 for row in assessment["budgets"])
     changed = copy.deepcopy(points)
     for point in changed:
-        if point["variant"] == "cost-aware" and point["round_index"] == 1:
+        if point["variant"] == "intelligent" and point["round_index"] == 1:
             point["mae"] = 3
     assessment = core.aggregate(changed, variants, [20, 40])["intelligent_comparison"]
     assert assessment["status"] == "not-met"

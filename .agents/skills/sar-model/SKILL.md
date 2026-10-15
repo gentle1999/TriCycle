@@ -39,3 +39,19 @@ RxnResid 通用 train/refit/infer 与数据来源无关，使用请求提供的�
 离线统计与科研绘图使用根目录 [`analysis/`](../../../analysis/README.md) 的共用实现和环境，入口为 `python -m analysis.sar render|distributions`；`tricycle_sar results` 保留 verify/prepare/assets。项目包不导入分析代码。
 
 `sar.train/infer/finetune` 使用共享命令 builder，镜像和机器类型匹配后端。本地输入目录中的源码与固定归档一致；规划记录输入哈希，提交再次核验。单任务执行复用 `single_job.py` 与 `sampling_runtime` 的共享初始化和源码，缺失输入的 dry-run 计划不能直接提交。累计标签训练按全 train 划分选择 from-scratch 模式，预测按逐路径身份校验覆盖。
+
+准备目录仅记录固定资产的内容寻址引用，不保留输入目录视图，不手动复制或修改共享权重。
+Bohr adapter 自动展开临时上传输入；内网/本地执行先调用
+`tricycle_sar.delivery.materialize(prepared, disposable)` 校验并生成独立输入，
+不要直接上传符号链接或在共享视图内训练。worker 按模型最终产物白名单收集结果；
+`retain_checkpoint` 仅保留新生成的最终模型，不回传上传权重、原始/预处理训练数据或中间 checkpoint。
+原生单任务的相对 `--output` 必须与输入和源码目录分离，下载仅包含声明的结果路径及 worker 日志。
+
+
+### 输入与运行记录
+
+新准备目录通过 `input-assets.json` 引用共享资产，不保留数据、权重或执行输入目录软链接。
+`results prepare` 返回 `run_dir` 和 `input_assets_manifest`，不能把 run 目录直接上传。
+本地读取使用 `tricycle_core.asset_store.resolve_input`；内部执行器使用
+`tricycle_sar.delivery.materialize` 展开到临时目录，执行后清理；Bohr 提交由 adapter 自动展开。
+保持原始内容、协议与划分哈希，禁止为迁移存储而重新生成已有科学绑定。历史 run 不自动迁移或删除。

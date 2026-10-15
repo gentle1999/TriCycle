@@ -9,12 +9,13 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from tricycle_core import BohrJobSpec, load_dotenv
+from tricycle_core.asset_store import materialize_directory, materialize_input
 from tricycle_core.errors import IntegrationNotConfiguredError, InvalidRequestError, TriCycleError
 from tricycle_core.protocols import BohrGateway
 from tricycle_core.validation import validate_fields
@@ -527,6 +528,24 @@ class BohrCliGateway:
         return records
 
     def submit(self, job: BohrJobSpec) -> str:
+        manifest = job.parameters.get("input_assets_manifest")
+        if manifest:
+            with tempfile.TemporaryDirectory(prefix="tricycle-bohr-input-") as temporary:
+                destination = Path(temporary) / "input"
+                overlay = job.parameters.get("input_directory")
+                materialize_input(Path(str(manifest)), Path(str(overlay)) if overlay else None, destination)
+                parameters = {k: v for k, v in job.parameters.items() if k != "input_assets_manifest"}
+                parameters["input_directory"] = str(destination)
+                return self.submit(replace(job, parameters=parameters))
+        source = job.parameters.get("input_directory")
+        if source:
+            input_root = Path(str(source))
+            if input_root.is_symlink() or any(p.is_symlink() for p in input_root.rglob("*")):
+                with tempfile.TemporaryDirectory(prefix="tricycle-bohr-input-") as temporary:
+                    destination = Path(temporary) / "input"
+                    materialize_directory(input_root, destination)
+                    parameters = {**job.parameters, "input_directory": str(destination)}
+                    return self.submit(replace(job, parameters=parameters))
         if self.config.require_submit_name and not job.name.strip():
             raise InvalidRequestError("Bohr submit requires a stable job name")
         if not job.project_id or not job.machine_type:

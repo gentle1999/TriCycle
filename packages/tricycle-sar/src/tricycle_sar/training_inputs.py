@@ -20,6 +20,7 @@ from tricycle_core.training_protocol import (
 )
 
 from .benchmark import BenchmarkRequest, read_rows, sha256
+from .delivery import freeze
 
 
 def native_dataset(rows: list[dict], settings: dict) -> bytes:
@@ -210,12 +211,14 @@ def prepare_inputs(
         )
     task_path = Path(f"tasks/{model}-fold-{fold}.toml")
     dump_toml(output / task_path, task)
+    freeze(output, (output / "common", output / "tasks"))
     return {
         "status": "prepared",
         "model": model,
         "fold": fold,
         "method_id": method_id,
-        "input_dir": str(output),
+        "run_dir": str(output),
+        "input_assets_manifest": str(output / "input-assets.json"),
         "task": task_path.as_posix(),
         "command": ["bash", method["entrypoint"], task_path.as_posix()],
         "executor": method["executor"],

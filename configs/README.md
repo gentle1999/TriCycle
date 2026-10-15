@@ -6,7 +6,7 @@
 | --- | --- |
 | 插件能力请求 | `example-*.toml`；使用时填写本次输入、路径和资源 |
 | 单批候选选择 | `sampling-baselines/*.toml` |
-| 五基线与 cost-aware 逐轮比较 | `dpa-unified-sampling-suite.toml` |
+| 五基线与智能采样逐轮比较 | `dpa-unified-sampling-suite.toml` |
 | 五基线整条轨迹 worker | `rxnresid-matched-sampling.toml` |
 | 数据库四池导出 | `database-sampling-pools.toml` |
 | 当前固定数据空间 | `frozen-sampling-space.toml`，只维护这一份当前 pin |

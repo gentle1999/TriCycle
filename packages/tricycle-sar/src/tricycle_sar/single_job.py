@@ -17,6 +17,7 @@ from tricycle_core.toml import dump_toml, load_toml
 from tricycle_core.training_protocol import protocol_file_source
 
 from .backends import CATALOG, bind_native_training_mode, get_backend
+from .delivery import freeze
 from .sampling_runtime import binding, stage, verify, worker_launcher
 
 
@@ -69,6 +70,13 @@ def bind_request(request: BohrModelJobRequest, context: ExecutionContext) -> dic
         raise InvalidRequestError(
             "RxnResid training requires a fold and cannot use checkpoint refit"
         )
+    if "--output" not in command or command.index("--output") == len(command) - 1:
+        raise InvalidRequestError("SAR requires an explicit result output path")
+    output = Path(command[command.index("--output") + 1])
+    if output.is_absolute() or ".." in output.parts or not output.parts or output.parts[0] in {
+        "job-inputs", "job-work", "rxnresid", "sar-runtime", "worker.log", "task.toml", "worker.sh"
+    } or output.parts[0].startswith("tricycle-"):
+        raise InvalidRequestError("SAR result path must be separate from uploaded inputs/runtime")
     root = (context.workdir / str(request.input_directory)).resolve()
     assert request.code_artifact is not None
     source = (context.workdir / request.code_artifact.location).resolve()
@@ -87,6 +95,7 @@ def bind_request(request: BohrModelJobRequest, context: ExecutionContext) -> dic
         "input_hashes": hashes,
         "command": list(command),
         "mode": request.mode.value,
+        "result_path": output.as_posix(),
     }
 
 
@@ -120,6 +129,7 @@ def prepare(record: dict, output: Path) -> Path:
     dump_toml(output / "task.toml", {**record, "command": command})
     (output / "worker.sh").write_text(worker_launcher(module="tricycle_sar.single_job"))
     (output / "worker.sh").chmod(0o755)
+    freeze(output, tuple(output.iterdir()))
     return output
 
 
@@ -134,14 +144,34 @@ def run(request: Path) -> None:
     if task["mode"] == "train":
         command = list(bind_native_training_mode(tuple(command), cwd=inputs))
     command[:2] = [sys.executable, str(root / "rxnresid" / Path(command[1]).name)]
-    if "--output" in command:
-        index = command.index("--output") + 1
-        destination = (root / command[index]).resolve()
-        if not destination.is_relative_to(root):
-            raise ValueError("SAR outputs must remain in the worker directory")
-        command[index] = str(destination)
-    with (root / "worker.log").open("a") as log:
-        subprocess.run(command, cwd=inputs, stdout=log, stderr=subprocess.STDOUT, check=True)
+    index = command.index("--output") + 1
+    destination = (root / command[index]).resolve()
+    if not destination.is_relative_to(root) or destination == root:
+        raise ValueError("SAR outputs must remain in the worker directory")
+    work = root / "job-work" / ("predictions.csv" if task["mode"] == "infer" else "training")
+    work.parent.mkdir(parents=True, exist_ok=True)
+    command[index] = str(work)
+    try:
+        with (root / "worker.log").open("a") as log:
+            subprocess.run(command, cwd=inputs, stdout=log, stderr=subprocess.STDOUT, check=True)
+    finally:
+        if task["mode"] == "infer":
+            if work.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(work, destination)
+        else:
+            # Only native generated results; uploaded/refit weights and preprocessed data stay local.
+            for name in (
+                "checkpoint.pt", "history.json", "stage_histories.json", "training_summary.json",
+                "training_protocol.json", "refit_history.json", "refit_summary.json",
+                "test_metrics.json", "test_predictions.csv", "selection_predictions.csv",
+                "resolved_run.json", "split.json", "preprocessing_report.json",
+                "preprocessing_anomalies.csv",
+            ):
+                path = work / name
+                if path.is_file():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, destination / name)
 
 
 def main() -> None:

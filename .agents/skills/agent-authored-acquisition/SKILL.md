@@ -19,9 +19,9 @@ replay 的 `decision_protocol` 拒绝未知字段。`feedback`、`review` 使用
 
 通用 QM 轮次由 `exploration.round` 记录；历史标签回放由包内 `tricycle_sampling.replay.selection.select_round` 记录。它们共用采样与证据校验，不反向依赖另一套控制器。回放控制器已生成并校验结构证据时，模型审阅交付材料，无需再次执行结构工具。
 
-## 智能采样策略：cost-aware
+## 智能采样（Intelligent sampling）
 
-匹配套件比较五条文献基线与 cost-aware 智能采样。cost-aware 使用
+匹配套件比较五条文献基线与 intelligent 智能采样。intelligent 使用
 `autonomous-core-hours-mae-v1` 的核时目标，显式增加
 `guidance="coverage-cost-guided-v1"`，feedback/review 均为 true。
 

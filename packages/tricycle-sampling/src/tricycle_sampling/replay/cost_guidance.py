@@ -20,7 +20,7 @@ COST_EXPRESSION = "estimated_core_hours"
 
 def protocol() -> dict[str, Any]:
     return {
-        "strategy": "cost-aware", "protocol_id": NAME, "version": "1.0.0",
+        "strategy": "intelligent", "protocol_id": NAME, "version": "1.0.0",
         "origin": "TriCycle adaptive acquisition using structure coverage, calibrated costs and model feedback",
         "initial_expression": EXPRESSION,
         "cost_expression": COST_EXPRESSION,

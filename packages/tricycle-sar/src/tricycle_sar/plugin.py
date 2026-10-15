@@ -75,6 +75,7 @@ class SarPlugin(BohrModelPlugin):
         job_parameters.setdefault("uncertainty_fields", list(asset.uncertainty_fields))
         record = bind_request(request, context)
         job_parameters["sar_backend"] = record
+        job_parameters["backward_files"] = ["worker.log", record["result_path"]]
         bohr_job["machine_type"] = record["backend"]["environment"]["machine_type"]
         bohr_job["parameters"] = job_parameters
         return replace(
@@ -109,11 +110,12 @@ class SarPlugin(BohrModelPlugin):
         prepare(record, output)
         job.update(
             command=["bash", "worker.sh", "task.toml"],
-            input_artifacts=[Artifact("sar-worker", str(output), kind="directory").to_dict()],
+            input_artifacts=[Artifact("sar-worker-inputs", str(output / "input-assets.json"), kind="manifest").to_dict()],
             parameters={
-                **job["parameters"],
-                "input_directory": str(output),
+                **{key: value for key, value in job["parameters"].items() if key != "input_directory"},
+                "input_assets_manifest": str(output / "input-assets.json"),
                 "run_dir": str(output),
+                "backward_files": ["worker.log", record["result_path"]],
             },
         )
         prepared = replace(plan, parameters={**plan.parameters, "bohr_job": job})

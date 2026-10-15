@@ -9,8 +9,9 @@ from unittest.mock import Mock
 
 import pytest
 from tricycle_bohrsubmit.plugin import BohrSubmitPlugin
-from tricycle_bohrsubmit.training_protocol import validate_training_protocol
+from tricycle_bohrsubmit.training_protocol import validate_training_protocol, worker_input
 from tricycle_core import ExecutionContext
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_core.training_protocol import (
@@ -262,14 +263,18 @@ def test_batch_reuses_common_files_and_binds_inputs_once(
         },
     }
     assert not list(run.glob("worker-*/common/training-protocol.json"))
-    a, b = [run / f"worker-{i:03d}/common/classical_bundle/data/custom.csv" for i in range(2)]
-    assert (a.stat().st_ino == b.stat().st_ino) is not copy_fallback
+    a, b = [worker_input(run, f"worker-{i:03d}") / "common/classical_bundle/data/custom.csv" for i in range(2)]
+    assert a.read_bytes() == b.read_bytes()
+    if not copy_fallback:
+        assert a.stat().st_ino == b.stat().st_ino
     assert a.stat().st_ino != (common / "classical_bundle/data/custom.csv").stat().st_ino
     # Shared inputs remain independent of the source and are checked before remote effects.
+    assert not a.stat().st_mode & 0o222
+    a.chmod(0o644)  # Deliberate corruption is confined to this test's asset store.
     a.write_text("changed data")
     assert (common / "classical_bundle/data/custom.csv").read_text() == "one-row-snapshot"
     gateway = Mock()
-    with pytest.raises(InvalidRequestError, match="shared training input differs"):
+    with pytest.raises(InvalidRequestError, match="Shared worker input assets rejected"):
         BohrSubmitPlugin().submit_prepared(
             run, gateway, ExecutionContext("submit", tmp_path, False)
         )
@@ -309,10 +314,9 @@ def test_additional_preparation_stages_only_pinned_runtime(
     for entry in record["files"]:
         relative = entry["path"].removeprefix("common/")
         source = (
-            (directory / relative)
+            resolve_input(directory, relative)
             if relative.startswith("training_bundle/")
-            else directory
-            / "protocol-runtime"
+            else resolve_input(directory, "protocol-runtime")
             / ("worker.sh" if relative == "__bohr_task_script.sh" else relative)
         )
         assert file_sha256(source) == entry["sha256"]

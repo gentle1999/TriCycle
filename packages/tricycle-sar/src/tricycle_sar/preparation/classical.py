@@ -6,7 +6,10 @@ import argparse
 import shutil
 from pathlib import Path
 
+from tricycle_core.asset_store import resolve_input
+
 from tricycle_sar.classical_runner import MODELS
+from tricycle_sar.delivery import freeze
 from tricycle_sar.modelling_benchmark import check, run_models
 from tricycle_sar.submission import write_bohr_request
 from tricycle_sar.training import require_benchmark_protocol, stage_protocol_bundle
@@ -28,7 +31,7 @@ def prepare(
     ):
         destination = bundle / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(run / "workspace" / relative, destination)
+        shutil.copy2(resolve_input(run, "workspace") / relative, destination)
     stage_protocol_bundle(models[0], bundle)
     for mode in ("smoke", "train") if include_smoke else ("train",):
         rows = (
@@ -53,6 +56,7 @@ def prepare(
             group_config=group_config,
         )
 
+    freeze(output, (bundle, output / "protocol-runtime"))
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)

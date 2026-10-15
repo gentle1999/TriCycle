@@ -219,4 +219,7 @@ def prepare(config: Path, run_dir: Path | None = None, *, settings: dict | None 
             ),
         },
     )
+    from .delivery import freeze
+
+    freeze(destination, (destination / "dataset.csv", destination / "splits.csv"))
     return destination.resolve()

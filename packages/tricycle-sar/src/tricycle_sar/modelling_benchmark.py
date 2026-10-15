@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import dump_toml, load_toml
 
 from .benchmark import (
@@ -46,10 +47,10 @@ def validate_models(names: list[str]) -> list[str]:
 
 def native_inputs(run: Path, request: BenchmarkRequest, value: dict[str, Any]) -> None:
     numpy = importlib.import_module("numpy")
-    rows = read_rows(run / "dataset.csv")
+    rows = read_rows(resolve_input(run, "dataset.csv"))
     from .training_inputs import native_dataset
 
-    snapshot = run / "workspace/data/snapshots/ground-truth"
+    snapshot = resolve_input(run, "workspace/data/snapshots/ground-truth")
     dataset = snapshot / "dataset.csv"
     snapshot.mkdir(parents=True, exist_ok=True)
     dataset.write_bytes(native_dataset(rows, value["dataset"]))
@@ -87,9 +88,9 @@ def native_inputs(run: Path, request: BenchmarkRequest, value: dict[str, Any]) -
             "validation": {"status": "passed", "errors": [], "warnings": []},
         },
     )
-    split_root = run / "workspace/data/splits/ground-truth-5fold"
+    split_root = resolve_input(run, "workspace/data/splits/ground-truth-5fold")
     split_root.mkdir(parents=True)
-    assignments = read_rows(run / "splits.csv")
+    assignments = read_rows(resolve_input(run, "splits.csv"))
     row_indices = {r[request.row_id]: i for i, r in enumerate(rows)}
     arrays = {}
     fold_manifests = []
@@ -207,8 +208,8 @@ def prepare_modelling(
     dump_toml(run / "run.toml", state)
     native_inputs(run, request, value)
     workspace = run / "workspace"
-    # Worker-ready materialization is local to runs, never copied into result packages.
-    shutil.copy2(run / "splits.csv", workspace / "data/splits/ground-truth-5fold/assignments.csv")
+    # The generated workspace is published to shared storage before returning.
+    shutil.copy2(resolve_input(run, "splits.csv"), workspace / "data/splits/ground-truth-5fold/assignments.csv")
     for asset, relative in assets:
         target = workspace / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -230,6 +231,9 @@ def prepare_modelling(
     ]
     dump_toml(run / "run.toml", state)
     check(run)
+    from .delivery import freeze
+
+    freeze(run, (workspace,))
     return run
 
 
@@ -238,19 +242,19 @@ def run_models(run: Path) -> list[str]:
     return state["models"]
 
 
-def check(run: Path) -> dict[str, Any]:
-    """Audit source/input identity and every fold without Docker or training."""
+def check_data(run: Path) -> dict[str, Any]:
+    """Audit frozen data/splits independently of changes to executable backends."""
     state = load_toml(run / "run.toml")
     for entry in state["input_hashes"]:
-        path = run / entry["path"]
+        path = resolve_input(run, entry["path"])
         if not path.is_file() or sha256(path) != entry["sha256"]:
             raise ValueError(f"frozen artifact changed: {entry['path']}")
     for filename, key in (("dataset.csv", "dataset_sha256"), ("splits.csv", "splits_sha256")):
-        if state.get(key) and sha256(run / filename) != state[key]:
+        if state.get(key) and sha256(resolve_input(run, filename)) != state[key]:
             raise ValueError(f"frozen artifact changed: {filename}")
-    rows = read_rows(run / "dataset.csv")
+    rows = read_rows(resolve_input(run, "dataset.csv"))
     lookup = {r[state["row_id"]]: r for r in rows}
-    splits = read_rows(run / "splits.csv")
+    splits = read_rows(resolve_input(run, "splits.csv"))
     test_counts: Counter[str] = Counter()
     counts = []
     for fold in range(5):
@@ -270,6 +274,13 @@ def check(run: Path) -> dict[str, Any]:
         counts.append({"fold": fold, **dict(Counter(r["split"] for r in part))})
     if test_counts != Counter(lookup.keys()):
         raise ValueError("OOF test coverage is not exactly once")
+    return {"rows": len(rows), "fold_counts": counts}
+
+
+def check(run: Path) -> dict[str, Any]:
+    """Audit source/input identity and current executable methods before training."""
+    data = check_data(run)
+    state = load_toml(run / "run.toml")
     molecular_missing = {}
     from tricycle_core.training_protocol import resolve_training_registry, training_method
 
@@ -283,7 +294,7 @@ def check(run: Path) -> dict[str, Any]:
         for entry in method["files"]:
             if not entry["external"] or not entry["path"].startswith(prefix):
                 continue
-            asset = run / "workspace" / entry["path"].removeprefix(prefix)
+            asset = resolve_input(run, "workspace") / entry["path"].removeprefix(prefix)
             if not asset.is_file():
                 unavailable.append(str(asset))
             elif sha256(asset) != entry["sha256"]:
@@ -293,8 +304,7 @@ def check(run: Path) -> dict[str, Any]:
         "missing_molecular_assets": molecular_missing,
         "missing_reactiont5_assets": molecular_missing.get("reactiont5", []),
         "status": "local-input-check-passed",
-        "rows": len(rows),
-        "fold_counts": counts,
+        **data,
         "missing_rxngraphormer_assets": molecular_missing.get("rxngraphormer", []),
         "runtime_status": "not_checked; Docker images/GPU/weights require execution-host preflight",
         "training_started": any(
@@ -330,11 +340,11 @@ def compact_predictions(directory: Path) -> dict | None:
 
 def collect(run: Path, *, prediction_dir: Path | None = None) -> dict[str, Any]:
     """Fail closed on incomplete, duplicate, stale, or misaligned OOF predictions."""
-    check(run)
+    check_data(run)
     state = load_toml(run / "run.toml")
     source = {"models": run_models(run)}
-    rows = read_rows(run / "dataset.csv")
-    splits = read_rows(run / "splits.csv")
+    rows = read_rows(resolve_input(run, "dataset.csv"))
+    splits = read_rows(resolve_input(run, "splits.csv"))
     summary = {}
     oof = []
     compact = compact_predictions(prediction_dir or run)
@@ -353,9 +363,9 @@ def collect(run: Path, *, prediction_dir: Path | None = None) -> dict[str, Any]:
                 command = proof["command"]
                 if (
                     proof["dataset_sha256"]
-                    != sha256(run / "workspace/data/snapshots/ground-truth/dataset.csv")
+                    != sha256(resolve_input(run, "workspace/data/snapshots/ground-truth/dataset.csv"))
                     or proof["split_sha256"]
-                    != sha256(run / "workspace/data/splits/ground-truth-5fold/manifest.json")
+                    != sha256(resolve_input(run, "workspace/data/splits/ground-truth-5fold/manifest.json"))
                     or proof["fold"] != fold
                     or proof["evaluation_split"] != "test"
                     or command[command.index("--target") + 1] != state["target"]
@@ -421,8 +431,8 @@ def publish_results(run: Path, output: Path, *, prediction_dir: Path | None = No
             raise ValueError("Unknown method override")
         bindings[key] = row["method_id"]
     return publish(
-        run / "dataset.csv",
-        run / "splits.csv",
+        resolve_input(run, "dataset.csv"),
+        resolve_input(run, "splits.csv"),
         compact_predictions(prediction_dir or run)
         or {key: prediction_file(run, *key) for key in bindings},
         bindings,

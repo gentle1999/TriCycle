@@ -30,3 +30,7 @@ DPA smoke 验收同时检查 `results/dpa-device.json` 的 CUDA 证据、服务�
 
 该能力不提交远程任务，也不修改已有 run。XYZ、引擎或模型参数校验失败时修正 TOML，
 换用新的空 `run-dir` 重新准备；保留失败目录供排查。
+
+新 worker 输入在临时目录准备并发布到共享资产库；run 中仅保存输入引用与运行记录，
+通过 `batch.toml.input_assets` 和 worker 的 `input-assets.json` 校验。提交须经过 adapter 临时展开，
+不能直接上传 run 中的 worker 记录目录。

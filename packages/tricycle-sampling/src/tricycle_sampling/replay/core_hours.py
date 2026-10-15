@@ -148,12 +148,12 @@ def aggregate(
             raise ValueError("decreasing cumulative core-hours")
     summaries, paired = [], []
     assessment: dict[str, Any] | None = None
-    if "cost-aware" in variants:
+    if "intelligent" in variants:
         from tricycle_sampling.protocols import LITERATURE_BASELINE_STRATEGIES
 
         assessment = {
             "schema": "tricycle.intelligent-comparison/v1",
-            "strategy": "cost-aware",
+            "strategy": "intelligent",
             "baselines": list(LITERATURE_BASELINE_STRATEGIES),
             "budgets": [],
             "criterion": "Lower matched-five-seed mean MAE than every baseline at every preregistered core-hour milestone.",
@@ -210,14 +210,14 @@ def aggregate(
                     }
                 )
         if assessment is not None:
-            required = ["cost-aware", *assessment["baselines"]]
+            required = ["intelligent", *assessment["baselines"]]
             missing = [variant for variant in required if variant not in values]
             comparisons = []
             if not missing:
                 for baseline in assessment["baselines"]:
                     deltas = [
                         float(p["mae"]) - float(q["mae"])
-                        for p, q in zip(values["cost-aware"], values[baseline], strict=True)
+                        for p, q in zip(values["intelligent"], values[baseline], strict=True)
                     ]
                     comparisons.append(
                         {

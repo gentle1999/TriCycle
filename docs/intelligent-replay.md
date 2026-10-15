@@ -2,7 +2,7 @@
 
 TriCycle 用历史计算结果构建新的主动学习轨迹：先选择底物对，再揭示该对可用的代理标签，更新本轨迹 RxnResid，最后在冻结 ground truth 上评价。采样侧只获得先验结构、当前预测和已揭示历史。未来真实标签、计算成败、真实核时和 GT 指标留在回放及评价侧。
 
-比较集合由五条文献基线与 `cost-aware` 智能策略组成。cost-aware 融合结构覆盖、成本、模型反馈和批次复核。各方法共用候选池、匹配初始集、主模型训练、固定评价和预算口径；随机只用于共享初始化，未作为新比较曲线。
+比较集合由五条文献基线与 `intelligent` 智能策略组成。intelligent 融合结构覆盖、成本、模型反馈和批次复核。各方法共用候选池、匹配初始集、主模型训练、固定评价和预算口径；随机只用于共享初始化，未作为新比较曲线。
 
 ## 选择入口
 
@@ -14,7 +14,7 @@ TriCycle 用历史计算结果构建新的主动学习轨迹：先选择底物�
 | 查看方法来源及原文使用证据 | 版本化文献协议与文献登记 | [方法与文章清单](sampling-baselines.md) |
 | 核验固定候选空间 | 冻结数据与底物身份适配流程 | [采样空间](frozen-sampling-space.md)、[数据适配](reaction-dataset-adaptation.md) |
 
-两个基线执行入口共同调用采样包的 `select_experiment_candidates()`，协议为 `tricycle.matched-sampling/v1`。逐轮套件通过 cost-aware 执行智能采样。共享的是采样与主实验定义；不同入口的调度粒度和产物布局仍各自记录，不能仅凭接口一致合并结果。
+两个基线执行入口共同调用采样包的 `select_experiment_candidates()`，协议为 `tricycle.matched-sampling/v1`。逐轮套件通过 intelligent 执行智能采样。共享的是采样与主实验定义；不同入口的调度粒度和产物布局仍各自记录，不能仅凭接口一致合并结果。
 
 ## 新实验准备
 
@@ -25,7 +25,7 @@ uv run --package tricycle-agent python -m tricycle_sampling.replay.suite prepare
 
 准备仅创建本地套件、配置、冻结记录和初始 worker 输入。配置引用已有本地数据与先验结构，实际路径和 hash 必须核验；缺少输入时不会自动下载或替换。远程执行需已有实验授权，并显式使用 live/submit 开关，详见[操作指南](mae-intelligent-sampling.md)。
 
-每轮沿共同流程执行：标签揭示 → 本轨迹训练/推断 → 固定评价 → 结构与采集输入准备 → 策略选择 → 下一轮。五条基线使用预先固定规则；cost-aware 根据覆盖、成本和模型反馈制定表达式并复核实际批次。Bayes-UCB 使用 RxnResid 认知方差的 Gaussian 近似，KB 增加明确记录的结构 RBF 相关性假设和批内条件化。
+每轮沿共同流程执行：标签揭示 → 本轨迹训练/推断 → 固定评价 → 结构与采集输入准备 → 策略选择 → 下一轮。五条基线使用预先固定规则；intelligent 根据覆盖、成本和模型反馈制定表达式并复核实际批次。Bayes-UCB 使用 RxnResid 认知方差的 Gaussian 近似，KB 增加明确记录的结构 RBF 相关性假设和批内条件化。
 
 ## 运行记录与归档
 

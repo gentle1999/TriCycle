@@ -33,14 +33,10 @@ stage() {
     --accelerator "$accelerator" -- "$@"
 }
 preserve_outputs() {
-  # The package launcher exports predictions/metrics; avoid copying checkpoints by default.
+  local code=$?
+  # The package launcher owns collection; direct invocation uses the same contract.
   if [[ "${SAR_COMPACT_OUTPUT:-0}" == 1 ]]; then return; fi
-  local directory
-  for directory in smoke-results model-runs; do
-    if [[ -d "$bundle/$directory" ]]; then
-      mkdir -p "$result/$directory"
-      cp -R "$bundle/$directory/." "$result/$directory/"
-    fi
-  done
+  "$sar_base_python" "$PWD/common/sar_outputs.py" --bundle "$bundle" \
+    --task "$task" --result "$result" --exit-code "$code"
 }
 trap preserve_outputs EXIT

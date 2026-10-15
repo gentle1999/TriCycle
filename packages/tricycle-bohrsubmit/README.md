@@ -148,3 +148,17 @@ make check
 同一模型的折或随机种子实验用一份请求即可：`task_defaults` 保存公共字段，`task_specs` 每行只有 `name` 和差异字段（例如 `fold`、`seed`）。任务行不能重写公共字段；需要变化的字段只放在任务行中。名称必须唯一且为安全 basename。
 
 staging 将它们展开成现有 worker 要求的 TOML，轮流分配到 worker，并记录任务映射与输入哈希。完整任务文件属于派生上传输入，不再单独维护源配置。已有任务文件通过 `task_patterns` 显式选择。SAR 内嵌任务请求只保存批次 `tasks.tsv` 和 worker 运行所需的 `manifest.txt`，不生成重复的 worker `manifest.tsv`。
+
+### 引用式输入
+
+`BohrJobSpec.parameters.input_assets_manifest` 指向 `tricycle.asset-input/v1` 或 v2 清单。
+新 batch、DPA/Gaussian 及 rescue 在临时目录准备 worker 输入，发布到
+`artifacts/task-assets`；run 内每个 worker 仅保存 `input-assets.json`，
+`batch.toml.input_assets` 绑定完整输入树。TSV 的 `input_dir` 标识输入记录目录，
+不能直接把它作为 Bohr CLI 的上传目录。
+
+CLI adapter 校验共享资产后，在临时目录组装独立输入再调用提交接口，成功或异常均清理。
+新记录无需 `input_directory`；既有记录可通过该字段提供差异文件 overlay。
+提交前校验方法、完整输入树及清单绑定，rescue 从同一引用解析原始任务与模型，
+新生成当前 worker 启动脚本。已有物理输入目录保持可读，不自动迁移历史 run。
+准备不联网；当前 CLI 仍逐作业上传完整必需输入，不代表远端跨作业缓存。

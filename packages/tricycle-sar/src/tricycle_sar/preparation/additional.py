@@ -7,9 +7,11 @@ import json
 import shutil
 from pathlib import Path
 
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import load_toml
 from tricycle_core.training_protocol import verify_asset_files
 
+from tricycle_sar.delivery import freeze
 from tricycle_sar.modelling_benchmark import check
 from tricycle_sar.submission import bundle_hashes, write_bohr_request
 from tricycle_sar.training import (
@@ -66,10 +68,10 @@ def prepare(
         require_reactiont5_assets(assets, spec)
     output.mkdir(parents=True, exist_ok=False)
     bundle = output / "training_bundle"
-    shutil.copytree(benchmark / "workspace/data", bundle / "data")
+    shutil.copytree(resolve_input(benchmark, "workspace/data"), bundle / "data", copy_function=shutil.copyfile)
     splits = bundle / "data/splits/ground-truth-5fold/assignments.csv"
     splits.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(benchmark / "splits.csv", splits)
+    shutil.copy2(resolve_input(benchmark, "splits.csv"), splits)
     prefix = f"common/{bundle.name}/assets/"
     for entry in record["files"]:
         if entry["external"] and entry["path"].startswith(prefix):
@@ -79,7 +81,7 @@ def prepare(
     stage_protocol_bundle(model, bundle)
     manifest = {
         "dataset_sha256": load_toml(benchmark / "run.toml")["dataset_sha256"],
-        "splits_sha256": digest(benchmark / "splits.csv"),
+        "splits_sha256": digest(resolve_input(benchmark, "splits.csv")),
         "files": bundle_hashes(bundle),
     }
     (bundle / "training-bundle.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -103,6 +105,7 @@ def prepare(
         project_id=project_id,
         group_config=group_config,
     )
+    freeze(output, (bundle, output / "protocol-runtime"))
     return output
 
 

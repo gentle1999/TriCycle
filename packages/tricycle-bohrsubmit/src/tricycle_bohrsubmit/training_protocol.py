@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tricycle_core.asset_store import resolve_tree
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.training_protocol import (
     file_sha256,
@@ -20,13 +21,31 @@ from .config import dump_toml, load_toml
 _digest = file_sha256
 
 
+def worker_input(run: Path, worker: str, config: dict | None = None) -> Path:
+    """Resolve current reference records or existing physical worker inputs."""
+    if Path(worker).name != worker or worker in {".", ".."}:
+        raise ValueError("Unsafe worker name")
+    if config is None:
+        config = load_toml(run / "batch.toml")
+    reference = config.get("input_assets", {}).get(worker)
+    manifest = run / worker / "input-assets.json"
+    if reference is not None:
+        value = json.loads(manifest.read_text())
+        if value != {"schema": "tricycle.asset-input/v1", "trees": [reference], "files": {}}:
+            raise ValueError("Worker input manifest differs from batch record")
+        return resolve_tree(reference)
+    if manifest.exists():
+        raise ValueError("Worker input manifest has no batch binding")
+    return run / worker
+
+
 def bind_staged_training_protocol(run: Path, binding: dict, config: dict) -> None:
     """Record one method reference and one copy of shared experiment hashes."""
     manifest, registry = resolve_training_registry(
         Path(binding["registry"]), binding["registry_sha256"]
     )
     method = training_method(manifest, registry, binding["model"], binding["method_id"])
-    workers = sorted(run.glob("worker-*"))
+    workers = [worker_input(run, path.name, config) for path in sorted(run.glob("worker-*"))]
     owned = {entry["path"] for entry in method["files"]}
     common_files = {
         path.relative_to(workers[0]).as_posix(): _digest(path)
@@ -34,8 +53,8 @@ def bind_staged_training_protocol(run: Path, binding: dict, config: dict) -> Non
         if path.is_file() and path.relative_to(workers[0]).as_posix() not in owned
     }
     files = {
-        path.relative_to(run).as_posix(): _digest(path)
-        for worker in workers
+        f"{record.name}/{path.relative_to(worker).as_posix()}": _digest(path)
+        for record, worker in zip(sorted(run.glob("worker-*")), workers, strict=True)
         for path in sorted(worker.rglob("*"))
         if path.is_file() and not path.is_relative_to(worker / "common")
     }
@@ -53,7 +72,8 @@ def bind_staged_training_protocol(run: Path, binding: dict, config: dict) -> Non
                     key: binding[key]
                     for key in ("model", "registry", "registry_sha256", "method_id")
                 },
-                "workers": [worker.name for worker in workers],
+                "input_assets": config.get("input_assets", {}),
+                "workers": [worker.name for worker in sorted(run.glob("worker-*"))],
                 "common_files": common_files,
                 "files": files,
             },
@@ -93,11 +113,23 @@ def validate_training_protocol(run: Path) -> None:
     def validate_files(base: Path, files: dict, label: str) -> None:
         for name, expected in files.items():
             target = (base / name).resolve()
-            if not target.is_relative_to(base.resolve()) or digest(target) != expected:
+            allowed = (base / "common").resolve() if name.startswith("common/") else base.resolve()
+            if not target.is_relative_to(allowed) or digest(target) != expected:
                 raise ValueError(f"{label}: {name}")
 
     marker = run / "training-protocol.json"
     config = load_toml(run / "batch.toml") if (run / "batch.toml").exists() else {}
+    try:
+        references = config.get("input_assets", {})
+        if references and set(references) != {p.name for p in run.glob("worker-*") if p.is_dir()}:
+            raise ValueError("Worker input reference set differs")
+        for worker in references:
+            worker_input(run, worker, config)
+        for worker, ref in config.get("shared_assets", {}).items():
+            if Path(worker).name != worker or resolve_tree(ref) != (run / worker / "common").resolve():
+                raise ValueError("Shared worker input assets differ")
+    except (KeyError, OSError, ValueError) as exc:
+        raise InvalidRequestError(f"Shared worker input assets rejected: {exc}") from exc
     required = config.get("run", {}).get("training_protocol_required", False)
     if list(run.glob("worker-*/common/training-protocol.json")):
         raise InvalidRequestError("Per-worker training protocol records are unsupported; prepare a new batch")
@@ -123,14 +155,28 @@ def validate_training_protocol(run: Path) -> None:
         worker_bases = sorted(run.glob("worker-*"))
         if not worker_bases or data["workers"] != [worker.name for worker in worker_bases]:
             raise ValueError("Staged training worker set differs")
-        for worker in worker_bases:
+        if data.get("input_assets", {}) != config.get("input_assets", {}):
+            raise ValueError("Worker input references differ from protocol")
+        for record in worker_bases:
+            worker = worker_input(run, record.name, config)
+            reference = data.get("shared_assets", {}).get(record.name)
+            if reference is not None and resolve_tree(reference) != (worker / "common").resolve():
+                raise ValueError("Shared SAR assets differ")
+            if (worker / "common").is_symlink() and reference is None:
+                raise ValueError("Unbound shared SAR assets")
             validate_files(worker, expected_method, "Prepared training method differs")
-            validate_generated_inputs(worker, method, digest=digest)
+            validate_generated_inputs(worker / "common", method, digest=digest, remove_prefix="common/")
             validate_files(worker, data["common_files"], "Prepared shared training input differs")
-        validate_files(run, data["files"], "Prepared training input differs")
+        for name, expected in data["files"].items():
+            parts = Path(name).parts
+            if len(parts) > 1 and parts[0] in data["workers"]:
+                validate_files(worker_input(run, parts[0], config),
+                               {Path(*parts[1:]).as_posix(): expected}, "Prepared training input differs")
+            else:
+                validate_files(run, {name: expected}, "Prepared training input differs")
         if data["model"] == "reactiont5":
             for worker in worker_bases:
-                _validate_reactiont5_assets(worker / "common/training_bundle", digest)
+                _validate_reactiont5_assets(worker_input(run, worker.name, config) / "common/training_bundle", digest)
     except (KeyError, OSError, ValueError) as exc:
         raise InvalidRequestError(
             f"Training protocol rejected submission: {marker}: {exc}"

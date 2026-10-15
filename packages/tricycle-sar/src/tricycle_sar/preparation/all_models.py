@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from tricycle_bohrsubmit.task_table import expand_task_specs
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.toml import dump_toml, load_toml
 
 from tricycle_sar.classical_runner import MODELS as CLASSICAL_MODELS
@@ -32,9 +33,9 @@ def prepare(
     assets = None
     if "reactiont5" in models:
         settings = json.loads(
-            (benchmark / "workspace/configs/tricycle-reactiont5.json").read_text()
+            (resolve_input(benchmark, "workspace/configs/tricycle-reactiont5.json")).read_text()
         )
-        assets = benchmark / "workspace" / settings["checkpoint_directory"]
+        assets = resolve_input(benchmark, "workspace") / settings["checkpoint_directory"]
         require_reactiont5_assets(
             assets,
             json.loads(

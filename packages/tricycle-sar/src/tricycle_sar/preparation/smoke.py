@@ -6,12 +6,14 @@ import argparse
 import shutil
 from pathlib import Path
 
+from tricycle_core.asset_store import resolve_input
 from tricycle_core.io import file_sha256, write_json
 from tricycle_core.toml import dump_toml, load_toml
 from tricycle_core.training_protocol import protocol_file_source
 
 from tricycle_sar import get_backend
 from tricycle_sar.backends.registry import CATALOG
+from tricycle_sar.delivery import freeze
 
 
 def prepare(
@@ -67,7 +69,7 @@ def prepare(
         target = common / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidate, target)
-    shutil.copytree(benchmark / "workspace/data", bundle / "data", dirs_exist_ok=True)
+    shutil.copytree(resolve_input(benchmark, "workspace/data"), bundle / "data", dirs_exist_ok=True)
     from tricycle_sar.benchmark import sha256
 
     entries = [
@@ -108,6 +110,7 @@ def prepare(
         "backward_files": "worker.log,results",
     }
     dump_toml(output / "bohr-smoke.toml", request)
+    freeze(output, (common,))
     return output / "bohr-smoke.toml"
 
 

@@ -1,6 +1,6 @@
 # 统一采样实验：基线、智能策略与执行
 
-新实验统一候选池、匹配初始集、RxnResid 主模型、训练与 checkpoint 更新、评价和预算口径，变化限定在选样策略。主配置为 [dpa-unified-sampling-suite.toml](../configs/dpa-unified-sampling-suite.toml)，包含五条文献基线和智能采样策略 `cost-aware`；套件标识从配置读取。本文维护协议和操作流程；具体 run 的数量、状态和恢复证据保存在其运行目录。
+新实验统一候选池、匹配初始集、RxnResid 主模型、训练与 checkpoint 更新、评价和预算口径，变化限定在选样策略。主配置为 [dpa-unified-sampling-suite.toml](../configs/dpa-unified-sampling-suite.toml)，包含五条文献基线和智能采样（Intelligent sampling，策略 ID 为 `intelligent`）；套件标识从配置读取。本文维护协议和操作流程；具体 run 的数量、状态和恢复证据保存在其运行目录。
 
 方法来源见[文献清单](sampling-baselines.md)，请求、方差公式与 adapter 见[采样包接口](../packages/tricycle-sampling/README.md)。
 
@@ -13,9 +13,9 @@
 | `ucb` | RxnResid Gaussian Bayes-UCB，固定 0.95 分位数，偏好较低预测能量 |
 | `distance-uncertainty-product` | 到已揭示标签集合的最近距离 × 路线总体方差之和 |
 | `uncertainty-kriging-believer` | 认知标准差逐个选样，结构 RBF 后验批内条件化 |
-| `cost-aware` | 根据结构覆盖、模型反馈和预计成本动态制定规则，并进行一次批次复核 |
+| `intelligent` | 根据结构覆盖、模型反馈和预计成本动态制定规则，并进行一次批次复核 |
 
-cost-aware 的参照、反馈和复核属于同一智能采样策略定义。所有方法使用相同主模型和评价；五条基线不调用决策模型。通用候选 API 另提供随机、认知及偶然不确定度选择；本套件按显式方法列表生成曲线。
+intelligent 的参照、反馈和复核属于同一智能采样策略定义。所有方法使用相同主模型和评价；五条基线不调用决策模型。通用候选 API 另提供随机、认知及偶然不确定度选择；本套件按显式方法列表生成曲线。
 
 逐轮 `replay.suite` 接口要求五个匹配初始集合、每条轨迹 40 个评价轮次、每批 40 对，并强制共同 300 epochs 配方；这些是当前控制器的协议约束，不是某次运行的完成统计。对应 seed 的各方法初始 ID 完全相同，采集 seed 从配置读取。新轨迹从初始标签重新训练，后续只延续自己的 checkpoint，不借用其他策略模型。
 
@@ -33,9 +33,9 @@ cost-aware 的参照、反馈和复核属于同一智能采样策略定义。所
 `sar_backend` 绑定 method ID、源码 revision、环境资产与共享接口 hash；worker 执行前验证，
 恢复时核对上一 checkpoint 的同一绑定。版本/hash 不符即停止，不能回退旧源码或刷新 hash 放行。
 
-## 智能采样策略：cost-aware
+## 智能采样（Intelligent sampling）
 
-cost-aware 将结构覆盖、预计成本、标签反馈与提案复核合并为一个决策流程，目标是在相同核时预算下优于全部五条静态基线。协议主体仍为 `autonomous-core-hours-mae-v1`，增加 `guidance="coverage-cost-guided-v1"`，同时启用 feedback/review；引导协议版本为 1.0.0，定义见 [cost_guidance.py](../packages/tricycle-sampling/src/tricycle_sampling/replay/cost_guidance.py)。它不增加主模型或改变共同训练/评价。
+intelligent 将结构覆盖、预计成本、标签反馈与提案复核合并为一个决策流程，目标是在相同核时预算下优于全部五条静态基线。协议主体仍为 `autonomous-core-hours-mae-v1`，增加 `guidance="coverage-cost-guided-v1"`，同时启用 feedback/review；引导协议版本为 1.0.0，定义见 [cost_guidance.py](../packages/tricycle-sampling/src/tricycle_sampling/replay/cost_guidance.py)。它不增加主模型或改变共同训练/评价。
 
 每轮程序在完整未采池重算已采新颖度、局部稀疏度和结构工作量，生成智能策略的初始化提案：
 
@@ -133,7 +133,7 @@ uv run --package tricycle-agent python -m tricycle_sampling.replay.suite service
 | `status.json`、`REPORT.md`、`evaluation-curves.json` | 本地总览与已完成评价点；不进入采集输入 |
 | 基线 `baseline-ranking.json` / `baseline-selection-request.json` | 确定性策略执行、来源、共同输入、分数或 KB 步骤及请求绑定 |
 | 智能 `ACQUISITION.md` 与函数/响应记录 | 表达式、假设、预计作用、上下文和证据 |
-| cost-aware 及历史 reviewed 的 proposal/review 响应与批准记录 | 提案、实际批次诊断、最多一次复核和最终绑定 |
+| intelligent 及历史 reviewed 的 proposal/review 响应与批准记录 | 提案、实际批次诊断、最多一次复核和最终绑定 |
 | submission、下载清单、worker 输出与 checkpoint | 远程句柄、输入输出完整性及同轨迹模型链 |
 
 智能响应包含 `expression`、`cost_expression`、`rationale`、`author_notes`、`decision_action`、`hypothesis`、`expected_effect`。action 为 retain/adjust/replace；retain 必须逐字保留上一轮两条表达式。有选择余地时拒绝全池恒定分数；全部剩余候选必须选入时记录确定性选择，省去决策模型调用。
@@ -159,7 +159,7 @@ uv run --package tricycle-agent python -m tricycle_sampling.replay.campaign resu
 
 | 工具 | 支持范围与恢复约束 |
 | --- | --- |
-| `tricycle_sampling.replay.watch` | cost-aware 及历史 autonomous/feedback/reviewed 的单 seed；默认读本地，live 需绑定已归档恢复记录；保留原锁、hash 和提交保护 |
+| `tricycle_sampling.replay.watch` | intelligent 及历史 autonomous/feedback/reviewed 的单 seed；默认读本地，live 需绑定已归档恢复记录；保留原锁、hash 和提交保护 |
 | `tricycle_sampling.replay.recover_review` | reviewed 当前阻塞轮；新提案正常通过预算校验时，允许旧常数公式仅用于明确标注的反事实批次诊断，完成原定一次复核 |
 | `tricycle_sampling.replay.recover_retain` | 最后已完成响应明确 retain，且简写与旧表达式在全池分数、正成本及完整排序完全等价；留证后恢复原文本，不增加提案次数 |
 
@@ -169,7 +169,7 @@ uv run --package tricycle-agent python -m tricycle_sampling.replay.campaign resu
 
 ```bash
 uv run --package tricycle-agent python -m tricycle_sampling.replay.watch \
-  --run-dir /absolute/suite --variant cost-aware --seed 1
+  --run-dir /absolute/suite --variant intelligent --seed 1
 uv run --package tricycle-agent python -m tricycle_sampling.replay.recover_review \
   --decision-dir /absolute/current-blocked-decision
 uv run --package tricycle-agent python -m tricycle_sampling.replay.recover_retain \
@@ -182,7 +182,7 @@ uv run --package tricycle-agent python -m tricycle_sampling.replay.recover_retai
 
 五条基线的计划/结果保存 `sampling_protocol`、`sampling_details`、`sampling_experiment`，实验控制器另外绑定源码、输入和选择请求。最终核验应从这些冻结输入按原版本重放相同 selected IDs，并逐轮核对排除集合、真实标签揭示、worker hash、模型链、评价和核时；来源 DOI 本身不能证明执行正确。
 
-现有 `tricycle_sampling.replay.audit` 独立重算智能表达式、cost-aware 默认参照与 worker 生命周期，支持 cost-aware 和原智能采集记录。其 `--require-complete` 检查计划任务及决策覆盖，**尚不能作为新五条基线整套选择的完整独立审计入口**。不要把通用状态检查或部分审计通过写成六方法最终验收。
+现有 `tricycle_sampling.replay.audit` 独立重算智能表达式、intelligent 默认参照与 worker 生命周期，支持 intelligent 和原智能采集记录。其 `--require-complete` 检查计划任务及决策覆盖，**尚不能作为新五条基线整套选择的完整独立审计入口**。不要把通用状态检查或部分审计通过写成六方法最终验收。
 
 审计使用当前包内实现；不提供加载历史控制器源码的入口。既有结果与原绑定保留，绑定不匹配时明确拒绝，不改写旧 hash。
 

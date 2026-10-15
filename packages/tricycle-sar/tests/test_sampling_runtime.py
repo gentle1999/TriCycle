@@ -133,3 +133,14 @@ def test_verification_rejects_staged_sar_api_drift(tmp_path: Path) -> None:
     (tmp_path / "tricycle-sar/src/tricycle_sar/predictions.py").write_text("modified")
     with pytest.raises(ValueError, match="SAR API changed"):
         verify(tmp_path)
+
+
+def test_sampling_delivery_only_contains_rxnresid_backend_assets(tmp_path: Path) -> None:
+    record = stage(tmp_path)
+    backend = get_backend("rxnresid")
+    catalog = json.loads((tmp_path / "tricycle-sar/src/tricycle_sar/backends/catalog.json").read_text())
+    assert set(catalog["models"]) == {"rxnresid"}
+    assert record["method_id"] == backend.method["method_id"]
+    assert not list(tmp_path.rglob("tokenizer.json"))
+    for other in ("chemprop.tar.gz", "rxngraphormer.tar.gz", "t5chem.tar.gz"):
+        assert not list(tmp_path.rglob(other))

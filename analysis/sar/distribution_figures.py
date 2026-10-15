@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import json
+import math
 import os
 import shlex
 from pathlib import Path
@@ -17,6 +19,8 @@ import numpy as np
 from matplotlib.ticker import MaxNLocator  # pyright: ignore[reportMissingImports, reportMissingModuleSource]  # isort: skip
 from tricycle_core.io import file_sha256
 from tricycle_sar import results as sar_results
+
+from .distributions import activation_distribution_data
 
 BLUE = "#7884B4"
 INK = "#292D3E"
@@ -36,6 +40,134 @@ PANELS = (
         r"$\overline{G}_g-\overline{G}_{\mathrm{groups}}$ (kcal mol$^{-1}$)",
     ),
 )
+
+
+def render_collection(
+    dataset: Path, output: Path, *, aspect_ratio: float = 4.0, width_inches: float = 8.0
+) -> dict:
+    """Render only overall GT and all-path group residuals from a native collection CSV."""
+    if not all(math.isfinite(value) and value > 0 for value in (aspect_ratio, width_inches)):
+        raise ValueError("Figure dimensions must be positive and finite")
+    dataset, output = dataset.resolve(), output.resolve()
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Refusing to replace figures: {output}")
+    target = "activation_gibbs_free_energy_kcal_mol"
+    with dataset.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        required = {target, "ene_id", "diene_id"}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError(f"Missing collection columns: {sorted(required - set(reader.fieldnames or []))}")
+        # Each exported profile remains an observation, even if mapped reaction IDs repeat.
+        rows = [{**row, "path_id": str(index)} for index, row in enumerate(reader)]
+    data = activation_distribution_data(rows, target)
+    summary = data["summary"]
+    summary.update({"target": target, "unit": "kcal/mol", "dataset_sha256": file_sha256(dataset)})
+    panels = PANELS[:2]
+    arrays = {key: np.asarray(data[key], dtype=float) for _, _, key, _ in panels}
+    edges = {key: np.histogram_bin_edges(values, bins="fd") for key, values in arrays.items()}
+    half_bins = max(1, math.ceil(float(np.max(np.abs(arrays["within_group_residuals"]))) / 0.3))
+    edges["within_group_residuals"] = (np.arange(-half_bins, half_bins + 2) - 0.5) * 0.3
+    summary["distributions"] = {}
+    for key, values in arrays.items():
+        counts, _ = np.histogram(values, bins=edges[key])
+        if int(counts.sum()) != len(values):
+            raise ValueError(f"Histogram excludes observations: {key}")
+        summary["distributions"][key] = {
+            "n": len(values), "mean": float(values.mean()), "sd": float(values.std(ddof=0)),
+            "variance": float(values.var(ddof=0)), "min": float(values.min()), "max": float(values.max()),
+        }
+    output.mkdir(parents=True, exist_ok=True)
+    rc = {
+        "font.family": "sans-serif", "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size": 7.5, "axes.titlesize": 8, "axes.labelsize": 7.5,
+        "xtick.labelsize": 7, "ytick.labelsize": 7, "axes.linewidth": 0.65,
+        "axes.spines.top": False, "axes.spines.right": False, "text.color": INK,
+        "axes.labelcolor": INK, "axes.edgecolor": INK, "xtick.color": INK, "ytick.color": INK,
+        "pdf.fonttype": 42, "svg.fonttype": "none", "svg.hashsalt": "tricycle-gt-two-panel",
+    }
+    with plt.rc_context(rc):
+        fig = plt.figure(figsize=(width_inches, width_inches / aspect_ratio))
+        axes = [fig.add_axes([left, 0.275, 0.38, 0.56]) for left in (0.075, 0.575)]
+        for ax, (letter, title, key, xlabel) in zip(axes, panels, strict=True):
+            values, info = arrays[key], summary["distributions"][key]
+            ax.hist(values, bins=edges[key], density=True, color=BLUE, edgecolor="white", linewidth=0.3)
+            ax.axvline(info["mean"] if letter == "a" else 0, color="#606475",
+                       linestyle=(0, (3, 2)), linewidth=0.8)
+            ax.set_title(title, loc="left", pad=6)
+            ax.text(-0.10, 1.12, letter, transform=ax.transAxes, fontsize=9, weight="bold", va="bottom")
+            ax.text(0.98, 0.96, f"n = {len(values):,}\nSD = {info['sd']:.2f}", transform=ax.transAxes,
+                    fontsize=7, color="#55596A", ha="right", va="top")
+            ax.set_xlabel(xlabel, labelpad=4)
+            ax.set_ylabel(r"Density (mol kcal$^{-1}$)", labelpad=3)
+            ax.set_xlim(float(edges[key][0]), float(edges[key][-1]))
+            ax.xaxis.set_major_locator(MaxNLocator(5))
+            ax.yaxis.set_major_locator(MaxNLocator(4))
+            ax.tick_params(length=2.5, width=0.65, pad=3)
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        fw, fh = fig.bbox.width, fig.bbox.height
+        text_elements = []
+        for ax, (letter, _, _, _) in zip(axes, panels, strict=True):
+            texts = [(ax.title, "panel_title"), (ax.xaxis.label, "x_label"), (ax.yaxis.label, "y_label")]
+            texts.extend((label, "panel_label" if label.get_text() == letter else "annotation") for label in ax.texts)
+            for positions, labels, bounds in ((ax.get_xticks(), ax.get_xticklabels(), ax.get_xlim()),
+                                               (ax.get_yticks(), ax.get_yticklabels(), ax.get_ylim())):
+                texts.extend((label, "tick_label") for position, label in zip(positions, labels, strict=True)
+                             if bounds[0] <= position <= bounds[1])
+            for text, role in texts:
+                box = text.get_window_extent(renderer)
+                if text.get_visible() and text.get_text() and box.width and box.height:
+                    text_elements.append({"panel_id": letter, "role": role, "text": text.get_text(),
+                                          "font_size_pt": text.get_fontsize(),
+                                          "bbox": [box.x0 / fw, box.y0 / fh, box.width / fw, box.height / fh]})
+        layout = {"figure_id": "gt-activation-distributions", "layout_engine": "manual_axes",
+                  "semantic_color_map": {"all_paths": BLUE},
+                  "canvas": {"width_inches": width_inches, "height_inches": width_inches / aspect_ratio},
+                  "panels": [{"id": panel[0], "row": 0, "plot_type": "histogram",
+                              "bbox": list(ax.get_position().bounds), "semantic_color_map": {"all_paths": BLUE}}
+                             for ax, panel in zip(axes, panels, strict=True)], "text_elements": text_elements}
+        files = []
+        for extension in ("svg", "pdf", "png", "tiff"):
+            path = output / f"gt-activation-distributions.{extension}"
+            kwargs = {"pil_kwargs": {"compression": "tiff_lzw"}} if extension == "tiff" else {}
+            # Preserve the full requested canvas ratio; do not use bbox_inches='tight'.
+            fig.savefig(path, dpi=600 if extension == "tiff" else 300, facecolor="white", **kwargs)
+            files.append(path)
+        plt.close(fig)
+    caption = (
+        f"Activation Gibbs free energies for {summary['paths']:,} GT paths in {summary['groups']:,} substrate groups. "
+        "(a) Overall distribution, with a dashed line at the path-weighted mean. "
+        "(b) Within-group residuals: each path value minus its (ene_id, diene_id) group mean. "
+        f"All paths are retained, including {summary['singleton_groups']:,} singleton groups with zero residuals. "
+        "Both panels weight paths equally; SD uses ddof=0. Every observed tail is included. "
+        "Axes have independent ranges. Panel a uses Freedman-Diaconis bins; panel b uses 0.3 kcal/mol bins "
+        "centered at zero. These are descriptive distributions, without inferential tests or confidence intervals.\n"
+    )
+    for name, obj in (("distribution-summary.json", summary), ("figure-layout.json", layout)):
+        (output / name).write_text(json.dumps(obj, indent=2) + "\n")
+    (output / "figure-caption.md").write_text(caption)
+    (output / "figure-alt-text.txt").write_text(
+        "Two histogram panels show overall activation Gibbs free energies and their within-substrate-group "
+        "residuals. The residual distribution includes singleton groups at zero; no subgroup is excluded.\n"
+    )
+    project = Path(__file__).resolve().parents[2]
+    manifest = {
+        "dataset": {"path": os.path.relpath(dataset, project), "sha256": summary["dataset_sha256"]},
+        "aspect_ratio": aspect_ratio, "width_inches": width_inches, "height_inches": width_inches / aspect_ratio,
+        "panels": [{"id": letter, "variable": key, "bins": edges[key].tolist()} for letter, _, key, _ in panels],
+        "singleton_policy": "retain all", "ddof": 0,
+        "status": {"DATA_STATUS": "PROVIDED", "STYLE_STATUS": "ESTIMATED", "REPRODUCIBILITY_STATUS": "CODED",
+                   "EXPORT_STATUS": "READY", "INTEGRITY_STATUS": "PASS_WITH_WARNINGS"},
+        "reproduction_command": "uv run --project analysis --locked python -m analysis.sar collection-distributions "
+        f"--dataset {shlex.quote(os.path.relpath(dataset, project))} --out-dir /path/to/empty-output "
+        f"--aspect-ratio {aspect_ratio:g} --width-inches {width_inches:g}",
+        "sources": [{"path": os.path.relpath(path, project), "sha256": file_sha256(path)} for path in
+                    (Path(__file__), Path(__file__).with_name("distributions.py"), Path(__file__).with_name("__main__.py"),
+                     project / "analysis/pyproject.toml", project / "analysis/uv.lock")],
+        "outputs": [{"path": path.name, "sha256": file_sha256(path)} for path in files],
+    }
+    (output / "figure-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return {"out_dir": str(output), "figures": 1, "aspect_ratio": aspect_ratio, "summary": summary}
 
 
 def render_publication(root: Path, output: Path, data: dict, summary: dict) -> dict:
