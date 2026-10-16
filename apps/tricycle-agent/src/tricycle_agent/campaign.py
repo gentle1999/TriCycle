@@ -550,7 +550,7 @@ class Campaign:
                 "selection_sha256": state.get("selection_sha256", "")
                 if state["phase"] == "preparing"
                 else "",
-                "instructions": "Follow exploration-campaign and agent-authored-acquisition skills. Analyze only after the batch barrier. Do not submit or terminate QM batches. Return an atomic response bound to task_sha256. Record model work separately under explicit authorization.",
+                "instructions": "Use English for analysis, decisions, explanations, and records, even when user input or historical evidence is in Chinese, unless the user explicitly requests Chinese. Follow exploration-campaign and agent-authored-acquisition skills. Analyze only after the batch barrier. Do not submit or terminate QM batches. Return an atomic response bound to task_sha256. Record model work separately under explicit authorization.",
             }
             dump_toml(task_path, task)
         if not response_path.exists() and agent is not None:

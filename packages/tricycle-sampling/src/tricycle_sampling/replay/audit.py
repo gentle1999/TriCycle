@@ -14,9 +14,10 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
 from tricycle_core.asset_store import resolve_tree
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 
 from tricycle_sampling import AgentAuthoredAcquisitionSamplingStrategy, Candidate
 from tricycle_sampling.replay.campaign import check_hashes
@@ -27,26 +28,26 @@ from .inputs import input_file, verify_inputs
 
 def audit_decision(selection_path: Path) -> dict[str, Any]:
     directory = selection_path.parent
-    selection = json.loads(selection_path.read_text())
+    selection = json.loads(rio.read_text(selection_path))
     task_path = directory / 'task.json'
-    task = json.loads(task_path.read_text())
+    task = json.loads(rio.read_text(task_path))
     response_path = directory / 'response.json'
-    response = json.loads(response_path.read_text())
+    response = json.loads(rio.read_text(response_path))
     request_path = directory / 'selection-request.toml'
-    request = tomllib.loads(request_path.read_text())
+    request = tomllib.loads(rio.read_text(request_path))
     if response['task_sha256'] != digest(task_path):
         raise ValueError('response task binding changed')
     if selection['request_sha256'] != digest(request_path):
         raise ValueError('selection request hash changed')
-    candidates = json.loads((directory / 'pair-candidates.json').read_text())['candidates']
+    candidates = json.loads(rio.read_text(directory / 'pair-candidates.json'))['candidates']
     ids = {c['candidate_id'] for c in candidates}
-    history = json.loads((directory / 'acquisition-history.json').read_text())
+    history = json.loads(rio.read_text(directory / 'acquisition-history.json'))
     if len(ids) != len(candidates) or ids & set(history['selected_ids']):
         raise ValueError('candidate pool duplicates or overlaps prior selections')
     if len(selection['candidate_ids']) != task['budget'] or len(set(selection['candidate_ids'])) != task['budget']:
         raise ValueError('selected candidate budget or uniqueness changed')
     round_dir = Path(request['output_dir']) / 'rounds' / f"{task['round']:04d}"
-    artifact = tomllib.loads((round_dir / 'acquisition-function.toml').read_text())
+    artifact = tomllib.loads(rio.read_text(round_dir / 'acquisition-function.toml'))
     spec = {**request['metadata']['agent_acquisition'],
             'context': json.loads(artifact['context_json'])}
     from tricycle_sampling.replay.core_hours import objective
@@ -65,7 +66,7 @@ def audit_decision(selection_path: Path) -> dict[str, Any]:
     definition = plan['acquisition_function']
     if definition['function_hash'] != artifact['function_hash'] or definition['function_hash'] != selection['acquisition_function_hash']:
         raise ValueError('complete acquisition definition hash mismatch')
-    with (round_dir / 'model-scores.tsv').open() as handle:
+    with rio.open(round_dir / 'model-scores.tsv') as handle:
         recorded = list(csv.DictReader(handle, delimiter='\t'))
     if len(recorded) != len(ids) or {row['candidate_id'] for row in recorded} != ids:
         raise ValueError('scores do not cover the complete candidate pool')
@@ -85,10 +86,10 @@ def audit_decision(selection_path: Path) -> dict[str, Any]:
     ranked = sorted(plan['candidate_scores'], key=lambda row: (-row['score'], row['candidate_id']))
     if [row['candidate_id'] for row in ranked[:task['budget']]] != selection['candidate_ids']:
         raise ValueError('selected IDs do not match the independently replayed ranking')
-    model = json.loads((directory / 'model-metrics.json').read_text())
+    model = json.loads(rio.read_text(directory / 'model-metrics.json'))
     if set(model['training_pairs']) & set(model['validation_pairs']) or len(model['validation_pairs']) != 8:
         raise ValueError('fixed auxiliary validation panel isolation failed')
-    config = json.loads((directory.parents[2] / 'experiment.json').read_text())
+    config = json.loads(rio.read_text(directory.parents[2] / 'experiment.json'))
     if set(model['validation_pairs']) != set(config['validation_panels'][str(task['seed'])]):
         raise ValueError('validation panel differs from frozen initial panel')
     from tricycle_sampling.replay import core_hours as replay_core_hours
@@ -97,8 +98,8 @@ def audit_decision(selection_path: Path) -> dict[str, Any]:
         path = directory / 'revealed-cost-observations.json'
         if digest(path) != resource['calibration']['revealed_cost_observations_sha256']:
             raise ValueError('revealed cost observation binding changed')
-        observations = json.loads(path.read_text())['observations']
-        reveal = json.loads((directory.parent / 'reveal.json').read_text())
+        observations = json.loads(rio.read_text(path))['observations']
+        reveal = json.loads(rio.read_text(directory.parent / 'reveal.json'))
         replayed = json.loads(json.dumps(candidates))
         expected = replay_core_hours.cost_evidence(observations, replayed, history['selected_ids'],
                                                    reveal['cumulative_sampling_cost_core_hours'],
@@ -113,7 +114,7 @@ def audit_decision(selection_path: Path) -> dict[str, Any]:
     from tricycle_sampling.replay import cost_guidance as replay_cost_guidance
     if task.get('decision_protocol', {}).get('guidance') == replay_cost_guidance.NAME:
         reference_path = directory / 'acquisition-guidance.json'
-        reference = json.loads(reference_path.read_text())
+        reference = json.loads(rio.read_text(reference_path))
         if spec['context'].get('coverage_cost') != reference['context']:
             raise ValueError('hashed coverage/cost context differs from its reference')
         guidance_evidence = {
@@ -128,10 +129,10 @@ def audit_decision(selection_path: Path) -> dict[str, Any]:
 
 def reported_training_device(path: Path) -> str | None:
     """Read the training result's device, without inferring it from warnings."""
-    if not path.exists():
+    if not rio.exists(path):
         return None
     device = None
-    for line in path.read_text().splitlines():
+    for line in rio.read_text(path).splitlines():
         try:
             value = json.loads(line)
         except ValueError:
@@ -148,46 +149,46 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
     failures = []
     for experiment in plan['experiments']:
         directory = Path(experiment['root'])
-        config = json.loads((directory / 'experiment.json').read_text())
+        config = json.loads(rio.read_text(directory / 'experiment.json'))
         try:
             check_hashes(resolve_tree(config["asset_references"]["assets"]), config['assets_hashes'])
             check_hashes(resolve_tree(config["asset_references"]["private"]), config['private_hashes'])
         except (OSError, ValueError) as exc:
             failures.append({'experiment': str(directory), 'error': str(exc)})
             continue
-        with (resolve_tree(config["asset_references"]["private"]) / "pair-pool.csv").open() as handle:
+        with rio.open(resolve_tree(config["asset_references"]["private"]) / "pair-pool.csv") as handle:
             pool_ids = {row['pair_id'] for row in csv.DictReader(handle)}
-        for seed in sorted(directory.glob('seed-*')):
-            state = json.loads((seed / 'state.json').read_text())
+        for seed in sorted(rio.glob(directory, 'seed-*')):
+            state = json.loads(rio.read_text(seed / 'state.json'))
             if state['phase'] != 'complete':
                 incomplete.append({'seed': str(seed), 'phase': state['phase']})
             previous_ids: set[str] = set()
             previous_checkpoint = None
             seen_indices = []
-            for summary in sorted(seed.glob('round-*/evaluation-summary.json')):
+            for summary in sorted(rio.glob(seed, 'round-*/evaluation-summary.json')):
                 current = summary.parent
                 try:
-                    point = json.loads(summary.read_text())
+                    point = json.loads(rio.read_text(summary))
                     index = int(point['round_index'])
                     if not 0 <= index < config['round_count']:
                         raise ValueError('evaluation round exceeds frozen experiment budget')
                     seen_indices.append(index)
                     request_path = input_file(current, "request.json")
-                    request = json.loads(request_path.read_text())
+                    request = json.loads(rio.read_text(request_path))
                     verify_inputs(current)
                     if request['round_index'] != index:
                         raise ValueError('worker request round mismatch')
-                    worker = json.loads((current / 'result/worker-report.json').read_text())
+                    worker = json.loads(rio.read_text(current / 'result/worker-report.json'))
                     if worker['request_sha256'] != digest(request_path):
                         raise ValueError('worker request binding mismatch')
                     check_hashes(current / 'result', worker['outputs'])
-                    evaluation = json.loads((current / 'result/evaluation.json').read_text())
+                    evaluation = json.loads(rio.read_text(current / 'result/evaluation.json'))
                     if evaluation['ground_truth_sha256'] != config['evaluation_sha256']:
                         raise ValueError('evaluation snapshot mismatch')
                     for key in ('mae', 'rmse', 'n', 'ground_truth_sha256'):
                         if point[key] != evaluation[key]:
                             raise ValueError('evaluation summary differs from frozen worker output')
-                    reveal = json.loads((current / 'reveal.json').read_text())
+                    reveal = json.loads(rio.read_text(current / 'reveal.json'))
                     selected = set(reveal['selected_ids'])
                     if not selected <= pool_ids:
                         raise ValueError('selected set is outside the frozen candidate pool')
@@ -210,10 +211,10 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
                         if checkpoint != previous_checkpoint or reveal['new_label_rows'] != 0:
                             raise ValueError('checkpoint reuse is inconsistent with new labels')
                     else:
-                        summaries = list((current / 'result/full-fit').glob('**/*summary.json'))
+                        summaries = list(rio.glob(current / 'result/full-fit', '**/*summary.json'))
                         if len(summaries) != 1:
                             raise ValueError('missing unambiguous full-model training summary')
-                        training = json.loads(summaries[0].read_text())
+                        training = json.loads(rio.read_text(summaries[0]))
                         if training['epochs_completed'] != config['training']['epochs']:
                             raise ValueError('full model did not complete the frozen training epochs')
                     previous_ids = selected
@@ -223,7 +224,7 @@ def audit_lifecycle(plan: dict[str, Any]) -> dict[str, Any]:
                                    'checkpoint_sha256': checkpoint, 'status': 'verified',
                                    'requested_device': config['training'].get('device'),
                                    'reported_training_device': 'checkpoint-reuse' if request['reuse_checkpoint'] else reported_training_device(training_log),
-                                   'training_log_sha256': digest(training_log) if training_log.exists() else None})
+                                   'training_log_sha256': digest(training_log) if rio.exists(training_log) else None})
                 except (OSError, ValueError, KeyError) as exc:
                     failures.append({'round': str(current), 'error': str(exc)})
             if seen_indices != list(range(len(seen_indices))):
@@ -247,7 +248,7 @@ def audit_suite(root: Path, *, require_complete: bool = False) -> dict[str, Any]
     plan = verified_plan(root)
     decisions = []
     failures = []
-    for selection in sorted(root.glob('*/seed-*/round-*/decision/selection.json')):
+    for selection in sorted(rio.glob(root, '*/seed-*/round-*/decision/selection.json')):
         try:
             item = audit_decision(selection)
             relative = selection.relative_to(root)
@@ -279,7 +280,7 @@ def main() -> None:
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--require-complete', action='store_true')
     args = parser.parse_args()
-    result = audit_suite(args.run_dir.resolve(), require_complete=args.require_complete)
+    result = audit_suite(rio.resolve(args.run_dir), require_complete=args.require_complete)
     print({k: v for k, v in result.items() if k not in ('decisions', 'lifecycle')})
     print({k: v for k, v in result['lifecycle'].items() if k != 'rounds'})
     if result['failures']:

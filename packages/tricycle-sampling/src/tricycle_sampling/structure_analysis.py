@@ -18,6 +18,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 SCHEMA = "tricycle.agent-acquisition-structure-analysis/v1"
 DEFAULT_FINGERPRINT_RADIUS = 2
 DEFAULT_FINGERPRINT_BITS = 2048
@@ -66,7 +68,7 @@ class StructureAnalysisError(ValueError):
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with rio.open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -84,7 +86,7 @@ def _hash_ids(values: Sequence[str]) -> str:
 def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
     try:
-        with path.open(encoding="utf-8-sig", newline="") as handle:
+        with rio.open(path, encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle, delimiter=delimiter)
             if reader.fieldnames is None or not reader.fieldnames:
                 raise StructureAnalysisError(f"input has no CSV header: {path}")
@@ -325,9 +327,9 @@ def analyze(
 ) -> dict[str, Any]:
     if fingerprint_radius < 0 or fingerprint_bits < 1 or density_neighbors < 1:
         raise StructureAnalysisError("fingerprint and density parameters must be positive")
-    if output_dir.exists() and any(output_dir.iterdir()):
+    if rio.exists(output_dir) and any(rio.iterdir(output_dir)):
         raise StructureAnalysisError(f"refusing to overwrite non-empty output directory: {output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    rio.mkdir(output_dir, parents=True, exist_ok=True)
 
     try:
         from rdkit import Chem, DataStructs, rdBase
@@ -493,7 +495,7 @@ def analyze(
     overwritten_columns = sorted(set(extra_columns) & set(candidate_fields))
     output_fields = list(dict.fromkeys([*candidate_fields, *extra_columns]))
     output_path = output_dir / "structure-features.csv"
-    with output_path.open("x", encoding="utf-8", newline="") as handle:
+    with rio.open(output_path, "x", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=output_fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(output_rows)
@@ -519,11 +521,11 @@ def analyze(
     report: dict[str, Any] = {
         "schema": SCHEMA,
         "tool": Path(__file__).name,
-        "tool_sha256": _sha256_file(Path(__file__).resolve()),
+        "tool_sha256": _sha256_file(rio.resolve(Path(__file__))),
         "rdkit_version": rdBase.rdkitVersion,
         "inputs": {
             "candidates": {
-                "path": str(candidates_path.resolve()),
+                "path": str(rio.resolve(candidates_path)),
                 "sha256": _sha256_file(candidates_path),
                 "row_count": len(candidate_rows),
                 "id_column": id_column,
@@ -531,7 +533,7 @@ def analyze(
                 "ordered_id_sha256": _hash_ids(candidate_ids),
             },
             "labeled": {
-                "path": str(labeled_path.resolve()) if labeled_path else "",
+                "path": str(rio.resolve(labeled_path)) if labeled_path else "",
                 "sha256": _sha256_file(labeled_path) if labeled_path else "",
                 "row_count": len(labeled_ids),
                 "id_column": (
@@ -580,18 +582,18 @@ def analyze(
         "feature_summaries": feature_summaries,
         "outputs": {
             "feature_table": {
-                "path": str(output_path.resolve()),
+                "path": str(rio.resolve(output_path)),
                 "sha256": _sha256_file(output_path),
                 "row_count": len(output_rows),
             }
         },
     }
     report_path = output_dir / "structure-analysis.json"
-    with report_path.open("x", encoding="utf-8") as handle:
+    with rio.open(report_path, "x", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
         handle.write("\n")
     report["outputs"]["analysis_report"] = {
-        "path": str(report_path.resolve()),
+        "path": str(rio.resolve(report_path)),
         "sha256": _sha256_file(report_path),
     }
     return report
@@ -612,9 +614,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         report = analyze(
-            candidates_path=args.candidates.resolve(),
-            labeled_path=args.labeled.resolve() if args.labeled else None,
-            output_dir=args.output_dir.resolve(),
+            candidates_path=rio.resolve(args.candidates),
+            labeled_path=rio.resolve(args.labeled) if args.labeled else None,
+            output_dir=rio.resolve(args.output_dir),
             candidate_id_column=args.candidate_id_column,
             reaction_smiles_column=args.reaction_smiles_column,
             labeled_id_column=args.labeled_id_column,

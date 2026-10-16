@@ -3,22 +3,18 @@ name: reactionopt-enumerate-da
 description: "Expand ene/diene substrate pairs into atom-mapped Diels–Alder reaction candidates and save a local CSV."
 ---
 
-# 从 ene/diene 底物枚举 Diels–Alder 反应
+# Enumerate Diels–Alder Reactions from Ene/Diene Pairs
 
-## 适用场景
+Use substrate pairs to generate mapped reaction SMILES candidates for later conformer generation or computation preparation.
 
-已有一批 ene/diene 底物组合，需要生成映射反应 SMILES 候选列表，供后续构象生成或计算任务准备使用。
+## Inputs and outputs
 
-## 输入与输出
-
-- 输入：TOML 中一个或多个 `[[pairs]]`，每项提供 `ene_smiles` 和 `diene_smiles`，可选提供稳定的 `ene_id`、`diene_id`；
-- 输出：运行目录下的 `mapped-reactions.csv`，每行是一条带全原子映射的反应候选；
-- 默认保留已标注的底物 E/Z 相对构型，并枚举未指定的、非可翻转产品立体中心；
-- 可翻转原子（`[#8,#16,#34;X3;v3;+1]`、`[#7,#15,#33;X3;v3;+0]`、`[#9,#17,#35,#53;X3;v3;+2]`）在产品中不指定立体标记，也不作为独立立体异构体枚举；
-- 设置 `stereochemistry = "all"` 时，不按反应位点的底物 E/Z 关系过滤产品；
-- 不连接 Bohr，不创建或提交计算任务。
-
-## 执行
+- TOML contains one or more `[[pairs]]` with `ene_smiles`, `diene_smiles`, and optional stable `ene_id`/`diene_id`.
+- Output is `mapped-reactions.csv` in the run directory, one fully atom-mapped candidate per row.
+- By default, preserve specified substrate E/Z relationships and enumerate unspecified non-invertible product stereocenters.
+- Invertible atoms (`[#8,#16,#34;X3;v3;+1]`, `[#7,#15,#33;X3;v3;+0]`, `[#9,#17,#35,#53;X3;v3;+2]`) receive no product stereotags and do not define separately enumerated stereoisomers.
+- `stereochemistry = "all"` disables filtering by substrate E/Z relationships at reaction sites.
+- No Bohr connection or calculation creation/submission occurs.
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
@@ -26,9 +22,7 @@ uv run --package tricycle-agent tricycle-agent run \
   --run-id da-candidates
 ```
 
-结果中 `metadata.candidate_count` 是候选数量，`metadata.enumeration_complete` 表示有无使用数量上限截断枚举。若要限制规模，可设置 `max_products_per_pair`（RDKit 反应匹配产物数）或 `max_isomers_per_product`；截断后 CSV 行上的 `enumeration_complete` 为 `false`。立体中心数目较多时，枚举量会快速增长。
-
-## 输入示例
+`metadata.candidate_count` records the count; `metadata.enumeration_complete` reports whether a count limit truncated enumeration. Optional `max_products_per_pair` limits RDKit reaction-match products; `max_isomers_per_product` limits isomers. Truncated CSV rows have `enumeration_complete = false`. Enumeration grows quickly with stereocenter count.
 
 ```toml
 stereochemistry = "reactant-constrained"
@@ -40,8 +34,8 @@ diene_id = "diene-001"
 diene_smiles = "C=CC=C"
 ```
 
-可选的 `output_csv` 指定 CSV 文件路径，`output_dir` 指定输出目录；未指定时写入本次 run 目录。相对路径按 `--workdir` 解析。
+Optional `output_csv` specifies the CSV path and `output_dir` the directory; otherwise output goes to the run directory. Relative paths resolve against `--workdir`.
 
-## 适用范围
+## Scope
 
-内置反应模板面向中性 C/N ene 与中性 C/N 共轭二烯。枚举按子结构匹配生成所有映射连接方式，并枚举未指定的非可翻转产品立体化学；不会按 endo/exo 偏好、催化剂、溶剂或反应条件筛选候选。使用数量上限时，结果会明确标为不完整。
+The built-in template supports neutral C/N enes and neutral C/N conjugated dienes. Substructure matching enumerates all mapped connectivities and unspecified non-invertible product stereochemistry. It does not filter by endo/exo preference, catalyst, solvent, or reaction conditions. Limited enumeration is explicitly marked incomplete.

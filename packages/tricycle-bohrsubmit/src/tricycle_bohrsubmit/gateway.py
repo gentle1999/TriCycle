@@ -18,6 +18,11 @@ from tricycle_core import BohrJobSpec, load_dotenv
 from tricycle_core.asset_store import materialize_directory, materialize_input
 from tricycle_core.errors import IntegrationNotConfiguredError, InvalidRequestError, TriCycleError
 from tricycle_core.protocols import BohrGateway
+from tricycle_core.transfer import (
+    publish_download,
+    validate_result_selector,
+    validate_transfer_tree,
+)
 from tricycle_core.validation import validate_fields
 
 from .config import load_toml
@@ -466,16 +471,9 @@ class BohrCliGateway:
 
         selectors: list[str] = []
         for item in candidates:
-            selector = item.strip().replace("\\", "/")
-            while selector.startswith("./"):
-                selector = selector[2:]
-            if not selector:
-                continue
-            if selector.startswith("/") or ".." in selector.split("/"):
-                raise InvalidRequestError(
-                    "Bohr backward_files selectors must be non-empty relative paths"
-                )
-            selectors.append(selector)
+            selectors.append(validate_result_selector(item))
+        if not selectors:
+            raise InvalidRequestError("Explicit result selectors are required before submission")
         return tuple(dict.fromkeys(selectors))
 
     @staticmethod
@@ -527,7 +525,40 @@ class BohrCliGateway:
             raise BohrGatewayError("Bohr group job listing returned a non-object record")
         return records
 
+    def reconcile_submission(self, name: str, group_id: str) -> dict[str, Any]:
+        """Read a complete group inventory before declaring a timed-out submit absent."""
+        if not name.strip() or not str(group_id).strip():
+            raise InvalidRequestError('Submission reconciliation requires a stable name and group')
+        value = self._json_value(self._run(
+            ['job', 'list', '--job_group_id', str(group_id), '--number', '1000', '--output', 'json'],
+            mode='transient'))
+        data = value.get('data', {}) if isinstance(value, dict) else {}
+        items, pagination = data.get('items'), data.get('pagination', {})
+        if (not isinstance(items, list) or pagination.get('has_more') is not False
+                or pagination.get('total') != len(items)):
+            raise BohrGatewayError('Submission reconciliation inventory is incomplete; do not resubmit')
+        # The filter takes the public group ID; rows expose a different internal
+        # jobGroupId. Never compare the two ID namespaces as if they were equal.
+        if (any(not isinstance(item, dict) or item.get('jobGroupId') in (None, '') for item in items)
+                or len({str(item['jobGroupId']) for item in items}) > 1):
+            raise BohrGatewayError('Submission reconciliation group identity mismatch')
+        matches = [item for item in items if item.get('jobName') == name]
+        if len(matches) > 1:
+            raise BohrGatewayError('Multiple jobs match the submission; do not resubmit')
+        external_id = self._job_id(json.dumps(matches[0])) if matches else None
+        if matches and external_id is None:
+            raise BohrGatewayError('Matching submission has no public job ID')
+        return {'job_name': name, 'job_group_id': str(group_id), 'external_id': external_id,
+                'status': 'found' if matches else 'absent', 'inventory': value}
+
     def submit(self, job: BohrJobSpec) -> str:
+        self._result_file_selection(job, job.parameters)
+        for argument in job.parameters.get("extra_submit_args", ()):
+            if str(argument).split("=", 1)[0] in {
+                "--input_directory", "--input-directory", "--config_file", "--config-file",
+                "--backward_files", "--backward-files",
+            }:
+                raise InvalidRequestError("extra_submit_args cannot override validated transfer paths")
         manifest = job.parameters.get("input_assets_manifest")
         if manifest:
             with tempfile.TemporaryDirectory(prefix="tricycle-bohr-input-") as temporary:
@@ -540,6 +571,7 @@ class BohrCliGateway:
         source = job.parameters.get("input_directory")
         if source:
             input_root = Path(str(source))
+            validate_transfer_tree(input_root)
             if input_root.is_symlink() or any(p.is_symlink() for p in input_root.rglob("*")):
                 with tempfile.TemporaryDirectory(prefix="tricycle-bohr-input-") as temporary:
                     destination = Path(temporary) / "input"
@@ -766,12 +798,13 @@ class BohrCliGateway:
         return {"external_id": str(external_id), "status": str(status or ""), "raw": raw}
 
     def download(self, external_id: str, destination: Path) -> tuple[str, ...]:
-        destination.mkdir(parents=True, exist_ok=True)
-        self._run(
-            ["job", "download", str(external_id), "--out", str(destination)],
-            mode=self.config.download_retry_mode,
-        )
-        return tuple(str(path) for path in sorted(destination.rglob("*")) if path.is_file())
+        with tempfile.TemporaryDirectory(prefix="tricycle-bohr-download-") as temporary:
+            staging = Path(temporary)
+            self._run(
+                ["job", "download", str(external_id), "--out", str(staging)],
+                mode=self.config.download_retry_mode,
+            )
+            return publish_download(staging, destination)
 
     def log(self, external_id: str, destination: Path | None = None) -> str:
         args = ["job", "log", str(external_id)]

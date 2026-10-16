@@ -269,7 +269,7 @@ def _format(value: object) -> str:
 
 def _summary_markdown_table(summary_rows: Iterable[Mapping[str, str]]) -> str:
     lines = [
-        "| 项目 | 尝试底物组合 | 资源关联核时 (core-hours) | 全局去重核时 (core-hours) | 成功底物组合 | 成功反应路径 | 基准 MAE (kcal/mol) |",
+        "| Project | Attempted substrate pairs | Resource-linked core-hours | Globally deduplicated core-hours | Successful substrate pairs | Successful reaction paths | Baseline MAE (kcal/mol) |",
         "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary_rows:
@@ -645,7 +645,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     output_dir = args.output_dir or timestamped_run_directory(
-        Path("runs"), "reaction-collection-distribution"
+        Path("reports"), "reaction-collection-distribution"
     )
     projects = dict(args.project)
     if len(projects) != len(args.project):

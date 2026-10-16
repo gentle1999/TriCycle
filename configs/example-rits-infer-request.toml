@@ -1,12 +1,12 @@
-# TriCycle 请求元数据使用 TOML；scripts/conf/rits.yaml 是 RitS 原生输入。
+# TriCycle request metadata uses TOML; scripts/conf/rits.yaml is native RitS input.
 model_name = "rits-smoke"
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 # project_id = "replace-with-bohr-project"
 machine_type = "c6_m60_1 * NVIDIA 4090"
 
-# 任务目录中同时放置 RitS 源码、checkpoint、原生 YAML 和输入数据。
-# 默认权重先放在 TriCycle 根目录 artifacts/rits/rits.ckpt；组装任务目录时复制为
-# /path/to/RitS/data/rits.ckpt（官方推理命令使用这个相对路径）。
+# Place the RitS source, checkpoint, native YAML, and input data together in the task directory.
+# Store the default weights at artifacts/rits/rits.ckpt under the TriCycle root; when assembling the task directory, copy them to
+# /path/to/RitS/data/rits.ckpt (the official inference command uses this relative path).
 input_directory = "/path/to/RitS"
 code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
 checkpoint = { artifact_id = "rits-checkpoint", location = "/path/to/RitS/data/rits.ckpt" }

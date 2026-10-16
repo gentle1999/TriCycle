@@ -3,55 +3,45 @@ name: sar-model
 description: Prepare unified SAR model benchmarks and validated backend tasks, including RxnResid train/refit/infer, with compact shared records.
 ---
 
-# SAR 多模型任务
+# SAR Model Tasks
 
-批量 worker 使用包内 `backends/workers/unified.sh` 及注册表绑定的 Python runner；不创建或引用模型专属、环境类别或 `tools/` 下的 shell 薄转发。公共执行与结果收集脚本由后端准备入口直接交付。
+`tricycle-sar` owns shared model backends, environments, training/evaluation protocols, preparation, and result archiving. Select models and prepare benchmarks with `get_backend(model)`, `tricycle_sar.preparation`, and `python -m tricycle_sar`. Methods come from package `backends/catalog.json`. Frozen methods mean smoke-validated initialization/training/evaluation scripts reused directly from SAR, without new environments or dependency upgrades.
 
-环境初始化直接执行 `backends/environments/engine.py`，由 catalog 交付为
-`common/sar_model_envs/engine.py`；采样及本地环境入口使用同一引擎。
-RxnResid 模型资产配置必须声明当前 `schema` 和 `[model]` 表；版本名与字段见包 README，顶层及表内的未知字段均拒绝。
+Batch workers use `backends/workers/unified.sh` and registry-bound Python runners. Do not create model-specific/environment-specific shell forwarders or `tools/` wrappers. Backend preparation directly stages shared execution/collection scripts. Initialization runs `backends/environments/engine.py`, delivered by catalog as `common/sar_model_envs/engine.py`; sampling/local environments share this engine.
 
-`tricycle-sar` 管理统一的多模型后端、环境与训练/评估协议、任务准备及结果归档。使用 `get_backend(model)`、`tricycle_sar.preparation` 和 `python -m tricycle_sar` 选择模型并组织基准任务；方法来自包内 `backends/catalog.json`。“固化”指已通过 smoke 的环境初始化及训练/评估脚本，位于 SAR 包内并直接复用，不另建环境或升级依赖。
+RxnResid asset configuration requires current `schema` and `[model]`; see package README for fields. Unknown top-level/table fields are errors. `tricycle_sar.SarPlugin` and `sar.train`, `sar.finetune`, `sar.infer` expose RxnResid tasks. `assets/rxnresid-model.toml` binds source/entry points: `train.py`, `train.py --refit --checkpoint ...`, and `predict.py`. Other models predict through their training/evaluation runners; plan independent checkpoint inference/refit only when the backend supports it.
 
-`tricycle_sar.SarPlugin`及 `sar.train`、`sar.finetune`、`sar.infer` 是其中的 RxnResid 任务接口。其源码版本与入口由 `assets/rxnresid-model.toml` 固定，训练、refit、推理分别使用 `train.py`、`train.py --refit --checkpoint ...`、`predict.py`。其他模型通过各自训练/评估 runner 预测；独立 checkpoint 推理和 refit 按后端实际支持的操作规划。
+## Workflow and records
 
-必须遵循 [SAR 模块实验记录约定](../../../packages/tricycle-sar/README.md#实验记录与归档)。共同数据、split、方法与参数写一次，任务只记录 fold/seed/round 等差异；`tricycle_sar.records.compact_tasks` 和 `tricycle_sar.submission`负责规范化。不复制逐折 JSON、环境安装脚本或平行的 manifest/scope 摘要。
+Follow [SAR experiment records and archiving](../../../packages/tricycle-sar/README.md#experiment-records-and-archiving). Shared data/splits/methods/parameters are defined once; tasks record fold/seed/round differences. `tricycle_sar.records.compact_tasks` and `tricycle_sar.submission` normalize them. Do not copy per-fold JSON, installers, or parallel manifest/scope summaries.
 
-1. 用 TOML 请求及 input artifacts 明确数据、checkpoint 和任务命令；源码版本/hash 必须一致。
-2. 多模型任务通过后端或 benchmark 入口准备；RxnResid 原生任务通过 `sar.train/finetune/infer` 规划。默认无网络或提交。
-3. 有既有授权时使用方法绑定的 Bohr 或内网执行器；RxnResid 能力提交使用注入 Bohr adapter 和显式 `--live`。已有 job ID 进入状态/下载。
-4. 运行日志、checkpoint、回执与恢复信息留在 `runs/`；正式结果仅由模块的科学文件入口导出。五折预测合并为一份 OOF 表，拒绝逐折预测副本、`provenance/`、原始 worker 输入与逐任务日志。
+1. Specify data, checkpoint, and actual command through TOML/artifacts, with matching source versions/hashes.
+2. Prepare multi-model jobs through backend/benchmark interfaces and native RxnResid through `sar.train/finetune/infer`. Default execution has no network/submission.
+3. Within existing authorization use the bound Bohr/internal executor. RxnResid submission uses injected Bohr adapter with explicit `--live`; existing job IDs go to status/download.
+4. Keep logs, checkpoints, receipts, and recovery state in `runs/`. Export formal scientific results through module interfaces, with one consolidated OOF table; exclude per-fold prediction copies, `provenance/`, raw worker inputs, and per-task logs.
 
-RxnResid refit 从 checkpoint 恢复模型/config/fold/split，不传这些 override；升级源码时新建训练和采样轨迹，不混用旧 checkpoint。RxnResid 预测含原生 aleatoric/epistemic/predictive uncertainty，校验覆盖与固定 route 词表后供 sampling。
+Refit restores model/config/fold/split without overrides. Source upgrades require new training/sampling trajectories, without mixed checkpoints. Native aleatoric/epistemic/predictive uncertainty goes to sampling only after coverage and fixed-route-vocabulary validation. Detailed workflows: [sar-train](../sar-train/SKILL.md), [sar-finetune](../sar-finetune/SKILL.md), [sar-infer](../sar-infer/SKILL.md), [sar-benchmark](../sar-benchmark/SKILL.md).
 
-细分步骤见 [sar-train](../sar-train/SKILL.md)、[sar-finetune](../sar-finetune/SKILL.md)、[sar-infer](../sar-infer/SKILL.md) 和 [sar-benchmark](../sar-benchmark/SKILL.md)。
+## Shared execution
 
-优先使用 `get_backend`、`tricycle_sar.preparation` 及 `python -m tricycle_sar`，不维护包外模型协议实现。默认 worker 输出合并预测、指标和任务状态；checkpoint 按需显式保留，refit/infer 需保留其依赖的模型文件。
+Prefer `get_backend`, `tricycle_sar.preparation`, and `python -m tricycle_sar`; do not maintain external model protocol implementations. Default worker outputs consolidate predictions/metrics/status. Retain checkpoints explicitly for later refit/inference.
 
-采样任务复用 RxnResid backend 的 `training_command`、`refit_command`、`inference_command`，数据与
-checkpoint 更新使用 `tricycle_sar.rxnresid`。用 `tricycle_sar.sampling_runtime.stage` 本地交付
-经校验的源码归档和原环境入口，执行前 `verify`；不从历史 readiness 回退版本。
+Sampling reuses backend `training_command`, `refit_command`, and `inference_command`; data/checkpoint updates use `tricycle_sar.rxnresid`. Stage validated source archives and original environment entry points with `tricycle_sar.sampling_runtime.stage`, then `verify` before execution. Do not fall back to historical readiness versions.
 
-训练、采样和演示共用 SAR 当前后端。环境检查用 `python -m tricycle_sar.preparation.environment --group-config /path/to/group.toml` 显式绑定项目和任务组、生成可上传输入；已有数据重跑使用 `results prepare`，统一绑定当前方法并写入新目录；结果核验独立复算已记录的科学结果。公共指标、文件 I/O 和哈希来自 core，预测校验和底物对聚合来自 `tricycle_sar.predictions`。
+Training, sampling, and demos share current backends. `python -m tricycle_sar.preparation.environment --group-config /path/to/group.toml` explicitly binds project/group and generates uploadable inputs. `results prepare` reuses existing data with current methods in a new directory; verification independently recomputes recorded scientific results. Core owns shared metrics/I/O/hashing; `tricycle_sar.predictions` owns prediction validation and substrate-pair aggregation.
 
-RxnResid 通用 train/refit/infer 与数据来源无关，使用请求提供的原生配置、CSV 和 checkpoint；反应数据库只是可选输入 adapter。当前采样与五折实验的列名、分组和路径聚合属于实验协议，不作为通用模型的数据约束。
+Generic RxnResid train/refit/infer accepts native configuration/CSV/checkpoints independently of data source; reaction-db is optional. Sampling/five-fold columns, grouping, and aggregation remain experiment-specific.
 
-离线统计与科研绘图使用根目录 [`analysis/`](../../../analysis/README.md) 的共用实现和环境，入口为 `python -m analysis.sar render|distributions`；`tricycle_sar results` 保留 verify/prepare/assets。项目包不导入分析代码。
+Offline statistics/figures use shared root [`analysis/`](../../../analysis/README.md) implementation/environment through `python -m analysis.sar render|distributions`. `tricycle_sar results` retains verify/prepare/assets; packages never import analysis code.
 
-`sar.train/infer/finetune` 使用共享命令 builder，镜像和机器类型匹配后端。本地输入目录中的源码与固定归档一致；规划记录输入哈希，提交再次核验。单任务执行复用 `single_job.py` 与 `sampling_runtime` 的共享初始化和源码，缺失输入的 dry-run 计划不能直接提交。累计标签训练按全 train 划分选择 from-scratch 模式，预测按逐路径身份校验覆盖。
+Shared command builders match image/machine to backend. Source inputs match the fixed archive; planning hashes inputs and submission verifies again. `single_job.py` and `sampling_runtime` share initialization/source. Incomplete dry-run inputs cannot be submitted. Cumulative-label training uses from-scratch mode on full train splits; predictions validate route identities.
 
-准备目录仅记录固定资产的内容寻址引用，不保留输入目录视图，不手动复制或修改共享权重。
-Bohr adapter 自动展开临时上传输入；内网/本地执行先调用
-`tricycle_sar.delivery.materialize(prepared, disposable)` 校验并生成独立输入，
-不要直接上传符号链接或在共享视图内训练。worker 按模型最终产物白名单收集结果；
-`retain_checkpoint` 仅保留新生成的最终模型，不回传上传权重、原始/预处理训练数据或中间 checkpoint。
-原生单任务的相对 `--output` 必须与输入和源码目录分离，下载仅包含声明的结果路径及 worker 日志。
+## Input and run records
 
+Prepared directories use content-addressed `input-assets.json` references, without input directory views, data/weight copies, or execution-input symlinks. Do not manually alter shared weights. `results prepare` returns `run_dir` and `input_assets_manifest`; the run directory is not directly uploadable.
 
-### 输入与运行记录
+Read local assets through `tricycle_core.asset_store.resolve_input`. Internal/local executors use `tricycle_sar.delivery.materialize(prepared, disposable)` to validate and materialize isolated temporary inputs, then clean up. Bohr adapters materialize/upload/clean automatically. Do not upload symlinks or train within shared views.
 
-新准备目录通过 `input-assets.json` 引用共享资产，不保留数据、权重或执行输入目录软链接。
-`results prepare` 返回 `run_dir` 和 `input_assets_manifest`，不能把 run 目录直接上传。
-本地读取使用 `tricycle_core.asset_store.resolve_input`；内部执行器使用
-`tricycle_sar.delivery.materialize` 展开到临时目录，执行后清理；Bohr 提交由 adapter 自动展开。
-保持原始内容、协议与划分哈希，禁止为迁移存储而重新生成已有科学绑定。历史 run 不自动迁移或删除。
+Workers collect model-final-output allowlists. `retain_checkpoint` preserves newly generated final models only, excluding uploaded weights, raw/preprocessed data, and intermediate checkpoints. Native single-job relative `--output` must be separate from input/source directories; download only declared result paths and worker logs.
+
+Preserve content/protocol/split hashes; storage migration does not justify regenerating scientific bindings. Existing runs are not automatically migrated or deleted.

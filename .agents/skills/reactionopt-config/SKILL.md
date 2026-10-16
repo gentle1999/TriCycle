@@ -3,32 +3,22 @@ name: reactionopt-config
 description: "Generate a versioned, serializable ReactionOpt reaction configuration for downstream calculation."
 ---
 
-# ReactionOpt 反应配置
+# ReactionOpt Reaction Configuration
 
-## 适用场景
+Use after sampling selects a candidate reaction, before generating conformers, reaction paths, or transition-state guesses.
 
-当采样器选出候选反应，需要在真正生成构象、反应路径或过渡态初猜前，先形成结构化 ReactionOpt 配置时使用。
+## Inputs and workflow
 
-## 输入
+Inputs are stable `reaction_id`, atom-mapped `reaction_smiles`, reaction mode/method (scaffold default `4+2`), conformer/force-field/path parameters, and optional output directory.
 
-- 稳定的 `reaction_id`；
-- 带 atom mapping 的 `reaction_smiles`；
-- 反应模式/方法（骨架默认 `4+2`）；
-- 构象、力场、路径生成等参数和可选输出目录。
+1. Validate reaction ID, mapped reaction SMILES, and method.
+2. Call `ReactionOptPlugin.generate` for an in-memory configuration.
+3. Call `plan("generate", ...)` to preserve versioned configuration and run context.
+4. Use an explicitly injected `ReactionOptAdapter` to invoke the actual ReactionOpt project and export files.
+5. Pass the configuration version and generated artifacts to Bohr or reaction-db workflows.
 
-## 工作流
+## Outputs and constraints
 
-1. 校验 reaction id、mapped reaction SMILES 和方法名。
-2. 调用 `ReactionOptPlugin.generate` 得到内存配置。
-3. 调用 `plan("generate", ...)` 保存版本化配置和运行上下文。
-4. 由显式注入的 `ReactionOptAdapter` 负责调用现有 ReactionOpt 项目并导出文件。
-5. 把配置版本和生成产物 artifact 传给 Bohr 或 reaction-db skill。
+The current schema is `tricycle.reactionopt/v1`. By default only an in-memory configuration is generated; no RDKit/ASE/ReactionOpt computation runs. User requests and run state remain TOML. Do not infer complex reaction centers, conformer counts, or TS search parameters in the scaffold. The adapter and downstream plugin specification own actual ReactionOpt version/parameter compatibility.
 
-## 输出与约束
-
-- 当前配置 schema 为 `tricycle.reactionopt/v1`；
-- 默认只生成内存配置对象，不执行 RDKit/ASE/ReactionOpt 计算；用户请求和运行状态仍使用 TOML；
-- 不在骨架层推断复杂反应中心、构象数量或 TS 搜索参数；
-- 实际 ReactionOpt 版本和参数兼容性由 adapter 与后续插件规格负责。
-
-实现入口：`packages/tricycle-reactionopt/src/tricycle_reactionopt/plugin.py`。
+Implementation: `packages/tricycle-reactionopt/src/tricycle_reactionopt/plugin.py`.

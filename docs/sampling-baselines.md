@@ -1,34 +1,34 @@
-# 采样基线：方法、文章与适配
+# Sampling baselines: methods, references, and adaptations
 
-本文说明已注册的五种文献基线及其来源，每种规则绑定一篇主引用文章。方法已经在 `packages/tricycle-sampling` 注册；本文记录文献依据，接口以[采样包说明](../packages/tricycle-sampling/README.md)为准，实验条件以[统一实验指南](mae-intelligent-sampling.md)为准。
+This guide describes the five registered literature baselines and their sources, with one distinct primary reference per rule. Methods are registered in `packages/tricycle-sampling`. This document records the literature basis; interfaces are defined by the [sampling package](../packages/tricycle-sampling/README.md), and experimental conditions by the [unified experiment guide](mae-intelligent-sampling.md).
 
-## 收录原则
+## Inclusion criteria
 
-来源登记以已核对的原始研究为依据，不以滚动时间窗口或期刊排名定义接口。来源要求能定位正文、图注或作者公开的正式全文，确认文章实际执行或比较该方法；引言提及和参考文献列举不足以作为使用证据。
+The source registry is based on verified original research, not a rolling publication window or journal ranking. Evidence must locate the main text, a figure caption, or an author-provided official full text showing that the paper actually used or compared the method. Mentions in introductions or reference lists are insufficient.
 
-这里的“静态基线”指采集规则预先固定。LHS 是无标签反馈的设计序列；其余四项使用每轮更新的模型预测，属于固定规则主动采样。LHS 的初始化用途和 UCB 的优化目标与整体 MAE 不完全一致，结果解释时应说明适配范围。
+Here, a static baseline means its acquisition rule is fixed in advance. LHS is a design sequence without label feedback. The other four methods use updated model predictions each round, making them active sampling with fixed rules. LHS initialization and UCB optimization do not exactly match overall MAE reduction; interpretations must state those adaptation boundaries.
 
-主引用提供实际使用的依据，不一概代表算法首创。当前实现是文章采集原则在 TriCycle 上的明确适配；文章中的模型、数据增强、人工筛选和整套实验流程没有随策略名称一起迁移。
+Primary references establish actual use, not necessarily invention. Current implementations explicitly adapt acquisition principles to TriCycle. A strategy name does not import the paper's models, data augmentation, human screening, or complete experimental workflow.
 
-## 已注册的五条文献基线
+## Five registered literature baselines
 
-| 曲线标签 | 规范策略 ID | 唯一主引用 | 原文用途 |
+| Curve label | Canonical strategy ID | Distinct primary reference | Use in the paper |
 | --- | --- | --- | --- |
-| Predictive uncertainty | `predictive-uncertainty` | Zhong et al., *Nature Communications*, 2025，[10.1038/s41467-025-59812-0](https://doi.org/10.1038/s41467-025-59812-0) | 反应可行性分类的迭代主动学习 |
-| Latin hypercube | `latin-hypercube` | Slattery et al., *Science*, 2024，[10.1126/science.adj1817](https://doi.org/10.1126/science.adj1817) | 光催化连续流优化的初始实验设计 |
-| Bayes-UCB | `ucb` | Wang et al., *Nature*, 2024，[10.1038/s41586-024-07021-y](https://doi.org/10.1038/s41586-024-07021-y) | bandit 反应条件通用性优化 |
-| Distance × uncertainty | `distance-uncertainty-product` | Shrestha et al., *Nature Communications*, 2024，[10.1038/s41467-024-49011-8](https://doi.org/10.1038/s41467-024-49011-8) | A Score 驱动材料预测模型的迭代采集 |
-| Uncertainty + Kriging Believer | `uncertainty-kriging-believer` | Souza et al., *JACS*, 2025，[10.1021/jacs.5c02218](https://doi.org/10.1021/jacs.5c02218) | 最大不确定性与批内临时重拟合 |
+| Predictive uncertainty | `predictive-uncertainty` | Zhong et al., *Nature Communications*, 2025, [10.1038/s41467-025-59812-0](https://doi.org/10.1038/s41467-025-59812-0) | Iterative active learning for reaction-feasibility classification |
+| Latin hypercube | `latin-hypercube` | Slattery et al., *Science*, 2024, [10.1126/science.adj1817](https://doi.org/10.1126/science.adj1817) | Initial experimental design for photocatalytic flow optimization |
+| Bayes-UCB | `ucb` | Wang et al., *Nature*, 2024, [10.1038/s41586-024-07021-y](https://doi.org/10.1038/s41586-024-07021-y) | Bandit optimization of reaction-condition generality |
+| Distance × uncertainty | `distance-uncertainty-product` | Shrestha et al., *Nature Communications*, 2024, [10.1038/s41467-024-49011-8](https://doi.org/10.1038/s41467-024-49011-8) | Iterative A Score acquisition for materials prediction |
+| Uncertainty + Kriging Believer | `uncertainty-kriging-believer` | Souza et al., *JACS*, 2025, [10.1021/jacs.5c02218](https://doi.org/10.1021/jacs.5c02218) | Maximum uncertainty with temporary within-batch refitting |
 
-random 不进入新比较曲线；epistemic 和 aleatoric 不再作为 Zhong et al. 同一篇文章的另外两条主基线。三者的代码和历史结果保留，共享随机初始集仍保留。
+Random is not a new comparison curve. Epistemic and aleatoric uncertainty are not two additional primary baselines from the same Zhong et al. paper. Their implementations and historical results remain available, as does shared random initialization.
 
 ## 1. Predictive uncertainty
 
-**文章：** Haowen Zhong, Yilan Liu et al. **Towards global reaction feasibility and robustness prediction with high throughput data and bayesian deep learning**. *Nature Communications* **16**, 4522 (2025)，2025-05-15。[期刊正文](https://www.nature.com/articles/s41467-025-59812-0)；[PubMed 与图注](https://pubmed.ncbi.nlm.nih.gov/40374636/)。
+**Reference:** Haowen Zhong, Yilan Liu et al. **Towards global reaction feasibility and robustness prediction with high throughput data and bayesian deep learning**. *Nature Communications* **16**, 4522 (2025), May 15, 2025. [Journal text](https://www.nature.com/articles/s41467-025-59812-0); [PubMed and captions](https://pubmed.ncbi.nlm.nih.gov/40374636/).
 
-**证据：** 正文 *Fine-grained Uncertainty Disentanglement*、Methods 的不确定性估计与分解、Fig. 4e–g。文章在酸–胺反应可行性分类中比较 predictive、epistemic、aleatoric 选样和 random，按新增数据更新模型，报告不同划分下的 F1-macro 学习曲线。
+**Evidence:** The main-text *Fine-grained Uncertainty Disentanglement* section, Methods uncertainty estimation/decomposition, and Fig. 4e–g. The paper compares predictive, epistemic, aleatoric, and random selection for acid–amine reaction-feasibility classification, updating models with added data and reporting F1-macro learning curves across splits.
 
-原文用后验二分类概率 `p_i` 的自然对数熵：
+The original method uses natural-log entropy of posterior binary-classification probabilities `p_i`:
 
 ```text
 predictive = H(mean(p_i))
@@ -36,83 +36,83 @@ aleatoric  = mean(H(p_i))
 epistemic  = predictive - aleatoric
 ```
 
-**为何只保留 predictive：** 正文认为 predictive 与 epistemic 整体接近，均优于 aleatoric；少于 500 个样本时 epistemic 估计不稳定，predictive 有早期优势；超过 1000 个样本后 epistemic 更有助于定位模型知识缺口。random 在三个划分中均最差。因此文章不支持某一种在全部预算、划分中绝对最好。选择 predictive 代表该文，是结合完整学习过程的本项目判断，不能推断它在 TriCycle 回归 MAE 中必然最优。
+**Why predictive alone represents this paper:** The text reports broadly similar predictive and epistemic performance, both ahead of aleatoric. Epistemic estimates are unstable below 500 samples, giving predictive an early advantage; beyond 1000 samples, epistemic better identifies model knowledge gaps. Random performs worst across the three splits. The paper therefore does not establish one method as universally best at every budget and split. Selecting predictive to represent the paper is a project judgment over the full learning process, not evidence that it must minimize TriCycle regression MAE.
 
-**当前实现：** 对底物对先验路线的 RxnResid `predictive_variance` 求和，降序取样，同分按 ID 升序。回归方差与原文分类熵不同；路线聚合也是适配。通用 API 仍支持三种分类熵及旧不确定性字段，但新统一比较固定使用回归方差口径。
+**Current implementation:** Sum RxnResid `predictive_variance` across prior routes for each substrate pair; select in descending order, breaking ties by ascending ID. Regression variance differs from the paper's classification entropy, and route aggregation is also an adaptation. The general API still supports the three classification entropies and older uncertainty fields, while the unified comparison fixes regression variance semantics.
 
 ## 2. Latin hypercube
 
-**文章：** Aidan Slattery et al. **Automated self-optimization, intensification, and scale-up of photocatalysis in flow**. *Science* **383**(6681), eadj1817 (2024)，2024-01-26。[DOI](https://doi.org/10.1126/science.adj1817)；[作者机构正式全文](https://pure.uva.nl/ws/files/187156411/Automated_self-optimization_intensification_and_scale-up_of_photocatalysis_in_flow.pdf)。
+**Reference:** Aidan Slattery et al. **Automated self-optimization, intensification, and scale-up of photocatalysis in flow**. *Science* **383**(6681), eadj1817 (2024), January 26, 2024. [DOI](https://doi.org/10.1126/science.adj1817); [official institutional full text](https://pure.uva.nl/ws/files/187156411/Automated_self-optimization_intensification_and_scale-up_of_photocatalysis_in_flow.pdf).
 
-**证据：** *Model-based optimization*、*Materials and methods / Platform operation* 中每次 campaign 的 LHS 初始化，随后进入模型驱动优化。该文背书的是 LHS 的实际使用，未证明全程 LHS 在 pool-based MAE 学习中更优。
+**Evidence:** *Model-based optimization* and *Materials and methods / Platform operation* describe LHS initialization for each campaign, followed by model-driven optimization. This establishes actual use of LHS, not superiority of full-trajectory LHS for pool-based MAE learning.
 
-**方法：** 每个连续输入维度分层取点，再随机配对不同维度的层，形成空间覆盖设计。
+**Method:** Stratify each continuous input dimension, then randomly pair strata across dimensions to form a space-covering design.
 
-**当前实现：** 使用相同六维反应物描述符、固定 `[0,1]` 边界、采集 seed 和初始批次之后的总设计规模；按设计点顺序映射到最近未选离散候选。跨轮仅推进 offset，不重估边界或重新设计。底物 ID 不当作连续坐标。离散映射可能改变分层，任意批次前缀也不保证仍是严格 LHS；从初始化扩展到完整采样轨迹是本项目适配。
+**Current implementation:** Use the shared six-dimensional reactant descriptors, fixed `[0,1]` bounds, acquisition seed, and total design size after the initial batch. Map design points in order to the nearest unselected discrete candidate. Across rounds, only advance the offset; do not reestimate bounds or redesign. Substrate IDs are not continuous coordinates. Discrete mapping may alter stratification, and arbitrary batch prefixes need not remain strict LHS designs. Extending initialization to a full sampling trajectory is a TriCycle adaptation.
 
 ## 3. Gaussian Bayes-UCB
 
-**文章：** Jason Y. Wang et al. **Identifying general reaction conditions by bandit optimization**. *Nature* **626**, 1025–1033 (2024)，2024-02-28 在线发表。[期刊正文](https://www.nature.com/articles/s41586-024-07021-y)；[作者正式全文](https://doyle.chem.ucla.edu/wp-content/uploads/2024/02/s41586-024-07021-y.pdf)。
+**Reference:** Jason Y. Wang et al. **Identifying general reaction conditions by bandit optimization**. *Nature* **626**, 1025–1033 (2024), published online February 28, 2024. [Journal text](https://www.nature.com/articles/s41586-024-07021-y); [author-provided full text](https://doyle.chem.ucla.edu/wp-content/uploads/2024/02/s41586-024-07021-y.pdf).
 
-**证据：** *Model design and development*、Fig. 2、Supplementary Information Section 8。文章实际用 Bayes-UCB 优化反应条件的通用性，二值指标采用 beta prior，连续指标采用 Gaussian prior，并讨论 UCB1-Tuned。
+**Evidence:** *Model design and development*, Fig. 2, and Supplementary Information Section 8. The paper uses Bayes-UCB to optimize reaction-condition generality, with beta priors for binary metrics and Gaussian priors for continuous metrics, and discusses UCB1-Tuned.
 
-**方法：** 按预期收益后验的上分位数选择 arm。Gaussian 情形可写为 `mu + Phi_inverse(q)*std`；这一公式的解释取决于收益后验的语义，不能把任何模型标准差直接称为原文后验。
+**Method:** Select arms by an upper posterior quantile of expected reward. In the Gaussian case, this is `mu + Phi_inverse(q)*std`. Its interpretation depends on the reward posterior; arbitrary model standard deviations cannot be called the paper's posterior.
 
-**当前实现：** 一候选一 arm，固定 `q=0.95`，批次一次取 top-k。统一实验将同一组先验路线的预测能量均值取负作为收益方向，使用 RxnResid 认知方差构造 Gaussian 近似：
+**Current implementation:** One candidate is one arm; `q=0.95` is fixed, and each batch selects top-k once. The unified experiment negates the mean predicted energy across the same prior routes to define reward direction and uses RxnResid epistemic variance for a Gaussian approximation:
 
 ```text
 score = -mean(mu_j) + Phi_inverse(0.95) * sqrt(sum(v_epi_j)) / n
 ```
 
-此处假定路线独立；认知方差用于期望收益的不确定性，总体方差中的 aleatoric 噪声未自动加入。真实反馈后的预测更新由共同 RxnResid 流程完成。固定分位数、候选级 arms、路线聚合和低能量偏好均为适配；优化较低能量并不等同于优化全池 MAE。
+This assumes route independence. Epistemic variance represents uncertainty in expected reward; aleatoric noise in total variance is not automatically included. The shared RxnResid workflow updates predictions after real feedback. Fixed quantiles, candidate-level arms, route aggregation, and low-energy preference are adaptations. Optimizing lower energy is not equivalent to reducing full-pool MAE.
 
-Li et al. 的 *Nature Chemistry* 2024 文章使用 GP-UCB、随机 beta 及人工选择，属于另一流程；当前版本绑定 Wang et al. 的 Gaussian Bayes-UCB，不把二者混称为同一复现。
+Li et al.'s 2024 *Nature Chemistry* paper uses GP-UCB, random beta, and human selection in a different workflow. The current version binds Wang et al.'s Gaussian Bayes-UCB and does not conflate the two reproductions.
 
-## 4. Distance × uncertainty（A Score）
+## 4. Distance × uncertainty (A Score)
 
-**文章：** Snehi Shrestha et al. **Machine intelligence accelerated design of conductive MXene aerogels with programmable properties**. *Nature Communications* **15**, 4685 (2024)，2024-06-01。[期刊正文](https://www.nature.com/articles/s41467-024-49011-8)。
+**Reference:** Snehi Shrestha et al. **Machine intelligence accelerated design of conductive MXene aerogels with programmable properties**. *Nature Communications* **15**, 4685 (2024), June 1, 2024. [Journal text](https://www.nature.com/articles/s41467-024-49011-8).
 
-**证据：** *Constructing a prediction model via active learning loops, data augmentation, and collaborative robots*、Eq. (1)、Fig. 2、Supplementary Note 7 / Fig. 13–14 / Table 6。文章进行持续模型更新的 AL loops，并与 random、LHS 比较预测 MAE。
+**Evidence:** *Constructing a prediction model via active learning loops, data augmentation, and collaborative robots*, Eq. (1), Fig. 2, and Supplementary Note 7 / Fig. 13–14 / Table 6. The paper runs active-learning loops with ongoing model updates and compares prediction MAE against random and LHS.
 
-**方法：** `A Score = L_hat × sigma_hat`；正文将距离描述为 in-model 与 model-targeted 点的 Euclidean 距离，将不确定性项称为预测方差。
+**Method:** `A Score = L_hat × sigma_hat`. The text describes Euclidean distance between in-model and model-targeted points and calls the uncertainty term predictive variance.
 
-**当前实现：** 在共同六维描述符上计算候选到已揭示有效标签集合的最近 Euclidean 距离，再乘路线总体预测方差之和。同批参考集合固定，不额外归一化。既有 `uncertainty-diversity` 的加权和及 `density-weighted-uncertainty` 的密度乘积不是这条规则。
+**Current implementation:** Compute nearest Euclidean distance from a candidate to the revealed valid-label set in the shared six-dimensional descriptor space, then multiply by summed total predictive route variance. The reference set remains fixed within a batch; no extra normalization is applied. The existing weighted-sum `uncertainty-diversity` and density-product `density-weighted-uncertainty` rules are different methods.
 
-最近参考距离、固定表征缩放和回归方差为明确适配。SI 中原始距离聚合、归一化与多输出方差仍未逐项完成复现核对；原文的模型、数据增强和机器人流程未迁移，因此其整体表现不能归因于当前评分函数。
+Nearest-reference distance, fixed representation scaling, and regression variance are explicit adaptations. The SI's original distance aggregation, normalization, and multi-output variance have not all been reproduced and checked individually. The original model, augmentation, and robotics workflow are not imported; its overall performance cannot be attributed to this scoring function.
 
 ## 5. Uncertainty + Kriging Believer
 
-**文章：** Lucas W. Souza et al. **Applying Active Learning toward Building a Generalizable Model for Ni-Photoredox Cross-Electrophile Coupling of Aryl and Alkyl Bromides**. *Journal of the American Chemical Society* **147**(22), 18747–18759 (2025)，2025-05-22 在线发表。[DOI](https://doi.org/10.1021/jacs.5c02218)；[全文存档](https://pmc.ncbi.nlm.nih.gov/articles/PMC12517759/)；[作者正式全文](https://doyle.chem.ucla.edu/wp-content/uploads/2025/05/souza-et-al-2025-applying-active-learning-toward-building-a-generalizable-model-for-ni-photoredox-cross-electrophile.pdf)。
+**Reference:** Lucas W. Souza et al. **Applying Active Learning toward Building a Generalizable Model for Ni-Photoredox Cross-Electrophile Coupling of Aryl and Alkyl Bromides**. *Journal of the American Chemical Society* **147**(22), 18747–18759 (2025), published online May 22, 2025. [DOI](https://doi.org/10.1021/jacs.5c02218); [full-text archive](https://pmc.ncbi.nlm.nih.gov/articles/PMC12517759/); [author-provided full text](https://doyle.chem.ucla.edu/wp-content/uploads/2025/05/souza-et-al-2025-applying-active-learning-toward-building-a-generalizable-model-for-ni-photoredox-cross-electrophile.pdf).
 
-**证据：** *Batch Selection*、Fig. 4–6。文章用 RF 树预测标准差表示不确定性，对 8 个 aryl cores 汇总后逐个选取 12 个 alkyl building blocks。每选一个，先用当前预测作临时标签重拟合，再选同批下一项；真实实验后更新正式模型。
+**Evidence:** *Batch Selection* and Fig. 4–6. The paper uses standard deviations across RF tree predictions as uncertainty, aggregates across eight aryl cores, and selects 12 alkyl building blocks sequentially. After each selection, current predictions become temporary labels for refitting before selecting the next item. Real experimental results then update the formal model.
 
-**方法：** 保留批内顺序更新，使后续评分反映已经暂时“相信”的预测；不能用一次静态不确定性 top-k 替代 KB。
+**Method:** Preserve sequential within-batch updates so later scores reflect predictions temporarily treated as true. One static uncertainty top-k operation is not KB.
 
-**当前实现：** 改为底物对级选择；统一实验使用 RxnResid 边际均值与认知标准差，加固定长度尺度为 1 的结构 RBF 相关性，逐步 Gaussian 条件化。相关性是显式建模假设，不是 RxnResid 原生联合后验。临时标签仅存在于本次选择会话，不写回训练标签，也不增加主模型训练任务。
+**Current implementation:** Selection operates at substrate-pair level. The unified experiment uses RxnResid marginal means and epistemic standard deviations, adds structural RBF correlation with fixed length scale 1, and applies sequential Gaussian conditioning. Correlation is an explicit modeling assumption, not a native RxnResid joint posterior. Temporary labels exist only within the selection session; they neither enter training labels nor add main-model training tasks.
 
-通用采样 API 另提供完整 Gaussian 协方差 adapter 和本地 refit protocol。当前默认实现未复现原文 RF 树数、跨 cores 聚合或重拟合配方。原文讨论绝对不确定性与高预测收率的相关偏差；该机制也不保证降低全池 MAE。
+The general sampling API also provides a full Gaussian covariance adapter and local-refit protocol. The default implementation does not reproduce the original RF tree count, cross-core aggregation, or refit recipe. The paper discusses correlation bias between absolute uncertainty and high predicted yield; this mechanism also does not guarantee lower full-pool MAE.
 
-## 补充来源与备选方法
+## Supplementary sources and alternatives
 
-下列条目保留已找到的使用证据。它们未加入最终五条比较，也未注册为新的文献基线；同一家族的额外文章不增加曲线数。
+The entries below preserve located evidence of use. They are neither part of the final five-method comparison nor newly registered literature baselines. Additional articles in one family do not add curves.
 
-| 方法或用途 | 文章与 DOI | 证据及保留原因 |
+| Method or use | Reference and DOI | Evidence and reason retained |
 | --- | --- | --- |
-| A Score 批量变体 | Haochen Yang et al., **Predictive design of stretchable electrodes with strain-insensitive performance via robotics- and machine learning-integrated workflow**, *Nature Communications* **17**, 1778 (2026)，[DOI](https://doi.org/10.1038/s41467-026-68484-3) | Eq. (2)、SI Notes 7–8，结合已采距离、候选距离和委员会不确定性；同一家族，完整批次公式待核对 |
-| 异构 QBC | Kangming Li et al., **Exploiting redundancy in large materials datasets for efficient machine learning with less data**, *Nature Communications* **14**, 7283 (2023)，[DOI](https://doi.org/10.1038/s41467-023-42992-y) | *Uncertainty-based active learning* / Fig. 6，RF–XGB 分歧的逐轮 RMSE；需真实委员会及单列采集模型开销，已知残差 pruning 不当作无标签采集 |
-| 目标定向 AF_AL | Jules Schleinitz et al., **Designing Target-specific Data Sets for Regioselectivity Predictions on Complex Substrates**, *JACS* **147**(9), 7476–7484 (2025)，[DOI](https://doi.org/10.1021/jacs.4c15902) | Section 2.2、Fig. 3–4、SI V.3，位点相似性 × 预测反应性 × 不确定性；需另外定义目标定向任务 |
-| KS 初始化及 GP-UCB | Xiaobo Li et al., **Sequential closed-loop Bayesian optimization as a guide for organic molecular metallophotocatalyst formulation discovery**, *Nature Chemistry* **16**, 1286–1294 (2024)，[DOI](https://doi.org/10.1038/s41557-024-01546-5) | *Selecting synthetic targets using BO*：KS 选初始六点，闭环主体为 UCB；KS 未作为持续 AL 主线纳入 |
-| CVT、LHS 初始化对照 | Jose Antonio Garrido Torres et al., **A Multi-Objective Active Learning Platform and Web App for Reaction Optimization**, *JACS* **144**(43), 19999–20007 (2022)，[DOI](https://doi.org/10.1021/jacs.2c08592) | Fig. 4 / p. 20003，比较 CVT、LHS、random 初始化，随后 BO；不证明全程 CVT 学习 |
-| D-optimal 对照 | Nathan J. Szymanski et al., **Autonomous and dynamic precursor selection for solid-state materials synthesis**, *Nature Communications* **14**, 6956 (2023)，[DOI](https://doi.org/10.1038/s41467-023-42329-9) | Fig. 3a、SI Note 1，线性设计假设下的独立比较；增量设计、奇异性与正则化需另行冻结 |
-| Sobol 初始化及多目标 BO | J. W. Sin et al., **Highly parallel optimisation of chemical reactions through automation and machine intelligence**, *Nature Communications* **16**, 6464 (2025)，[DOI](https://doi.org/10.1038/s41467-025-61803-0) | Fig. 1b、*Benchmarking and evaluating*；Sobol 初始化，后续 TS-HVI、q-NEHVI、q-NParEgo，需联合后验与多目标定义 |
-| 动态轨迹 QBC | **Exploring the frontiers of condensed-phase chemistry with a general reactive machine learning potential**, *Nature Chemistry* (2024)，[DOI](https://doi.org/10.1038/s41557-023-01427-3) | nanoreactor 多轮 AL 的化学使用证据；动态轨迹及能量/力阈值与固定底物对池不同 |
+| Batch A Score variant | Haochen Yang et al., **Predictive design of stretchable electrodes with strain-insensitive performance via robotics- and machine learning-integrated workflow**, *Nature Communications* **17**, 1778 (2026), [DOI](https://doi.org/10.1038/s41467-026-68484-3) | Eq. (2), SI Notes 7–8 combine sampled distance, candidate distance, and committee uncertainty; same family, full batch formula still requires verification |
+| Heterogeneous QBC | Kangming Li et al., **Exploiting redundancy in large materials datasets for efficient machine learning with less data**, *Nature Communications* **14**, 7283 (2023), [DOI](https://doi.org/10.1038/s41467-023-42992-y) | *Uncertainty-based active learning* / Fig. 6, round-by-round RMSE using RF–XGB disagreement; needs a real committee and separately recorded acquisition-model cost; pruning by known residuals is not unlabeled acquisition |
+| Target-directed AF_AL | Jules Schleinitz et al., **Designing Target-specific Data Sets for Regioselectivity Predictions on Complex Substrates**, *JACS* **147**(9), 7476–7484 (2025), [DOI](https://doi.org/10.1021/jacs.4c15902) | Section 2.2, Fig. 3–4, SI V.3: site similarity × predicted reactivity × uncertainty; needs a separately defined target-directed task |
+| KS initialization and GP-UCB | Xiaobo Li et al., **Sequential closed-loop Bayesian optimization as a guide for organic molecular metallophotocatalyst formulation discovery**, *Nature Chemistry* **16**, 1286–1294 (2024), [DOI](https://doi.org/10.1038/s41557-024-01546-5) | *Selecting synthetic targets using BO*: KS selects six initial points, followed by UCB; KS is not included as an ongoing AL baseline |
+| CVT/LHS initialization comparison | Jose Antonio Garrido Torres et al., **A Multi-Objective Active Learning Platform and Web App for Reaction Optimization**, *JACS* **144**(43), 19999–20007 (2022), [DOI](https://doi.org/10.1021/jacs.2c08592) | Fig. 4 / p. 20003 compares CVT, LHS, and random initialization followed by BO; it does not establish full-trajectory CVT learning |
+| D-optimal comparison | Nathan J. Szymanski et al., **Autonomous and dynamic precursor selection for solid-state materials synthesis**, *Nature Communications* **14**, 6956 (2023), [DOI](https://doi.org/10.1038/s41467-023-42329-9) | Fig. 3a, SI Note 1, independent comparison under linear-design assumptions; incremental design, singularity, and regularization need separate fixed definitions |
+| Sobol initialization and multi-objective BO | J. W. Sin et al., **Highly parallel optimisation of chemical reactions through automation and machine intelligence**, *Nature Communications* **16**, 6464 (2025), [DOI](https://doi.org/10.1038/s41467-025-61803-0) | Fig. 1b, *Benchmarking and evaluating*: Sobol initialization followed by TS-HVI, q-NEHVI, and q-NParEgo; requires joint posteriors and multi-objective definitions |
+| Dynamic-trajectory QBC | **Exploring the frontiers of condensed-phase chemistry with a general reactive machine learning potential**, *Nature Chemistry* (2024), [DOI](https://doi.org/10.1038/s41557-023-01427-3) | Chemical evidence from multiround nanoreactor AL; dynamic trajectories and energy/force thresholds differ from a fixed substrate-pair pool |
 
-Shrestha et al. 也给出 LHS 对照，作为补充证据保留；LHS 主引用仍指定 Slattery et al.，保持五条主线对应五篇不同文章。
+Shrestha et al. also provides an LHS comparison, retained as supplementary evidence. Slattery et al. remains the LHS primary reference so the five principal curves correspond to five distinct papers.
 
-## 实现与结果中的引用要求
+## Citation requirements for implementations and results
 
-[protocols.py](../packages/tricycle-sampling/src/tricycle_sampling/protocols.py)是五条来源协议的唯一代码定义。[TOML 示例](../configs/sampling-baselines/)逐项注明 DOI；计划和结果自动保存文章、证据、规则、适配、协议与实现版本及 hash。实验归档应同时保存参数、输入数据、源码、checkpoint 链和逐轮选择。
+[protocols.py](../packages/tricycle-sampling/src/tricycle_sampling/protocols.py) is the single code definition for the five source protocols. [TOML examples](../configs/sampling-baselines/) identify each DOI. Plans and results automatically record the paper, evidence, rule, adaptation, protocol and implementation versions, and hashes. Experiment archives must also retain parameters, input data, source, checkpoint chains, and per-round selections.
 
-统一比较冻结候选池、身份、初始集、主训练、评价集、seed、批量与核时口径；表征、聚合、距离/核、同分和批内机制按当前版本记录。未来真实标签、残差、计算成功与费用不参与 acquisition。变更采集定义或主训练需新实验/协议版本，不能改写历史结果的来源绑定。
+Unified comparisons freeze candidate pools, identities, initial sets, main training, evaluation sets, seeds, batch sizes, and core-hour accounting. Record representations, aggregation, distance/kernel choices, tie-breaking, and within-batch mechanisms under the current version. Future labels, residuals, calculation outcomes, and costs do not enter acquisition. Changes to acquisition definitions or main training require a new experiment/protocol version; historical source bindings must not be rewritten.
 
-推荐比较顺序即主表五项；是否有效由匹配预算实验决定。结果解释须保留 LHS 的全程设计适配、UCB 的能量优化偏好、A Score 的距离聚合差异，以及 KB 的 Gaussian/RBF 假设。
+The recommended comparison order is the five methods in the main table. Effectiveness is established by matched-budget experiments. Interpretation must retain LHS's full-trajectory design adaptation, UCB's energy-optimization preference, A Score's distance-aggregation differences, and KB's Gaussian/RBF assumptions.

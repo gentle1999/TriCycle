@@ -9,47 +9,35 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import file_sha256 as _sha256_file
-from tricycle_core.io import write_json as _write_json
+from tricycle_core import record_io as rio
+from tricycle_core.record_io import file_sha256 as _sha256_file
+from tricycle_core.record_io import write_json as _write_json
 
 PHASES = {
-    "prepare": "准备训练输入",
-    "submit": "提交训练",
-    "monitor": "监控远端训练",
-    "download": "下载结果",
-    "analyze": "本地结构分析",
-    "agent": "智能体决策/排队",
-    "select": "校验公式并选样",
-    "blocked": "需处理错误",
-    "complete": "完成",
+    "prepare": "Prepare training inputs",
+    "submit": "Submit training",
+    "monitor": "Monitor remote training",
+    "download": "Download results",
+    "analyze": "Local structural analysis",
+    "agent": "Agent decision / queued",
+    "select": "Validate formula and select candidates",
+    "blocked": "Error requires attention",
+    "complete": "Complete",
 }
 
 
 def read(path: Path) -> dict[str, Any]:
-    return dict(json.loads(path.read_text(encoding="utf-8")))
+    return dict(json.loads(rio.read_text(path, encoding="utf-8")))
 
 
 def write_text(path: Path, text: str) -> None:
-    if path.is_file() and path.read_text(encoding="utf-8") == text:
+    if rio.is_file(path) and rio.read_text(path, encoding="utf-8") == text:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as handle:
-        temporary = Path(handle.name)
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    try:
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    rio.atomic_write_text(path, text)
 
 
 def cell(value: object) -> str:
@@ -63,19 +51,19 @@ def decision_summary(directory: Path) -> dict[str, Any]:
         raise ValueError("response/task hash mismatch")
     response_hash = _sha256_file(directory / "response.json")
     accepted = directory / "accepted-response.json"
-    if accepted.exists() and read(accepted)["sha256"] != response_hash:
+    if rio.exists(accepted) and read(accepted)["sha256"] != response_hash:
         raise ValueError("accepted response changed")
     selection_path = directory / "selection.json"
-    selection = read(selection_path) if selection_path.exists() else {}
+    selection = read(selection_path) if rio.exists(selection_path) else {}
     rationale = str(response["rationale"])
     brief = directory / "rationale-brief.json"
-    if brief.exists():
+    if rio.exists(brief):
         override = read(brief)
         if override.get("response_sha256") == response_hash:
             rationale = str(override["rationale"])
-    model = "旧调用未显式指定模型"
+    model = "Model not explicitly recorded by the earlier invocation"
     process_path = directory / "agent-process.json"
-    if process_path.exists():
+    if rio.exists(process_path):
         argv = read(process_path)["argv"]
         if "--model" in argv:
             model = str(argv[argv.index("--model") + 1])
@@ -89,7 +77,7 @@ def decision_summary(directory: Path) -> dict[str, Any]:
             )
             model += f" / {effort}" if effort else ""
     metrics = task["context"]["model_metrics"]
-    status = "已完成确定性选样" if selection else "公式已生成，待校验选样"
+    status = "Deterministic selection complete" if selection else "Formula generated; validation and selection pending"
     summary = {
         "seed": task["seed"],
         "selection_round": task["round"],
@@ -110,87 +98,87 @@ def decision_summary(directory: Path) -> dict[str, Any]:
         summary['decision_source'] = response.get('decision_source', 'agent')
     _write_json(directory / "acquisition-summary.json", summary)
     lines = [
-        f"# Seed {task['seed']:02d} · 第 {task['round']} 次智能选样",
+        f"# Seed {task['seed']:02d} · Intelligent selection {task['round']}",
         "",
-        f"**状态：{status}** · 决策模型：{model}",
+        f"**Status: {status}** · Decision model: {model}",
         "",
-        "## 简要理由",
+        "## Brief rationale",
         "",
         rationale,
         "",
-        "## 采集函数",
+        "## Acquisition function",
         "",
         "```text",
         str(response["expression"]),
         "```",
         "",
-        "成本代理：",
+        "Cost proxy:",
         "",
         "```text",
         str(response["cost_expression"]),
         "```",
         "",
-        "## 本轮结果",
+        "## Round results",
         "",
-        f"- 已采样 {task['sampled_count']} 对；候选 {task['candidate_count']} 对；本轮已选 {summary['selected_count']} 对。",
-        f"- 辅助模型留出 MAE：{float(metrics['validation_mae']):.4f} kcal/mol；RMSE：{float(metrics['validation_rmse']):.4f} kcal/mol。",
-        "- 上述误差来自已揭示标签的辅助验证模型；ground truth 不参与采集决策。",
+        f"- Previously sampled: {task['sampled_count']} pairs; candidates: {task['candidate_count']} pairs; selected this round: {summary['selected_count']} pairs.",
+        f"- Auxiliary-model holdout MAE: {float(metrics['validation_mae']):.4f} kcal/mol; RMSE: {float(metrics['validation_rmse']):.4f} kcal/mol.",
+        "- These errors come from an auxiliary validation model using revealed labels; ground truth does not enter acquisition decisions.",
         "",
-        "[完整分析与原始响应](response.json) · [候选表](pair-candidates.json) · "
-        "[分组验证误差](validation-groups.json)",
+        "[Full analysis and original response](response.json) · [Candidate table](pair-candidates.json) · "
+        "[Validation errors by group](validation-groups.json)",
         "",
     ]
     if selection:
         lines.extend(
             [
-                "[选中的候选 ID](selection.json) · [可回放请求](selection-request.toml)",
+                "[Selected candidate IDs](selection.json) · [Replayable request](selection-request.toml)",
                 "",
-                f"函数 hash：`{summary['function_hash']}`",
+                f"Function hash: `{summary['function_hash']}`",
                 "",
             ]
         )
     if task.get('decision_protocol'):
-        lines.extend(['## 科学决定与后续检验', '',
-                      f"- 目标：降低泛化 MAE；操作：{response['decision_action']}。",
-                      f"- 假设：{response['hypothesis']}",
-                      f"- 预期作用：{response['expected_effect']}",
-                      '- 固定辅助验证样本为八个初始底物对，样本支持有限；不代表主模型泛化误差。', '',
-                      '[反馈材料](feedback.json)' if (directory / 'feedback.json').exists() else '',
-                      '[批次复核](proposal-review.json)' if (directory / 'proposal-review.json').exists() else '', ''])
+        lines.extend(['## Scientific decision and follow-up validation', '',
+                      f"- Objective: reduce generalization MAE; action: {response['decision_action']}.",
+                      f"- Hypothesis: {response['hypothesis']}",
+                      f"- Expected effect: {response['expected_effect']}",
+                      '- The fixed auxiliary panel contains eight initial substrate pairs with limited support; it does not measure main-model generalization error.', '',
+                      '[Feedback evidence](feedback.json)' if rio.exists(directory / 'feedback.json') else '',
+                      '[Batch review](proposal-review.json)' if rio.exists(directory / 'proposal-review.json') else '', ''])
     write_text(directory / "ACQUISITION.md", "\n".join(lines))
     return summary
 
 
 def update(root: Path) -> dict[str, Any]:
-    with (root / ".reports.lock").open("a") as lock:
+    with rio.open(root / ".reports.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         lines = [
-            "# 智能采样决策摘要",
+            "# Intelligent sampling decision summary",
             "",
-            "自动从本轮响应与选样产物生成；无需翻阅运行日志。轮次 0 是初始训练，首次智能选样编号为 1。",
+            "Generated automatically from round responses and selection artifacts. Round 0 is initial training; intelligent selection starts at round 1.",
             "",
-            "| 轨迹 | 当前训练轮次 | 阶段 | 累计采样对数 | 决策索引 |",
+            "| Trajectory | Current training round | Phase | Cumulative sampled pairs | Decision index |",
             "| --- | ---: | --- | ---: | --- |",
         ]
         summaries = []
         errors = []
         complete = True
-        for seed_dir in sorted(root.glob("seed-*")):
+        for seed_dir in sorted(rio.glob(root, "seed-*")):
             state = read(seed_dir / "state.json")
             complete = complete and state["phase"] == "complete"
             lines.append(
                 f"| {seed_dir.name} | {state['round']} | {PHASES.get(state['phase'], state['phase'])} | "
-                f"{len(state['selected_ids'])} | [查看]({seed_dir.name}/ACQUISITION.md) |"
+                f"{len(state['selected_ids'])} | [View]({seed_dir.name}/ACQUISITION.md) |"
             )
             seed_lines = [
-                f"# {seed_dir.name} · 采集函数与理由",
+                f"# {seed_dir.name} · Acquisition functions and rationales",
                 "",
-                "[返回实验总览](../ACQUISITION.md)",
+                "[Back to experiment overview](../ACQUISITION.md)",
                 "",
-                "| 选样轮次 | 状态 | 新增对数 | 简要理由 | 公式与证据 |",
+                "| Selection round | Status | Added pairs | Brief rationale | Formula and evidence |",
                 "| ---: | --- | ---: | --- | --- |",
             ]
-            for response in sorted(seed_dir.glob("round-*/decision/response.json")):
+            for response in sorted(rio.glob(seed_dir, "round-*/decision/response.json")):
                 try:
                     summary = decision_summary(response.parent)
                 except (ValueError, OSError, KeyError) as exc:
@@ -203,29 +191,29 @@ def update(root: Path) -> dict[str, Any]:
                 link = (response.parent / "ACQUISITION.md").relative_to(seed_dir)
                 seed_lines.append(
                     f"| {summary['selection_round']} | {summary['status']} | {summary['selected_count']} | "
-                    f"{cell(summary['rationale'])} | [详情]({link}) |"
+                    f"{cell(summary['rationale'])} | [Details]({link}) |"
                 )
             if len(seed_lines) == 6:
-                seed_lines.extend(["", "尚未生成采集函数，当前阶段见实验总览。"])
+                seed_lines.extend(["", "No acquisition function is available yet; see the experiment overview for the current phase."])
             if state.get("last_error"):
-                seed_lines.extend(["", "当前错误：", "", str(state["last_error"])])
+                seed_lines.extend(["", "Current error:", "", str(state["last_error"])])
             write_text(seed_dir / "ACQUISITION.md", "\n".join(seed_lines) + "\n")
-        lines.extend(["", "## 已生成的决策", ""])
+        lines.extend(["", "## Generated decisions", ""])
         for summary in summaries:
             lines.extend(
                 [
-                    f"### Seed {summary['seed']:02d} · 选样 {summary['selection_round']}",
+                    f"### Seed {summary['seed']:02d} · Selection {summary['selection_round']}",
                     "",
                     summary["rationale"],
                     "",
-                    f"[查看函数与选样结果]({summary['summary_path']})",
+                    f"[View function and selection results]({summary['summary_path']})",
                     "",
                 ]
             )
         if not summaries:
-            lines.append("尚未生成采集函数。")
+            lines.append("No acquisition function is available yet.")
         if errors:
-            lines.extend(["", "部分摘要暂不可用，详见 report-status.json。"])
+            lines.extend(["", "Some summaries are temporarily unavailable; see report-status.json."])
         write_text(root / "ACQUISITION.md", "\n".join(lines) + "\n")
         _write_json(root / "acquisition-summaries.json", {"decisions": summaries})
         status = {
@@ -244,7 +232,7 @@ def main() -> None:
     parser.add_argument("--watch", action="store_true")
     args = parser.parse_args()
     while True:
-        status = update(args.run_dir.resolve())
+        status = update(rio.resolve(args.run_dir))
         if not args.watch or status["complete"]:
             print(json.dumps(status))
             return

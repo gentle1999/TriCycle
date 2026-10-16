@@ -3,11 +3,17 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass, field, fields
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from tricycle_core.errors import IntegrationNotConfiguredError, InvalidRequestError
+from tricycle_core.transfer import (
+    publish_download,
+    validate_result_selector,
+    validate_transfer_tree,
+)
 from tricycle_core.validation import validate_fields
 
 _HOST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -98,6 +104,7 @@ class RitsSshFinetuneRequest:
                 raise InvalidRequestError(
                     "download_paths must be relative paths without shell metacharacters"
                 )
+            validate_result_selector(value)
         if self.download_dir is not None and not self.download_dir.strip():
             raise InvalidRequestError("download_dir must not be empty when provided")
 
@@ -421,6 +428,7 @@ class OpenSshRitsGateway:
             raise InvalidRequestError(f"training bundle does not exist: {request.bundle_dir}") from exc
         if not bundle.is_dir():
             raise InvalidRequestError(f"training bundle is not a directory: {bundle}")
+        validate_transfer_tree(bundle)
 
         endpoint = self._context_endpoint(request, create=True)
         docker_version = self._docker(
@@ -558,14 +566,15 @@ class OpenSshRitsGateway:
     def download(self, request: RitsSshFinetuneRequest, job_id: str) -> tuple[str, ...]:
         if not request.download_paths or not request.download_dir:
             raise InvalidRequestError("download_paths and download_dir are required")
-        destination = Path(request.download_dir).expanduser().resolve()
-        destination.mkdir(parents=True, exist_ok=True)
+        destination = Path(request.download_dir).expanduser().absolute()
         remote_dir = request.remote_job_dir(job_id)
         sources = [f"{request.target}:{remote_dir}/{relative}" for relative in request.download_paths]
-        args = [*self._scp_args(request), *sources, str(destination)]
-        self._run(
-            args,
-            timeout=request.transfer_timeout,
-            operation="download selected training outputs over scp",
-        )
-        return tuple(str(path) for path in sorted(destination.rglob("*")) if path.is_file())
+        with tempfile.TemporaryDirectory(prefix="tricycle-rits-download-") as temporary:
+            staging = Path(temporary)
+            args = [*self._scp_args(request), *sources, str(staging)]
+            self._run(
+                args,
+                timeout=request.transfer_timeout,
+                operation="download selected training outputs over scp",
+            )
+            return publish_download(staging, destination)

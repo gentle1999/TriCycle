@@ -1,22 +1,25 @@
-# 当前配置
+# Current configuration
 
-此目录只维护当前请求示例、实验协议和声明式绑定。运行回执、一次性调度设置及已被替代的实验配置保存在本地归档，不随源码提交。
+This directory maintains current request examples, experimental protocols, and declarative bindings. Run receipts, one-off scheduling settings, and superseded experiment configurations belong in local archives outside source commits.
 
-| 用途 | 配置 |
+| Purpose | Configuration |
 | --- | --- |
-| 插件能力请求 | `example-*.toml`；使用时填写本次输入、路径和资源 |
-| 单批候选选择 | `sampling-baselines/*.toml` |
-| 五基线与智能采样逐轮比较 | `dpa-unified-sampling-suite.toml` |
-| 五基线整条轨迹 worker | `rxnresid-matched-sampling.toml` |
-| 数据库四池导出 | `database-sampling-pools.toml` |
-| 当前固定数据空间 | `frozen-sampling-space.toml`，只维护这一份当前 pin |
-| SAR 五折基准与当前后端引用 | `example-sar-benchmark.toml`、`sar-training-protocols.lock.json` |
-| SAR 调度与只读镜像清单 | `example-sar-bohr-group.toml`、`example-sar-inventory.toml` |
+| Capability requests | `example-*.toml`; fill in inputs, paths, and resources for the current task |
+| Single-batch candidate selection | `sampling-baselines/*.toml` |
+| Round-by-round comparison of five baselines and intelligent sampling | `dpa-unified-sampling-suite.toml` |
+| Full-trajectory workers for the five baselines | `rxnresid-matched-sampling.toml` |
+| Four-pool database export | `database-sampling-pools.toml` |
+| Current frozen data space | `frozen-sampling-space.toml`; maintain this single current pin |
+| SAR five-fold benchmarks and current backend references | `example-sar-benchmark.toml`, `sar-training-protocols.lock.json` |
+| SAR scheduling and read-only image inventory | `example-sar-bohr-group.toml`, `example-sar-inventory.toml` |
+| Reporting subagent and retry policy for blocked-trajectory email | `example-trajectory-alerts.toml`; SMTP routing and credentials use `.env.example` variables |
 
-Bohr GPU 请求及 SAR catalog 的 GPU 环境使用统一机型；纯 Gaussian 与指纹模型使用 CPU，RXNGraphormer 使用内网执行器。具体机型只在请求和 catalog 中维护，不设置覆盖全部计算的全局 GPU 默认值。
+Bohr GPU requests and GPU environments in the SAR catalog use the unified machine type. Pure Gaussian and fingerprint models use CPUs; RXNGraphormer uses the internal executor. Concrete machine types belong only in requests and the catalog. Do not set a global GPU default that overrides all computation.
 
-采样实验配置保留各自 readiness、数据与成本账本的绑定；它们不是通用数据默认值。新实验应先核验输入，按所属技能准备独立配置，不自动把历史轨迹改绑到当前空间。SAR 准备命令要求显式 `--group-config`，不读取某次 smoke 的任务组或授权状态。
+Sampling configurations retain their own readiness, data, and cost-ledger bindings; they are not general data defaults. Verify inputs before preparing a new experiment's independent configuration with the relevant skill. Never automatically rebind historical trajectories to the current space. SAR preparation requires an explicit `--group-config` and does not inherit a particular smoke run's job group or authorization state.
 
-过时配置按原字节归档到 Git 已忽略的 `artifacts/config-archive/<时间>/`，清单记录原路径、SHA-256、归档原因和替代入口。归档中的相对路径仍以原位置解释；如需核验历史配置，应在隔离目录恢复对应布局。当前代码、测试及操作说明不依赖归档。原数据快照、任务记录和 checkpoint 保留在各自运行目录。
+Archive obsolete configurations byte for byte under Git-ignored `artifacts/config-archive/<timestamp>/`. Record original paths, SHA-256 hashes, reasons, and replacement entry points in the manifest. Relative paths in archived configurations retain their original interpretation; restore the corresponding layout in an isolated directory when verifying historical configurations. Current code, tests, and operating guides must not depend on archives. Keep original data snapshots, job records, and checkpoints in their run directories.
 
-`codex-usage-alert.toml` 和 `decision-model-balance-alert.draft.toml` 是已有的机器本地告警配置，继续由 `.gitignore` 排除。
+`codex-usage-alert.toml` and `decision-model-balance-alert.draft.toml` are existing machine-local alert configurations and remain excluded by `.gitignore`.
+`trajectory-alerts.toml` is also a Git-ignored deployment configuration. See
+[trajectory alerts](../docs/trajectory-alerts.md) before enabling delivery.

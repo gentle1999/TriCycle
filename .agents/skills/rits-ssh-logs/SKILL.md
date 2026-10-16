@@ -3,8 +3,6 @@ name: rits-ssh-logs
 description: "Read the tail of a remote RitS Docker training log over SSH."
 ---
 
-# 查询内网 RitS 日志
+# Read Internal RitS Logs
 
-使用 rits.ssh.logs 并在 TOML 请求中提供 host、remote_root、job_id；log_lines
-默认 200、最大 5000。显式 --live 后才通过 SSH-backed Docker context 读取容器 logs。详见
-[RitS SSH 微调](../rits-ssh-finetune/SKILL.md)。
+Use `rits.ssh.logs` with `host`, `remote_root`, and `job_id` in TOML. `log_lines` defaults to 200 and is capped at 5000. Only explicit `--live` reads container logs through the SSH-backed Docker context. See [RitS SSH fine-tuning](../rits-ssh-finetune/SKILL.md).

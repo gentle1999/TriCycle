@@ -1,12 +1,14 @@
-# 固定采样空间
+# Frozen sampling spaces
 
-固定采样空间是数据与身份适配结果的不可变绑定，不包含可执行历史源码。当前 pin 入口为 [frozen-sampling-space.toml](../configs/frozen-sampling-space.toml)；快照 ID、来源路径、文件哈希及实际规模从该配置和 manifest 读取。文档不记录某次导出的数量、覆盖率或核验成绩。
+A frozen sampling space binds immutable data and identity-adaptation results; it does not contain historical executable source. The current pin is [frozen-sampling-space.toml](../configs/frozen-sampling-space.toml). Read snapshot IDs, source paths, file hashes, and actual sizes from that configuration and its manifest. General documentation does not record an individual export's counts, coverage, or verification scores.
 
-## 导出与固定
+## Exporting and freezing
 
-原生数据由 [数据库池配置](../configs/database-sampling-pools.toml)和 `tricycle_reaction_db.pools` 导出，匹配规则见[数据适配规范](reaction-dataset-adaptation.md)。数据库逐页使用活化自由能非空筛选，receipt 必须记录相同参数；返回无标签行时失败，不在本地删行兜底。
+Export native data through the [database pool configuration](../configs/database-sampling-pools.toml) and `tricycle_reaction_db.pools`. Matching rules are defined in [dataset adaptation](reaction-dataset-adaptation.md). Every database page applies the non-null activation-free-energy filter, and receipts must record the same arguments. Fail on returned unlabeled rows rather than silently dropping them locally.
 
-只有在明确选择新的数据空间后，才从已核验的导出创建新 pin：
+Reusable database pool exports and frozen spaces default to `artifacts/datasets/<date>/<timestamp>/<name>/`. They are input assets for multiple experiments, not new execution runs. Explicit output roots and existing pins remain unchanged; moving existing snapshots requires a separate verified migration. See [run record scope](run-records.md).
+
+Create a new pin from a verified export only after explicitly selecting a new data space:
 
 ```bash
 uv run --package tricycle-agent python -m tricycle_sampling.active_learning freeze-db \
@@ -14,19 +16,19 @@ uv run --package tricycle-agent python -m tricycle_sampling.active_learning free
   --pin-config /absolute/new-pin.toml
 ```
 
-固定过程保留所有原生 profile 行、原始字段与 `export_row_index`，记录身份适配证据、文件大小和哈希。GT 有标签组合必须覆盖注册表的 ene×diene 集合；不能取最小/平均标签、借 TS 输入配对或本地补标签。新输出不覆盖既有 pin。
+Freezing preserves all native profile rows, original fields, and `export_row_index`, while recording identity-adaptation evidence, file sizes, and hashes. Labeled GT pairs must cover the registry's ene×diene set. Do not take minimum/mean labels, derive pairs from TS inputs, or fill in labels locally. New output must not overwrite an existing pin.
 
-GT 位于 `evaluation`，代理池位于 `candidates`；采样可见注册表只含 ID/SMILES。原注册表中的历史 QM 信息留在独立评测来源目录，不交给采集决策。数据库耗时保持原生秒数与空值；核时换算、共享资源和 profile 重复成本由实验账本明确。
+GT lives under `evaluation`, proxy pools under `candidates`. The registry visible to sampling contains only IDs/SMILES. Historical QM fields from the original registry remain in separate evaluation provenance and are not supplied to acquisition decisions. Database durations retain native seconds and nulls. The experiment ledger explicitly defines core-hour conversion, shared-resource accounting, and duplicated profile costs.
 
-## 使用和校验
+## Use and verification
 
 ```bash
 uv run --package tricycle-agent python -m tricycle_sampling.active_learning verify-frozen-db \
   --config configs/frozen-sampling-space.toml
 ```
 
-新实验设置 `[dataset] frozen_space_config` 指向选定 pin。loader 读取指定的 GT 和候选 collection，拒绝与 pin 冲突的显式覆盖；validate/prepare 再次核验并记录 snapshot ID 和 manifest hash。项目的成本账本仍需显式绑定。
+New experiments set `[dataset] frozen_space_config` to the selected pin. The loader reads the specified GT and candidate collections and rejects explicit overrides that conflict with the pin. Validation/preparation rechecks the snapshot and records its ID and manifest hash. Project cost ledgers still require explicit bindings.
 
-缺少文件或哈希不符时停止并核对来源，不自动改用最新导出，不刷新旧 hash。快照的文件完整性校验不等同于数据库跨页事务快照，也不提供操作系统层面的防修改保证。
+Missing files or hash mismatches require stopping and checking provenance. Never switch automatically to the latest export or refresh historical hashes. Snapshot file-integrity verification does not establish a cross-page database transaction snapshot or operating-system write protection.
 
-实际导出回执、分页核验、覆盖统计和耗时对比保存在对应 run/快照中，均不纳入源码提交。被替代的 pin 按[配置归档规则](../configs/README.md)保留；当前工作流不依赖本机归档。已有实验的数据、结果和 checkpoint 不改写。
+Actual export receipts, pagination verification, coverage statistics, and duration comparisons stay in their run/snapshot, outside source commits. Preserve superseded pins using the [configuration archive rules](../configs/README.md); current workflows must not depend on local archives. Do not rewrite existing experiment data, results, or checkpoints.

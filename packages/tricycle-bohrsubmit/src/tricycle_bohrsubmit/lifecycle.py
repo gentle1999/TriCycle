@@ -17,6 +17,7 @@ from tricycle_core.io import atomic_write_text as _atomic_write_text
 from tricycle_core.io import file_sha256 as _sha256_file
 from tricycle_core.io import write_delimited
 from tricycle_core.protocols import BohrDownloadGateway, BohrStatusGateway
+from tricycle_core.transfer import validate_transfer_tree
 
 from .archives import archive_infos as _archive_infos
 from .archives import extract_archive as _safe_extract
@@ -504,6 +505,7 @@ def _download_worker(
     ) as temporary:
         staging = Path(temporary)
         gateway.download(external_id, staging)
+        validate_transfer_tree(staging)
         if unzip:
             _extract_download_archives(staging)
         else:

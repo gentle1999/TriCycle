@@ -3,29 +3,23 @@ name: bohr-batch-status
 description: "Query all submitted workers in a Bohr batch run and persist a status report in TOML-backed run state."
 ---
 
-# 查询 Bohr 批量状态
+# Query Bohr Batch Status
 
-## 输入与边界
+The input is a run directory containing `run.toml`, `submit-results.tsv`, and public remote `BOHR_ID` values. Outputs are `status.tsv` and updated `run.toml`. This capability reads remote status only; it does not submit, download, or terminate workers.
 
-输入是已有 `run.toml`、`submit-results.tsv` 和远程公开 `BOHR_ID` 的运行目录；输出是
-`status.tsv` 和更新后的 `run.toml`。本能力只读远程状态，不提交、下载或终止 worker。
+The CLI's `id` is platform-internal and cannot be passed to lifecycle commands. Requests and receipts use public `bohrId`; no automatic internal-ID mapping or legacy-run migration is performed.
 
-CLI 的 `id` 是平台内部 ID，不能传给生命周期命令。请求和回执使用公开 `bohrId`；不自动映射内部 ID 或迁移旧运行目录。
-
-需要已有 `submit-results.tsv` 和远程 job ID。先 `inspect --run-dir <目录>`，仅在
-`resume.next_action = "bohr.batch.status"` 时使用下面的恢复命令：
+Inspect the directory first. Use the following only when `resume.next_action = "bohr.batch.status"`:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent resume \
   --run-dir 'runs/<date>/<timestamp>/<id>' --live
 ```
 
-`resume` 执行状态中的下一动作，不是固定的查询命令。若下一动作不是 status，通过注入 gateway 的 `BohrSubmitPlugin.status(run_dir, gateway, context)` 单独查询；不要为了查状态推进提交/下载，也不要改写状态伪装阶段。
+`resume` executes the recorded next action, not a fixed status command. If the next action differs, query independently with `BohrSubmitPlugin.status(run_dir, gateway, context)` and an injected gateway. Do not advance submission/download or rewrite state merely to query status.
 
-真实查询产生 `status.tsv`，默认 dry-run 不调用网络；凭据可放在项目 `.env` 中，shell 环境变量优先。查询后检查 `incomplete`、`failed` 和下一动作，
-不要把 TSV 报告误当成配置文件。
+Live queries produce `status.tsv`; dry-run makes no network call. Credentials may come from project `.env`, with shell variables taking precedence. Check `incomplete`, `failed`, and the next action; TSV reports are not configuration files.
 
-## 失败与恢复
+## Failure recovery
 
-该能力只读远程状态，不提交或终止 worker。临时网络、凭据或单 worker 查询错误时保留
-`status.tsv`，修复环境后用 `resume --live` 重试；状态文件会保留下一动作。
+Preserve `status.tsv` after transient network, credential, or individual-worker failures. Repair the environment and retry `resume --live`; state retains the next action. This capability does not submit or terminate workers.

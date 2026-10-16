@@ -1,29 +1,25 @@
-# 变更日志
+# Changelog
 
-此处保留软件变更历史，不描述当前部署状态或某次实验成绩。当前接口见各包 README，版本绑定见配置与资产清单。
+This file records software changes, not current deployment status or individual experiment results. Package READMEs describe current interfaces; configuration and asset manifests hold version bindings.
 
 ## 2026-09-14
 
-### 修复
+### Fixed
 
-- `bohr.batch.download` 不再根据 worker 整体的 `FAILED` 状态跳过下载；失败 worker 中的部分成功任务、日志和诊断结果也会被尝试拉取，并逐 worker 记录下载结果。
+- `bohr.batch.download` no longer skips downloads solely because a worker has overall status `FAILED`. It attempts to retrieve successful partial tasks, logs, and diagnostics from failed workers and records each worker's download result.
 
-### 新增
+### Added
 
-- 在 `tricycle-reaction-db` 中实现 `McpReactionDatabaseAdapter`，通过数据库 Streamable HTTP
-  MCP 的 project、manifest、import-job 和 compose-query 工具完成导入、筛选与导出；MCP 导入
-  使用数据库服务可见的暂存路径和文件哈希，不通过 MCP 传输日志字节。
-- live agent 自动注入 MCP adapter；数据库 MCP URL、token、organization ID、暂存根目录和
-  TLS/超时策略只从环境变量读取，dry-run 不访问网络。
+- Added `McpReactionDatabaseAdapter` to `tricycle-reaction-db`, using the database's Streamable HTTP MCP project, manifest, import-job, and compose-query tools for import, filtering, and export. MCP import uses staging paths visible to the database service and file hashes rather than transmitting log bytes through MCP.
+- Live agent execution automatically injects the MCP adapter. Database MCP URL, token, organization ID, staging root, TLS policy, and timeout policy are read only from environment variables. Dry runs do not access the network.
 
 ## 2026-09-13
 
-### 新增
+### Added
 
-- 增加基于 JSONL、哈希链和文件锁的运行轨迹记录，支持对任意快照进行完整性校验。
-- 增加可复现探索轮次模块，记录完整候选池、模型分数、采样排序与排除理由、下一轮空间范围决策、RitS train/skip 决策以及快照迁移。
-- 为 train、finetune 和 skip 迁移生成稳定的 replay key，使相同快照配合相同轮次决策可以复现下一个快照（QM 计算按相同输入可重复处理）。
-- 增加 CLI run/resume 的请求、计划、能力执行和 trace 验证记录，并支持探索轮次安全复用。
-- 增加 predictive、epistemic、aleatoric uncertainty 采样策略及候选分数的确定性记录。
-- 为 RxnResid 模型资产增加来源绑定，记录原生 evidential
-  不确定度输出，并让 sampling 直接消费 `*_variance`/`*_std` 字段；`epistemic_variance` 可用于主动学习。
+- Added run traces based on JSONL, hash chains, and file locks, with integrity verification for any snapshot.
+- Added reproducible exploration rounds recording the complete candidate pool, model scores, sampling order and exclusions, next-round search-space decisions, RitS train/skip decisions, and snapshot transitions.
+- Added stable replay keys for train, finetune, and skip transitions so that the same snapshot and round decision reproduce the next snapshot; QM calculations are treated as repeatable for the same inputs.
+- Added CLI run/resume records for requests, plans, capability execution, and trace validation, plus safe reuse of exploration rounds.
+- Added predictive, epistemic, and aleatoric uncertainty sampling strategies and deterministic candidate-score records.
+- Added source bindings to RxnResid model assets, recorded native evidential uncertainty outputs, and enabled sampling to consume `*_variance`/`*_std` fields directly. `epistemic_variance` is available for active learning.

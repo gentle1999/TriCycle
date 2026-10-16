@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
+from tricycle_core import record_io as rio
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 
 from tricycle_sampling import AgentAuthoredAcquisitionSamplingStrategy, Candidate
 
@@ -16,8 +16,54 @@ class DecisionOutputError(ValueError):
     """A finished model call produced correctable output, not a remote job error."""
 
 
+class DecisionTimeoutError(RuntimeError):
+    """A terminated invocation may restart without consuming scientific corrections."""
+
+    def __init__(self, message: str, *, review_pass: bool = False) -> None:
+        super().__init__(message)
+        self.review_pass = review_pass
+        self.restart_available = False
+
+
+def archive_timeout(directory: Path, error: DecisionTimeoutError) -> bool:
+    with rio.transaction(directory):
+        prefix = 'review-' if error.review_pass else ''
+        root = directory / 'timeout-attempts' / ('review' if error.review_pass else 'proposal')
+        count = len(list(rio.glob(root, '*/timeout.json'))) + 1
+        archive = root / f'{count:04d}'
+        rio.mkdir(archive, parents=True, exist_ok=False)
+        for name in ('agent.log', 'agent-exit.json', 'agent-inflight.json', 'agent-process.json',
+                     'response.pending.json', 'response-schema.json', 'decision-input.json', 'recovered-output.json'):
+            source = directory / (prefix + name)
+            if rio.exists(source):
+                rio.move(str(source), archive / source.name)
+        save(archive / 'timeout.json', {'error': str(error), 'task_sha256': digest(directory / 'task.json'),
+                                      'attempt': count, 'maximum_restarts': 3})
+        return count <= 3
+
+
+def attempt_limit(directory: Path, configured: int) -> int:
+    """Honor one explicit, task-bound recovery allowance without resetting history."""
+    path = directory / 'recovery-authorization.json'
+    if not rio.exists(path):
+        return configured
+    record = read(path)
+    extra = record.get('additional_attempts')
+    if (record.get('schema') != 'tricycle.decision-recovery/v1'
+            or record.get('task_sha256') != digest(directory / 'task.json')
+            or record.get('original_maximum') != configured
+            or not record.get('authorization') or not record.get('reason')
+            or type(extra) is not int or not 1 <= extra <= 3):
+        raise ValueError('Invalid decision recovery authorization')
+    for index in range(1, configured + 1):
+        rejection = directory / 'rejected-attempts' / f'{index:04d}' / 'rejection.json'
+        if record.get('original_rejections', {}).get(str(index)) != digest(rejection):
+            raise ValueError('Original rejected decision evidence changed')
+    return configured + extra
+
+
 def read(path: Path) -> dict[str, Any]:
-    return dict(json.loads(path.read_text()))
+    return dict(json.loads(rio.read_text(path)))
 
 
 def decision_spec(directory: Path, response: dict[str, Any]) -> dict[str, Any]:
@@ -95,32 +141,33 @@ def validate(directory: Path, response: dict[str, Any]) -> None:
 
 def reject(directory: Path, error: str, *, maximum: int = 3) -> bool:
     """Preserve every rejected output; never modify a completed decision."""
-    task = read(directory / 'task.json')
-    round_dir = directory.parent.parent / 'exploration/rounds' / f'{task["round"]:04d}'
-    if (directory / 'selection.json').exists() or (round_dir / 'round.toml').exists():
-        raise ValueError('refusing to revise a completed selection')
-    feedback = directory / 'correction-feedback.json'
-    attempts = int(read(feedback).get('rejected_attempts', 0)) if feedback.exists() else 0
-    if attempts >= maximum:
-        return False
-    archive = directory / 'rejected-attempts' / f'{attempts + 1:04d}'
-    archive.mkdir(parents=True, exist_ok=False)
-    for name in ('response.json', 'response.pending.json', 'accepted-response.json',
-                 'selection-request.toml', 'agent-inflight.json', 'agent-process.json',
-                 'agent-exit.json', 'agent.log', 'response-schema.json',
-                 'ACQUISITION.md', 'acquisition-summary.json', 'rationale-brief.json',
-                 'decision-input.json', 'decision-brief.json', 'decision-validation.json', 'formula-assessment.json',
-                 'proposal-response.json', 'proposal-review.json', 'review-approved.json',
-                 'review-response.json', 'review-response.pending.json', 'review-response-schema.json',
-                 'review-agent-inflight.json', 'review-agent-process.json', 'review-agent-exit.json',
-                 'review-agent.log', 'review-decision-input.json'):
-        path = directory / name
-        if path.exists():
-            shutil.move(str(path), archive / name)
-    if round_dir.exists():
-        shutil.move(str(round_dir), archive / 'incomplete-exploration')
-    save(archive / 'rejection.json', {'error': error, 'task_sha256': digest(directory / 'task.json')})
-    save(feedback, {'rejected_attempts': attempts + 1, 'maximum_attempts': maximum,
-                    'error': error, 'previous_output_directory': str(archive.relative_to(directory)),
-                    'instruction': 'Correct the concrete validation error; preserve scientific intent where possible. Recheck the full numeric DSL and exact task hash.'})
-    return attempts + 1 < maximum
+    with rio.transaction(directory):
+        task = read(directory / 'task.json')
+        round_dir = directory.parent.parent / 'exploration/rounds' / f'{task["round"]:04d}'
+        if rio.exists(directory / 'selection.json') or rio.exists(round_dir / 'round.toml'):
+            raise ValueError('refusing to revise a completed selection')
+        feedback = directory / 'correction-feedback.json'
+        attempts = int(read(feedback).get('rejected_attempts', 0)) if rio.exists(feedback) else 0
+        if attempts >= maximum:
+            return False
+        archive = directory / 'rejected-attempts' / f'{attempts + 1:04d}'
+        rio.mkdir(archive, parents=True, exist_ok=False)
+        for name in ('response.json', 'response.pending.json', 'accepted-response.json',
+                     'selection-request.toml', 'agent-inflight.json', 'agent-process.json',
+                     'agent-exit.json', 'agent.log', 'response-schema.json',
+                     'ACQUISITION.md', 'acquisition-summary.json', 'rationale-brief.json',
+                     'decision-input.json', 'decision-brief.json', 'decision-validation.json', 'formula-assessment.json',
+                     'proposal-response.json', 'proposal-review.json', 'review-approved.json',
+                     'review-response.json', 'review-response.pending.json', 'review-response-schema.json',
+                     'review-agent-inflight.json', 'review-agent-process.json', 'review-agent-exit.json',
+                     'review-agent.log', 'review-decision-input.json', 'recovered-output.json', 'review-recovered-output.json'):
+            path = directory / name
+            if rio.exists(path):
+                rio.move(str(path), archive / name)
+        if rio.exists(round_dir):
+            rio.move(str(round_dir), archive / 'incomplete-exploration')
+        save(archive / 'rejection.json', {'error': error, 'task_sha256': digest(directory / 'task.json')})
+        save(feedback, {'rejected_attempts': attempts + 1, 'maximum_attempts': maximum,
+                        'error': error, 'previous_output_directory': str(archive.relative_to(directory)),
+                        'instruction': 'Correct the concrete validation error; preserve scientific intent where possible. Recheck the full numeric DSL and exact task hash.'})
+        return attempts + 1 < maximum

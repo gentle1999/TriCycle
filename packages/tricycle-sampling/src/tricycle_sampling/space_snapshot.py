@@ -139,7 +139,7 @@ def freeze_database_space(
     if pin_config.exists():
         raise ValueError("snapshot pin already exists; do not replace a frozen space")
     source, registry, safe_registry, pools = _validate_source(source_root)
-    root = (output_root or timestamped_run_directory(WORKDIR / "runs", snapshot_id)).resolve()
+    root = (output_root or timestamped_run_directory(WORKDIR / "artifacts" / "datasets", snapshot_id)).resolve()
     if root == source_root or source_root in root.parents or root in source_root.parents:
         raise ValueError("snapshot output must be independent of its source")
     root.mkdir(parents=True, exist_ok=False)
@@ -165,11 +165,11 @@ def freeze_database_space(
         writer.writeheader()
         writer.writerows(statistics)
     (root / "summary.md").write_text(
-        "# 固定有标签采样空间\n\n"
-        "数据库导出已传入 has_activation_gibbs_free_energy=true；本地不筛行、不重建标签。\n"
-        "活动 collection 与原生导出的完整适配表字节一致，所有值及 export_row_index 不变。\n"
-        "本次有标签原生导出证据在 audit/source-export 保存。\n\n"
-        "| 池 | 来源行 | 活动数据行 | 无标签行 | 有标签组合 |\n"
+        "# Frozen labeled sampling space\n\n"
+        "The database export used has_activation_gibbs_free_energy=true; no local row filtering or label reconstruction is performed.\n"
+        "The active collection is byte-identical to the complete adapted native export; all values and export_row_index are unchanged.\n"
+        "Evidence for this labeled native export is retained in audit/source-export.\n\n"
+        "| Pool | Source rows | Active rows | Unlabeled rows | Labeled pairs |\n"
         "| --- | ---: | ---: | ---: | ---: |\n"
         + "".join(f"| {r['pool']} | {r['source_rows']} | {r['dataset_rows']} | "
                   f"{r['unlabeled_rows']} | {r['labeled_pairs']} |\n" for r in statistics),

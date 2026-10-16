@@ -32,12 +32,13 @@ from typing import Any, Protocol
 from tricycle_bohrsubmit.archives import extract_archive
 from tricycle_bohrsubmit.lifecycle import classify_status
 from tricycle_core import BohrJobSpec, timestamped_run_directory
+from tricycle_core import record_io as rio
 from tricycle_core.asset_store import externalize_tree, put_file, put_tree, resolve_tree
 from tricycle_core.io import copy_snapshot_tree as copy_tree
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
 from tricycle_core.protocols import BohrGateway
-from tricycle_core.toml import dump_toml
+from tricycle_core.record_io import dump_toml
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 from tricycle_sar.predictions import aggregate_pairs
 from tricycle_sar.sampling_runtime import stage as stage_sar_runtime
 from tricycle_sar.sampling_runtime import worker_launcher
@@ -51,7 +52,12 @@ from tricycle_sampling.replay import core_hours as replay_core_hours
 from tricycle_sampling.replay import cost_guidance as replay_cost_guidance
 from tricycle_sampling.replay import mae as replay_mae
 from tricycle_sampling.replay.brief import build as build_decision_brief
-from tricycle_sampling.replay.decision import DecisionOutputError
+from tricycle_sampling.replay.decision import (
+    DecisionOutputError,
+    DecisionTimeoutError,
+    archive_timeout,
+)
+from tricycle_sampling.replay.decision import attempt_limit as decision_attempt_limit
 from tricycle_sampling.replay.decision import reject as reject_decision
 from tricycle_sampling.replay.decision import validate as validate_decision
 from tricycle_sampling.replay.worker import pair
@@ -59,12 +65,12 @@ from tricycle_sampling.replay.worker import pair
 from .inputs import input_file, verify_inputs
 from .selection import select_round
 
-ROOT = Path.cwd().resolve()
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+ROOT = rio.resolve(Path.cwd())
+PACKAGE_ROOT = rio.resolve(Path(__file__)).parents[1]
 
 
 def read(path: Path) -> dict[str, Any]:
-    return dict(json.loads(path.read_text(encoding="utf-8")))
+    return dict(json.loads(rio.read_text(path, encoding="utf-8")))
 
 
 def table(path: Path) -> list[dict[str, str]]:
@@ -79,26 +85,26 @@ def write_table(path: Path, rows: list[dict[str, Any]], fields: list[str] | None
 def hashes(directory: Path) -> dict[str, str]:
     return {
         str(p.relative_to(directory)): digest(p)
-        for p in sorted(directory.rglob("*"))
-        if p.is_file() and "__pycache__" not in p.parts
+        for p in sorted(rio.rglob(directory, "*"))
+        if rio.is_file(p) and "__pycache__" not in p.parts
     }
 
 
 def check_hashes(directory: Path, expected: dict[str, str]) -> None:
     for name, value in expected.items():
-        path = (directory / name).resolve()
-        path.relative_to(directory.resolve())
-        if not path.is_file() or digest(path) != value:
+        path = rio.resolve(directory / name)
+        path.relative_to(rio.resolve(directory))
+        if not rio.is_file(path) or digest(path) != value:
             raise ValueError(f"frozen artifact changed or missing: {path}")
 
 
 def check_controller(root: Path) -> None:
-    """Validate original bindings plus an explicitly audited storage transition."""
+    """Validate original bindings and explicitly authorized, source-bound amendments."""
     config_path = root / "experiment.json"
     config = read(config_path)
     expected = dict(config.get("controller_hashes", {}))
     record = root / "storage-compatibility.json"
-    if record.exists():
+    if rio.exists(record):
         binding = read(record)
         if (binding.get("schema") != "tricycle.replay-storage-compatibility/v1"
                 or binding.get("experiment_sha256") != digest(config_path)
@@ -111,6 +117,43 @@ def check_controller(root: Path) -> None:
             if name not in expected or change["before"] != expected[name]:
                 raise ValueError("Storage compatibility original controller differs")
             expected[name] = change["after"]
+    record = root / 'decision-controller-amendment.json'
+    if rio.exists(record):
+        binding = read(record)
+        if (binding.get('schema') != 'tricycle.decision-controller-amendment/v1'
+                or binding.get('experiment_sha256') != digest(config_path)
+                or not binding.get('authorization') or not binding.get('reason')
+                or not binding.get('changes')):
+            raise ValueError('Invalid decision controller amendment')
+        if digest(Path(binding['evidence_path'])) != binding['evidence_sha256']:
+            raise ValueError('Decision amendment evidence changed')
+        if binding.get('bohr_gateway_sha256'):
+            from tricycle_bohrsubmit import gateway as bohr_gateway
+            if digest(Path(bohr_gateway.__file__)) != binding['bohr_gateway_sha256']:
+                raise ValueError('Amended Bohr gateway changed')
+        allowed = {'replay/campaign.py', 'replay/mae.py', 'replay/decision.py'}
+        for name, change in binding['changes'].items():
+            if name not in allowed or name not in expected or change['before'] != expected[name]:
+                raise ValueError('Decision amendment original controller differs or scope is invalid')
+            expected[name] = change['after']
+    record = root / "live-records-amendment.json"
+    persistence = config.get("record_backend_hashes")
+    if rio.exists(record):
+        binding = read(record)
+        if (binding.get("schema") != "tricycle.live-records-amendment/v1"
+                or binding.get("experiment_sha256") != digest(config_path)
+                or not binding.get("authorization") or not binding.get("reason")
+                or digest(Path(binding["evidence_path"])) != binding["evidence_sha256"]):
+            raise ValueError("Invalid audited live record amendment")
+        for name, change in binding["changes"].items():
+            if name not in expected or change["before"] != expected[name]:
+                raise ValueError("Live record amendment original controller differs")
+            expected[name] = change["after"]
+        persistence = binding["record_backend_hashes"]
+    if persistence is not None:
+        from .runtime_records import source_hashes
+        if persistence != source_hashes():
+            raise ValueError("Live record persistence implementation changed")
     check_hashes(PACKAGE_ROOT, expected)
 
 
@@ -122,15 +165,17 @@ def prepare(config_path: Path, directory: Path | None) -> Path:
 
 
 def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Path:
-    config = tomllib.loads(config_path.read_text())
+    config = tomllib.loads(rio.read_text(config_path))
     if "acquisition_policy" in config:
         raise ValueError("acquisition_policy is no longer supported; prepare a new run with decision_protocol")
+    from .runtime_records import source_hashes
+    config["record_backend_hashes"] = source_hashes()
     mae_protocol = replay_mae.settings(config)
     if mae_protocol is not None:
         config['decision_protocol'] = mae_protocol
         config['controller_hashes'] = {
             str(path.relative_to(PACKAGE_ROOT)): digest(path)
-            for path in sorted(PACKAGE_ROOT.rglob('*.py'))
+            for path in sorted(rio.rglob(PACKAGE_ROOT, '*.py'))
         }
     strategy = config.get("sampling_strategy", "intelligent")
     schema = config.get("sampling_experiment")
@@ -143,16 +188,14 @@ def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Pat
         if strategy not in replay_baselines.STRATEGIES:
             raise ValueError("baseline requires supported strategy and no agent policy")
         config["baseline_policy_sha256"] = digest(Path(__file__).with_name("baselines.py"))
-    readiness_path = Path(config["readiness"]).resolve()
-    readiness = tomllib.loads(readiness_path.read_text())
+    readiness_path = rio.resolve(Path(config["readiness"]))
+    readiness = tomllib.loads(rio.read_text(readiness_path))
     if readiness["experiment_mode"] != "historical-label-replay":
         raise ValueError("historical-label-replay confirmation required")
-    directory = (
-        directory or timestamped_run_directory(ROOT / "runs", config["experiment_id"])
-    ).resolve()
-    directory.mkdir(parents=True, exist_ok=False)
+    directory = rio.resolve(directory or timestamped_run_directory(ROOT / "runs", config["experiment_id"]))
+    rio.mkdir(directory, parents=True, exist_ok=False)
     private = input_root / "private"
-    private.mkdir()
+    rio.mkdir(private)
     project = str(readiness["project"])
     if project not in {"autode", "dpa-fined-rits-da", "rits-zero-shot-da"}:
         raise ValueError(f"unsupported replay project: {project}")
@@ -163,23 +206,23 @@ def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Pat
     if len(pool) != 1600 or len({r["pair_id"] for r in pool}) != 1600:
         raise ValueError("expected the baseline 1600-pair space")
     for name in ("pair-pool.csv", "project-labels.csv"):
-        shutil.copyfile(common / name, private / name)
+        rio.copyfile(common / name, private / name)
     evaluation = Path(readiness["evaluation"]["ground_truth_path"])
     if digest(evaluation) != readiness["evaluation"]["ground_truth_sha256"]:
         raise ValueError("ground truth snapshot changed")
-    shutil.copyfile(evaluation, private / "evaluation.csv")
+    rio.copyfile(evaluation, private / "evaluation.csv")
     assets = input_root / "assets"
-    assets.mkdir()
+    rio.mkdir(assets)
     sar_backend = stage_sar_runtime(assets, config.get("rxnresid"))
     model_revision = sar_backend["source_revision"]
     for key in ("image", "machine_type"):
         if config["bohr"][key] != sar_backend["environment"][key]:
             raise ValueError(f"sampling executor differs from shared SAR backend: {key}")
     launcher = worker_launcher(module="tricycle_sampling.replay.worker")
-    (assets / "run.sh").write_text(launcher)
+    rio.write_text(assets / "run.sh", launcher)
     shared_prior = config.get("prior_structures")
     if shared_prior:
-        prior = Path(shared_prior["path"]).resolve()
+        prior = rio.resolve(Path(shared_prior["path"]))
         if digest(prior) != shared_prior["sha256"]:
             raise ValueError("shared structural enumeration changed")
         shared_routes = table(prior)
@@ -187,7 +230,7 @@ def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Pat
             raise ValueError("shared structural enumeration does not cover pool")
         if any(float(row["G_T_activate"]) != 0 for row in shared_routes):
             raise ValueError("shared prior must not contain labels")
-        shutil.copyfile(prior, assets / "prior-structures.csv")
+        rio.copyfile(prior, assets / "prior-structures.csv")
     else:
         # Enumerate structures without reading oracle targets or success counts.
         from tricycle_reactionopt.diels_alder import enumerate_diels_alder_reactions
@@ -249,7 +292,9 @@ def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Pat
             recipe = json.loads(archive.read(member))
         epochs.add(int(recipe["training_epochs"]))
         seed_dir = directory / f"seed-{seed:02d}"
-        seed_dir.mkdir()
+        rio.mkdir(seed_dir)
+        from .runtime_records import initialize
+        initialize(seed_dir)
         save(
             seed_dir / "state.json",
             {
@@ -283,14 +328,14 @@ def _prepare(config_path: Path, directory: Path | None, input_root: Path) -> Pat
             "private_hashes": hashes(private),
         }
     )
-    store = Path(config.get("asset_store", ROOT / "artifacts/task-assets")).resolve()
+    store = rio.resolve(Path(config.get("asset_store", ROOT / "artifacts/task-assets")))
     config["asset_store"] = str(store)
     config["asset_references"] = {
         "assets": put_tree(assets, store),
         "private": put_tree(private, store),
     }
     save(directory / "asset-references.json", config["asset_references"])
-    shutil.copyfile(readiness_path, directory / "readiness.toml")
+    rio.copyfile(readiness_path, directory / "readiness.toml")
     save(directory / "experiment.json", config)
     save(directory / "experiment-hash.json", {"sha256": digest(directory / "experiment.json")})
     return directory
@@ -304,14 +349,14 @@ def stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[
 def _stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict[str, Any],
                  bundle: Path) -> Path:
     current = seed_dir / f"round-{state['round']:04d}"
-    current.mkdir(exist_ok=True)
-    if (current / "input-hashes.json").exists():
+    rio.mkdir(current, exist_ok=True)
+    if rio.exists(current / "input-hashes.json"):
         verify_inputs(current)
         return current
-    if bundle.exists():
+    if rio.exists(bundle):
         # Only an unsubmitted, partially staged directory is disposable.
-        shutil.rmtree(bundle)
-    bundle.mkdir()
+        rio.rmtree(bundle)
+    rio.mkdir(bundle)
     references = config["asset_references"]
     assets = resolve_tree(references["assets"])
     private = resolve_tree(references["private"])
@@ -338,7 +383,7 @@ def _stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict
             raise ValueError("previous checkpoint belongs to a different SAR backend")
         if digest(previous) != receipt["outputs"]["checkpoint.pt"]:
             raise ValueError("previous trajectory checkpoint changed")
-        fixed["files"]["previous.pt"] = put_file(previous, store)
+        fixed["files"]["previous.pt"] = put_file(rio.resolve(previous), store)
     new_labels = [r for r in labels if pair(r) in state["new_ids"]]
     if config.get('decision_protocol'):
         write_table(bundle / 'newly-revealed.csv', new_labels, list(baseline.NATIVE_COLUMNS))
@@ -359,23 +404,24 @@ def _stage_round(root: Path, seed_dir: Path, state: dict[str, Any], config: dict
         request['mae_protocol'] = config['decision_protocol']
     save(bundle / "request.json", request)
     fixed["trees"].append(put_tree(bundle, store))
-    save(current / "input-assets.json", fixed)
-    save(current / "input-hashes.json", hashes(bundle))
-    save(current / "input-assets-hash.json", {"sha256": digest(current / "input-assets.json")})
-    save(
-        current / "reveal.json",
-        {
-            "selected_ids": state["selected_ids"],
-            "new_ids": state["new_ids"],
-            "training_rows": len(labels),
-            "new_label_rows": len(new_labels),
-            "cumulative_sampling_cost_core_hours": sum(
-                float(r["materialized_sampling_cost_core_hours"])
-                for r in pool
-                if r["pair_id"] in selected
-            ),
-        },
-    )
+    with rio.transaction(current):
+        save(current / "input-assets.json", fixed)
+        save(current / "input-hashes.json", hashes(bundle))
+        save(current / "input-assets-hash.json", {"sha256": digest(current / "input-assets.json")})
+        save(
+            current / "reveal.json",
+            {
+                "selected_ids": state["selected_ids"],
+                "new_ids": state["new_ids"],
+                "training_rows": len(labels),
+                "new_label_rows": len(new_labels),
+                "cumulative_sampling_cost_core_hours": sum(
+                    float(r["materialized_sampling_cost_core_hours"])
+                    for r in pool
+                    if r["pair_id"] in selected
+                ),
+            },
+        )
     return current
 
 
@@ -386,22 +432,22 @@ class ReplayGateway(BohrGateway, Protocol):
 def ensure_job_group(root: Path, config: dict[str, Any], gateway: ReplayGateway) -> str:
     """One durable group per experiment, shared by all seeds and later steps."""
     if config["bohr"].get("shared_group_dir"):
-        shared = Path(config["bohr"]["shared_group_dir"]).resolve()
-        shared.mkdir(parents=True, exist_ok=True)
+        shared = rio.resolve(Path(config["bohr"]["shared_group_dir"]))
+        rio.mkdir(shared, parents=True, exist_ok=True)
         group_config = {**config, "experiment_id": config["bohr"]["job_group_name"],
                         "bohr": {k:v for k,v in config["bohr"].items() if k != "shared_group_dir"}}
         group_id = ensure_job_group(shared, group_config, gateway)
         expected = {"experiment_id": config["experiment_id"], "project_id": str(config["bohr"]["project_id"]),
                     "job_group_id": group_id, "shared_group_source": str(shared / "job-group.json")}
         receipt = root / "job-group.json"
-        if receipt.exists() and read(receipt) != expected:
+        if rio.exists(receipt) and read(receipt) != expected:
             raise ValueError("experiment shared-group receipt changed")
         save(receipt, expected)
         return group_id
-    with (root / ".job-group.lock").open("a") as lock:
+    with rio.open(root / ".job-group.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         receipt = root / "job-group.json"
-        if receipt.exists():
+        if rio.exists(receipt):
             record = read(receipt)
             if record["experiment_id"] != config["experiment_id"] or record["project_id"] != str(
                 config["bohr"]["project_id"]
@@ -412,7 +458,7 @@ def ensure_job_group(root: Path, config: dict[str, Any], gateway: ReplayGateway)
                 raise ValueError("job group receipt has no ID")
             return group_id
         marker = root / "job-group-inflight.json"
-        if marker.exists():
+        if rio.exists(marker):
             raise ValueError("job group creation uncertain: reconcile platform group before retry")
         group_name = config["bohr"].get("job_group_name", config["experiment_id"])
         save(
@@ -457,7 +503,7 @@ def job_spec(
         machine_type=config["bohr"]["machine_type"],
         parameters={
             "input_assets_manifest": str(current / "input-assets.json"),
-            **({"input_directory": str(current / "input")} if (current / "input").is_dir() else {}),
+            **({"input_directory": str(current / "input")} if rio.is_dir(current / "input") else {}),
             "job_group_id": group_id,
             "backward_files": ["outputs/round/"],
             "extra_submit_args": ["--yes"],
@@ -468,13 +514,13 @@ def job_spec(
     )
 
 
-def extract_result(current: Path) -> Path:
-    download = current / "download"
-    reports = list(download.rglob("worker-report.json"))
+def extract_result(current: Path, download_directory: Path | None = None) -> Path:
+    download = download_directory or current / "download"
+    reports = list(rio.rglob(download, "worker-report.json"))
     if not reports:
-        for archive_path in sorted(download.rglob("*.zip")):
+        for archive_path in sorted(rio.rglob(download, "*.zip")):
             extract_archive(archive_path, download / "extracted")
-        reports = list(download.rglob("worker-report.json"))
+        reports = list(rio.rglob(download, "worker-report.json"))
     if len(reports) != 1:
         raise ValueError("need exactly one complete SAR worker report")
     result = reports[0].parent
@@ -505,48 +551,73 @@ def extract_result(current: Path) -> Path:
     check_hashes(result, {name: checksum for name, checksum in report["outputs"].items()
                           if name not in references})
     destination = current / "result"
-    if not destination.exists():
-        copy_tree(result, destination)
+    unified = rio.location(current) is not None
+    if unified and not rio.exists(destination):
+        from .runtime_records import work_directory
+        working_result = work_directory(current, "download") / "result"
+        if working_result.exists():
+            shutil.rmtree(working_result)
+    else:
+        working_result = rio.resolve(destination) if unified else destination
+    if not rio.exists(destination):
+        copy_tree(result, working_result)
         for name, ref in references.items():
-            shutil.copyfile(input_file(current, ref["input"]), destination / name)
-    check_hashes(destination, report["outputs"])
-    files = [str(p.relative_to(download)) for p in download.rglob("*") if p.is_file()]
-    if not download.is_symlink():
-        (download / "download-manifest.txt").write_text("\n".join(files) + "\n")
+            rio.copyfile(input_file(current, ref["input"]), working_result / name)
+    check_hashes(working_result, report["outputs"])
+    files = [str(p.relative_to(download)) for p in rio.rglob(download, "*") if rio.is_file(p)]
+    if not rio.is_symlink(download):
+        rio.write_text(download / "download-manifest.txt", "\n".join(files) + "\n")
     write_tsv(
         current / "download-results.tsv",
-        [{"worker": "sar", "status": "DOWNLOADED", "download_dir": str(download)}],
+        [{"worker": "sar", "status": "DOWNLOADED", "download_dir": str(current / "download")}],
     )
     config = read(current.parent.parent / "experiment.json")
     store = Path(config["asset_store"])
-    for name in ("result", "download"):
-        directory = current / name
+    for name, directory in (("result", working_result), ("download", download)):
         reference_path = current / f"{name}-asset-reference.json"
-        if not directory.is_symlink():
+        if unified:
+            if rio.is_symlink(current / name):
+                if resolve_tree(read(reference_path)) != rio.resolve(current / name):
+                    raise ValueError("Result asset reference differs")
+            else:
+                reference = put_tree(directory, store)
+                with rio.transaction(current):
+                    save(reference_path, reference)
+                    rio.symlink_to(current / name, resolve_tree(reference))
+        elif not directory.is_symlink():
             reference = externalize_tree(directory, store)
             save(reference_path, reference)
-        else:
-            if resolve_tree(read(reference_path)) != directory.resolve():
-                raise ValueError("Result asset reference differs")
+        elif resolve_tree(read(reference_path)) != directory.resolve():
+            raise ValueError("Result asset reference differs")
+    if unified:
+        from .runtime_records import work_directory
+        workspace = work_directory(current, "download")
+        if workspace.exists():
+            shutil.rmtree(workspace)
     return destination
 
 
 def write_tsv(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w", newline="") as handle:
+    with rio.open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
 
 
 def analyze(current: Path, state: dict[str, Any]) -> Path:
+    with rio.transaction(current):
+        return _analyze(current, state)
+
+
+def _analyze(current: Path, state: dict[str, Any]) -> Path:
     decision = current / "decision"
     task = decision / "task.json"
-    if task.exists():
+    if rio.exists(task):
         check_hashes(decision, read(decision / "evidence-hashes.json"))
         return task
-    if decision.exists():
-        shutil.rmtree(decision)
-    decision.mkdir()
+    if rio.exists(decision):
+        rio.rmtree(decision)
+    rio.mkdir(decision)
     candidates = table(input_file(current, "candidates.csv"))
     labeled = table(input_file(current, "training.csv"))
     # Only acquisition-approved files enter this directory. Oracle labels,
@@ -651,7 +722,7 @@ def analyze(current: Path, state: dict[str, Any]) -> Path:
     campaign_config = read(current.parent.parent / "experiment.json")
     save(decision / "pair-candidates.json", {"candidates": payloads})
     history = []
-    for previous in sorted(current.parent.glob("round-*/decision/selection.json")):
+    for previous in sorted(rio.glob(current.parent, "round-*/decision/selection.json")):
         if previous.parent.parent == current:
             continue
         prior = previous.parent
@@ -759,7 +830,7 @@ def run_agent(task: Path, config: dict[str, Any]) -> Path:
         check_hashes(directory, read(directory / 'evidence-hashes.json'))
         build_decision_brief(directory)
         response = directory / 'response.json'
-        if not response.exists():
+        if not rio.exists(response):
             save(response, {
                 'task_sha256': digest(task), 'acquisition_schema': replay_mae.SCHEMA,
                 'objective': replay_core_hours.objective(task_value['decision_protocol']), 'decision_action': 'replace',
@@ -767,14 +838,14 @@ def run_agent(task: Path, config: dict[str, Any]) -> Path:
                 'expression': '1', 'cost_expression': ('estimated_core_hours' if task_value['decision_protocol']['name'] == replay_core_hours.NAME else 'product_count * mean_product_atom_count'),
                 'hypothesis': 'All remaining pairs are required by the frozen sample budget.',
                 'expected_effect': 'Complete the remaining candidate pool; ranking cannot affect selection.',
-                'rationale': '剩余候选全部必须选入，控制器直接记录选择，无需调用模型。',
+                'rationale': 'All remaining candidates must be selected; the controller records the selection without invoking the model.',
                 'author_notes': 'No scientific ranking decision; complete evidence validation remains required.',
             })
         validate_decision(directory, read(response))
         return response
-    maximum = int(config.get("max_decision_attempts", 3))
+    maximum = decision_attempt_limit(directory, int(config.get("max_decision_attempts", 3)))
     feedback = directory / "correction-feedback.json"
-    if feedback.exists() and int(read(feedback)["rejected_attempts"]) >= maximum:
+    if rio.exists(feedback) and int(read(feedback)["rejected_attempts"]) >= maximum:
         raise ValueError("automatic decision correction exhausted; inspect rejected-attempts")
     while True:
         try:
@@ -785,7 +856,7 @@ def run_agent(task: Path, config: dict[str, Any]) -> Path:
             review_elapsed = 0.0
             if task_value.get('decision_protocol', {}).get('review'):
                 approval = directory / 'review-approved.json'
-                if not approval.exists():
+                if not rio.exists(approval):
                     review_started = time.monotonic()
                     assessment = replay_mae.review(directory, read(response))
                     save(directory / 'proposal-response.json', read(response))
@@ -805,18 +876,27 @@ def run_agent(task: Path, config: dict[str, Any]) -> Path:
         except DecisionOutputError as exc:
             if not reject_decision(directory, str(exc), maximum=maximum):
                 raise ValueError("automatic decision correction exhausted after bounded attempts") from exc
+        except DecisionTimeoutError as exc:
+            exc.restart_available = archive_timeout(directory, exc)
+            raise
 
 
 def _run_agent_once(task: Path, config: dict[str, Any], *, review_pass: bool = False) -> Path:
     directory = task.parent
     prefix = 'review-' if review_pass else ''
     response = directory / f"{prefix}response.json"
-    if response.exists():
+    if rio.exists(response):
         if read(response).get("task_sha256") != digest(task):
             raise DecisionOutputError("agent response task hash mismatch")
         return response
+    recovered = directory / f"{prefix}recovered-output.json"
+    if rio.exists(recovered):
+        binding = read(recovered)
+        if binding["task_sha256"] != digest(task) or binding["sha256"] != digest(directory / f"{prefix}response.pending.json"):
+            raise ValueError("Recovered output binding changed")
+        return _bind_agent_response(task, prefix)
     marker = directory / f"{prefix}agent-inflight.json"
-    if marker.exists():
+    if rio.exists(marker) and not rio.exists(directory / f"{prefix}recovered-output.json"):
         raise ValueError(
             "interrupted agent invocation: reconcile agent.log and response before retry"
         )
@@ -855,8 +935,9 @@ def _run_agent_once(task: Path, config: dict[str, Any], *, review_pass: bool = F
         "Explain evidence-based weights and ranking effects, small validation group limitations, cost proxy limits "
         "and why this round differs from earlier rounds. Never use final ground truth or claim auxiliary-model "
         "heldout metrics measure the full model. Do not copy a baseline formula. "
-        "rationale: 2-4 Chinese sentences, <=180 Chinese characters. "
-        "author_notes: concise analysis <=1200 Chinese characters, cite representative IDs/structures, "
+        "Use English for analysis, decisions, explanations, and records, even when user input or historical evidence is in Chinese, unless the user explicitly requests Chinese. "
+        "rationale: 2-4 concise English sentences, <=120 words. "
+        "author_notes: concise English analysis <=600 words, cite representative IDs/structures, "
         "group evidence and signal choices. "
         "Controller handles all hashes, task binding, provenance, statistics and output reports. "
         "Do not calculate or transcribe those yourself; only make the scientific tradeoff decision.\n"
@@ -865,21 +946,37 @@ def _run_agent_once(task: Path, config: dict[str, Any], *, review_pass: bool = F
     if task_value.get('decision_protocol'):
         prompt = replay_mae.prompt(brief, review=read(directory / 'proposal-review.json') if review_pass else None)
     feedback = directory / "correction-feedback.json"
-    if feedback.exists():
+    if rio.exists(feedback):
         correction = read(feedback)
-        prompt += "\nCorrect the previous error: " + correction["error"]
+        prompt += (
+            "\nAUTOMATIC VALIDATION REPAIR. Your task is to repair the failed response, "
+            "not to restart scientific strategy design. Preserve the proposed scientific intent "
+            "and valid fields; make only the changes needed to satisfy the concrete validation error. "
+            "Return the complete corrected response in the same JSON schema. "
+            "The controller will revalidate the full candidate pool and automatically continue on success. "
+            "For a retain mismatch, decide whether the narrative intends to keep the accepted round's "
+            "rule or to keep the current changed proposal. In the former case copy the accepted "
+            "expressions exactly; in the latter case preserve the proposal and correct decision_action "
+            "to adjust or replace. Do not claim a rejected proposal was executed. "
+            "Validation error: " + correction["error"]
+        )
         archive = directory / correction["previous_output_directory"]
         for name in ("response.json", "response.pending.json"):
             previous = archive / name
-            if previous.exists():
+            if rio.exists(previous):
                 # Finished JSON only; never feed recursive runtime logs back to the model.
                 try:
                     prior = read(previous)
                 except (ValueError, TypeError):
                     continue
-                prompt += "\nPrevious formula: " + json.dumps(
-                    {key: prior.get(key) for key in ("expression", "cost_expression", "rationale")},
+                prompt += "\nRejected proposal (NOT the last accepted round): " + json.dumps(
+                    {key: prior.get(key) for key in ("decision_action", "expression", "cost_expression", "rationale")},
                     ensure_ascii=False,
+                )
+                prompt += (
+                    "\nResolve decision_action against last_accepted_round_formula, not this rejected proposal. "
+                    "If preserving a proposal that differs from the accepted rule, use adjust or replace. "
+                    "If choosing retain, copy both accepted expressions verbatim."
                 )
                 break
     save(directory / f"{prefix}decision-input.json", {
@@ -908,37 +1005,52 @@ def _run_agent_once(task: Path, config: dict[str, Any], *, review_pass: bool = F
         str(directory / f"{prefix}response.pending.json"),
         "-",
     ]
-    invocation_started = time.monotonic()
-    with (directory / f"{prefix}agent.log").open("ab") as log:
-        save(marker, {"argv": argv, "task_sha256": digest(task), "started_at": time.time()})
-        process = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True
-        )
-        save(directory / f"{prefix}agent-process.json", {"pid": process.pid, "argv": argv})
-        try:
-            process.communicate(
-                prompt.encode(), timeout=min(600, int(config.get("agent_timeout_seconds", 600)))
+    if rio.location(directory):
+        from .agent_records import invoke
+        invoke(directory, prefix, argv, prompt,
+               timeout=min(600, int(config.get("agent_timeout_seconds", 600))), task_sha256=digest(task))
+    else:
+        invocation_started = time.monotonic()
+        with rio.open(directory / f"{prefix}agent.log", "ab") as log:
+            save(marker, {"argv": argv, "task_sha256": digest(task), "started_at": time.time()})
+            process = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=log, stderr=log, start_new_session=True
             )
-        except BaseException as exc:
-            os.killpg(process.pid, signal.SIGTERM)
+            save(directory / f"{prefix}agent-process.json", {"pid": process.pid, "argv": argv})
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-            save(directory / f"{prefix}agent-exit.json", {"pid": process.pid, "returncode": process.returncode, "error": str(exc)})
-            if isinstance(exc, subprocess.TimeoutExpired):
-                raise DecisionOutputError("agent exceeded its time limit; retry with a focused analysis") from exc
-            raise
-        save(directory / f"{prefix}agent-exit.json", {"pid": process.pid, "returncode": process.returncode,
-             "elapsed_seconds": time.monotonic() - invocation_started, "finished_at": time.time()})
-        if process.returncode:
-            failure_log = (directory / f"{prefix}agent.log").read_text(errors="replace").lower()
-            if any(message in failure_log for message in ("401 unauthorized", "incorrect api key", "token has expired", "refresh token has expired")):
-                raise RuntimeError("decision authentication failed (401); refresh Codex login before resuming; this is not a formula error")
-            raise DecisionOutputError(
-                f"agent failed ({process.returncode}); inspect {directory / 'agent.log'}"
-            )
+                process.communicate(
+                    prompt.encode(), timeout=min(600, int(config.get("agent_timeout_seconds", 600)))
+                )
+            except BaseException as exc:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                save(directory / f"{prefix}agent-exit.json", {"pid": process.pid, "returncode": process.returncode, "error": str(exc)})
+                if isinstance(exc, subprocess.TimeoutExpired):
+                    raise DecisionTimeoutError('agent exceeded its time limit', review_pass=review_pass) from exc
+                raise
+            save(directory / f"{prefix}agent-exit.json", {"pid": process.pid, "returncode": process.returncode,
+                 "elapsed_seconds": time.monotonic() - invocation_started, "finished_at": time.time()})
+            if process.returncode:
+                failure_log = rio.read_text(directory / f"{prefix}agent.log", errors="replace").lower()
+                if any(message in failure_log for message in ("401 unauthorized", "incorrect api key", "token has expired", "refresh token has expired")):
+                    raise RuntimeError("decision authentication failed (401); refresh Codex login before resuming; this is not a formula error")
+                if any(message in failure_log for message in ('timed out', 'deadline exceeded', 'upstream_timeout')):
+                    raise DecisionTimeoutError('agent transport timed out', review_pass=review_pass)
+                raise DecisionOutputError(
+                    f"agent failed ({process.returncode}); inspect {directory / 'agent.log'}"
+                )
+    return _bind_agent_response(task, prefix)
+
+
+def _bind_agent_response(task: Path, prefix: str) -> Path:
+    directory = task.parent
+    marker = directory / f"{prefix}agent-inflight.json"
+    response = directory / f"{prefix}response.json"
+    task_value = read(task)
     try:
         value = read(directory / f"{prefix}response.pending.json")
     except (ValueError, TypeError, FileNotFoundError) as exc:
@@ -970,7 +1082,7 @@ def select(
     if response["task_sha256"] != digest(directory / "task.json"):
         raise ValueError("response task binding changed")
     accepted = directory / "accepted-response.json"
-    if accepted.exists() and read(accepted)["sha256"] != digest(directory / "response.json"):
+    if rio.exists(accepted) and read(accepted)["sha256"] != digest(directory / "response.json"):
         raise ValueError("accepted agent response was changed")
     validate_decision(directory, response)
     save(accepted, {"sha256": digest(directory / "response.json")})
@@ -1054,34 +1166,95 @@ def select(
 
 
 def save_state(seed_dir: Path, state: dict[str, Any]) -> None:
-    state["revision"] += 1
-    state["updated_at"] = time.time()
-    save(seed_dir / "history" / f"{state['revision']:08d}.json", state)
-    save(seed_dir / "state.json", state)
+    """Keep one resumable state and a compact operational journal per trajectory."""
+    with rio.transaction(seed_dir):
+        path = seed_dir / "state.json"
+        previous = read(path) if rio.exists(path) else {}
+        fields = ("seed", "round", "phase", "external_id", "remote_result", "failures",
+                  "last_error", "blocked_phase", "waiting_for_pilot")
+        before = {key: previous[key] for key in fields if key in previous}
+        after = {key: state[key] for key in fields if key in state}
+        state["revision"] += 1
+        state["updated_at"] = time.time()
+        if before != after:
+            journal = seed_dir / "state-events.json"
+            events = read(journal)["events"] if rio.exists(journal) else []
+            # Write evidence first. Replacing the same revision makes a retry after
+            # interruption between these two atomic writes idempotent.
+            events = [event for event in events if event["revision"] < state["revision"]]
+            events.append({"revision": state["revision"], "updated_at": state["updated_at"],
+                           "before": before, "after": after})
+            save(journal, {"events": events})
+        save(path, state)
+
+
+def timeout_error(error: Exception) -> bool:
+    return isinstance(error, (TimeoutError, subprocess.TimeoutExpired, DecisionTimeoutError)) or any(
+        text in str(error).lower() for text in ('upstream_timeout', 'timed out', 'deadline exceeded'))
+
+
+def reconcile_timeout_submission(current: Path, gateway: ReplayGateway) -> bool:
+    """Reconcile first; retry only after two complete absence checks at least 60s apart."""
+    marker = current / 'submission-inflight.json'
+    inflight = read(marker)
+    if not inflight.get('timeout_error'):
+        raise ValueError('submission uncertain: reconcile remote job; never resubmit blindly')
+    reconcile = getattr(gateway, 'reconcile_submission', None)
+    if not callable(reconcile):
+        raise ValueError('gateway cannot safely reconcile a timed-out submission')
+    spec = read(current / 'job-spec.json')
+    if spec['name'] != inflight['job_name']:
+        raise ValueError('timed-out submission identity changed')
+    group = str(spec['parameters']['job_group_id'])
+    result = reconcile(inflight['job_name'], group)
+    now = time.time()
+    history = current / 'submission-reconciliation'
+    save(history / f'{time.time_ns()}.json', {'checked_at': now, **result})
+    if result['status'] == 'found' and result.get('external_id'):
+        save(current / 'submission.json', {'external_id': str(result['external_id']),
+             'job_name': inflight['job_name'], 'job_group_id': group})
+        return True
+    if result['status'] != 'absent':
+        raise ValueError('submission reconciliation has no definite outcome')
+    archives = current / 'submission-timeouts'
+    attempt = len(list(rio.glob(archives, '*/submission-inflight.json'))) + 1
+    if attempt > 3:
+        raise ValueError('submission timeout restarts exhausted; evidence retained for explicit recovery')
+    previous = inflight.get('absence_confirmed_at')
+    if previous is None:
+        save(marker, {**inflight, 'absence_confirmed_at': now})
+        return False
+    if now - float(previous) < 60:
+        return False
+    archive = archives / f'{attempt:04d}'
+    rio.mkdir(archive, parents=True, exist_ok=False)
+    rio.copy2(current / 'job-spec.json', archive / 'job-spec.json')
+    rio.move(str(marker), archive / 'submission-inflight.json')
+    return True
 
 
 def tick(
     root: Path, seed_dir: Path, gateway: ReplayGateway | None, *, allow_submit: bool
 ) -> dict[str, Any]:
-    with (seed_dir / ".lock").open("a") as lock:
+    with rio.open(seed_dir / ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = read(seed_dir / "state.json")
         if (
             gateway is None
-            or (root / "PAUSE").exists()
+            or rio.exists(root / "PAUSE")
             or state["phase"] in ("blocked", "complete")
         ):
             return state
         if float(state.get("next_check", 0)) > time.time():
             return state
         config = read(root / "experiment.json")
-        if config.get('controller_hashes'):
+        if config.get('controller_hashes') or config.get('record_backend_hashes'):
             check_controller(root)
         if digest(root / "experiment.json") != read(root / "experiment-hash.json")["sha256"]:
             raise ValueError("frozen experiment configuration changed")
         pilot_rounds = int(config.get("rollout", {}).get("pilot_evaluations", 0))
         if pilot_rounds and state["seed"] != 0:
-            pilot_ready = (root / "seed-00" / f"round-{pilot_rounds-1:04d}" / "evaluation-summary.json").exists()
+            pilot_ready = rio.exists(root / "seed-00" / f"round-{pilot_rounds-1:04d}" / "evaluation-summary.json")
             if not pilot_ready:
                 if not state.get("waiting_for_pilot"):
                     state["waiting_for_pilot"] = True
@@ -1101,13 +1274,20 @@ def tick(
                     return state
                 verify_inputs(current)
                 receipt = current / "submission.json"
-                if receipt.exists():
+                if rio.exists(receipt):
                     external_id = read(receipt)["external_id"]
                 else:
-                    if (current / "submission-inflight.json").exists():
-                        raise ValueError(
-                            "submission uncertain: reconcile remote job and write submission.json; never resubmit blindly"
-                        )
+                    if rio.exists(current / "submission-inflight.json"):
+                        if not reconcile_timeout_submission(current, gateway):
+                            state['next_check'] = time.time() + 60
+                            save_state(seed_dir, state)
+                            return state
+                        if rio.exists(receipt):
+                            state.update(external_id=read(receipt)['external_id'], phase='monitor',
+                                         next_check=0, failures=0)
+                            state.pop('last_error', None)
+                            save_state(seed_dir, state)
+                            return state
                     group_id = ensure_job_group(root, config, gateway)
                     spec = job_spec(current, state, config, group_id=group_id)
                     save(current / "job-spec.json", spec.to_dict())
@@ -1115,7 +1295,9 @@ def tick(
                         current / "submission-inflight.json",
                         {"job_name": spec.name, "started_at": time.time()},
                     )
-                    external_id = gateway.submit(spec)
+                    from .runtime_records import submission_handoff
+                    with submission_handoff(current, spec) as submitted_spec:
+                        external_id = gateway.submit(submitted_spec)
                     save(
                         receipt,
                         {
@@ -1146,15 +1328,21 @@ def tick(
                     state["next_check"] = time.time() + int(config.get("poll_seconds", 60))
             elif phase == "download":
                 saved_download = current / "download-asset-reference.json"
-                if saved_download.exists():
+                if rio.exists(saved_download):
                     resolve_tree(read(saved_download))
                 else:
-                    gateway.download(state["external_id"], current / "download")
+                    if rio.location(current):
+                        from .runtime_records import work_directory
+                        download_work = work_directory(current, "download") / "download"
+                        download_work.mkdir(parents=True, exist_ok=True)
+                        gateway.download(state["external_id"], download_work)
+                    else:
+                        gateway.download(state["external_id"], current / "download")
                 if state["remote_result"] != "SUCCEEDED":
                     raise ValueError(
                         "SAR worker failed; partial artifacts downloaded for diagnosis"
                     )
-                extract_result(current)
+                extract_result(current, download_work if rio.location(current) and not rio.exists(saved_download) else None)
                 evaluation = read(current / "result/evaluation.json")
                 if evaluation["ground_truth_sha256"] != config["evaluation_sha256"]:
                     raise ValueError("evaluation snapshot mismatch")
@@ -1196,8 +1384,19 @@ def tick(
             state["failures"] += 1
             state["last_error"] = f"{type(exc).__name__}: {exc}"
             state["next_check"] = time.time() + min(900, 30 * 2 ** state["failures"])
-            if phase == "select" and isinstance(exc, DecisionOutputError):
-                if reject_decision(current / "decision", str(exc), maximum=int(config.get("max_decision_attempts", 3))):
+            if phase == 'submit' and timeout_error(exc):
+                marker = current / 'submission-inflight.json'
+                if rio.exists(marker):
+                    value = read(marker)
+                    value.setdefault('timeout_error', str(exc))
+                    save(marker, value)
+                if not rio.exists(marker) or state['failures'] >= 4:
+                    state.update(phase='blocked', blocked_phase=phase)
+            elif isinstance(exc, DecisionTimeoutError) and exc.restart_available:
+                pass  # Back off, preserving the failed stage and valid proposal for review retries.
+            elif phase == "select" and isinstance(exc, DecisionOutputError):
+                if reject_decision(current / "decision", str(exc), maximum=decision_attempt_limit(
+                        current / 'decision', int(config.get('max_decision_attempts', 3)))):
                     state.update({"phase": "agent", "next_check": 0, "failures": 0})
                 else:
                     state.update({"phase": "blocked", "blocked_phase": phase})
@@ -1219,6 +1418,8 @@ def tick(
 
 
 def supervise(root: Path, *, live: bool, allow_submit: bool, once: bool) -> None:
+    from tricycle_sampling.replay.alerts import notify_blocked
+
     def trajectory(seed_dir: Path) -> None:
         gateway = None
         if live:
@@ -1236,11 +1437,13 @@ def supervise(root: Path, *, live: bool, allow_submit: bool, once: bool) -> None
                     update_reports(root)
                 except (OSError, ValueError, KeyError) as exc:
                     save(root / "report-error.json", {"error": str(exc), "at": time.time()})
+            alert_pending = notify_blocked(root, seed_dir, state, live=live)
             if (
                 once
                 or not live
-                or state["phase"] in ("complete", "blocked")
-                or (root / "PAUSE").exists()
+                or state["phase"] == "complete"
+                or (state["phase"] == "blocked" and not alert_pending)
+                or rio.exists(root / "PAUSE")
             ):
                 return
             if state["phase"] == "submit" and not allow_submit:
@@ -1248,7 +1451,7 @@ def supervise(root: Path, *, live: bool, allow_submit: bool, once: bool) -> None
             time.sleep(2)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(trajectory, seed_dir) for seed_dir in sorted(root.glob("seed-*"))]
+        futures = [pool.submit(trajectory, seed_dir) for seed_dir in sorted(rio.glob(root, "seed-*"))]
         for future in futures:
             future.result()
 
@@ -1293,12 +1496,14 @@ def service_file(root: Path, *, allow_submit: bool) -> Path:
                     "SSL_CERT_FILE",
                     "SSL_CERT_DIR",
                     "REQUESTS_CA_BUNDLE",
+                    "TRICYCLE_TRAJECTORY_ALERTS_ENABLED",
+                    "TRICYCLE_TRAJECTORY_ALERT_CONFIG",
                 )
                 if key in os.environ
             },
         },
     }
-    with path.open("wb") as handle:
+    with rio.open(path, "wb") as handle:
         plistlib.dump(payload, handle)
     return path
 
@@ -1330,17 +1535,17 @@ def main() -> None:
         return
     if args.run_dir is None:
         parser.error("--run-dir is required")
-    root = args.run_dir.resolve()
+    root = rio.resolve(args.run_dir)
     if args.action == "service-file":
         print(service_file(root, allow_submit=args.allow_submit))
     elif args.action == "status":
-        print(json.dumps([read(p) for p in sorted(root.glob("seed-*/state.json"))], indent=2))
+        print(json.dumps([read(p) for p in sorted(rio.glob(root, "seed-*/state.json"))], indent=2))
     elif args.action == "pause":
         (root / "PAUSE").touch()
     elif args.action == "resume":
-        (root / "PAUSE").unlink(missing_ok=True)
-        for seed_dir in root.glob("seed-*"):
-            with (seed_dir / ".lock").open("a") as lock:
+        rio.unlink(root / "PAUSE", missing_ok=True)
+        for seed_dir in rio.glob(root, "seed-*"):
+            with rio.open(seed_dir / ".lock", "a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 state = read(seed_dir / "state.json")
                 if state["phase"] == "blocked":
@@ -1348,7 +1553,7 @@ def main() -> None:
                     state.update({"failures": 0, "next_check": 0})
                     save_state(seed_dir, state)
     elif args.action == "collect":
-        rows = [read(p) for p in sorted(root.glob("seed-*/round-*/evaluation-summary.json"))]
+        rows = [read(p) for p in sorted(rio.glob(root, "seed-*/round-*/evaluation-summary.json"))]
         save(root / "evaluation-curves.json", {"rounds": rows})
         print(f"collected {len(rows)} completed rounds")
     else:

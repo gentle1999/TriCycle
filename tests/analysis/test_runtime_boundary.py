@@ -48,7 +48,8 @@ def test_sar_result_cli_works_without_the_analysis_tree_or_plotting_dependencies
         capture_output=True,
         check=True,
     )
-    assert "{verify,prepare,assets}" in completed.stdout
+    for command in ("publish-recorded", "verify", "prepare", "assets"):
+        assert command in completed.stdout
     assert "render" not in completed.stdout
     assert "distributions" not in completed.stdout
 

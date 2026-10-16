@@ -13,10 +13,11 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
 from tricycle_core import timestamped_run_directory
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
-from tricycle_core.toml import dump_toml
+from tricycle_core.record_io import dump_toml
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 
 from tricycle_sampling.experiment import EXPERIMENT_SAMPLING_SCHEMA
 from tricycle_sampling.protocols import LITERATURE_BASELINE_STRATEGIES, get_baseline_protocol
@@ -46,7 +47,7 @@ AGENT_VARIANTS = {
 
 
 def prepare_suite(config_path: Path, directory: Path | None = None) -> Path:
-    config = tomllib.loads(config_path.read_text())
+    config = tomllib.loads(rio.read_text(config_path))
     schema = config.get('sampling_experiment')
     if schema is not None and schema != EXPERIMENT_SAMPLING_SCHEMA:
         raise ValueError('Unsupported sampling_experiment schema; prepare a new run')
@@ -63,8 +64,8 @@ def prepare_suite(config_path: Path, directory: Path | None = None) -> Path:
     config.pop('decision_protocol', None)
     if config.get('acquisition_policy'):
         raise ValueError('MAE suite cannot use a controller cost penalty')
-    root = (directory or timestamped_run_directory(ROOT / 'runs', suite_id)).resolve()
-    root.mkdir(parents=True, exist_ok=False)
+    root = rio.resolve(directory or timestamped_run_directory(ROOT / 'runs', suite_id))
+    rio.mkdir(root, parents=True, exist_ok=False)
     execution_id = suite_id + '-' + hashlib.sha256(str(root).encode()).hexdigest()[:10]
     plan: dict[str, Any] = {
         'schema': 'tricycle.mae-suite/v1', 'suite_id': suite_id, 'execution_id': execution_id,
@@ -92,11 +93,11 @@ def prepare_suite(config_path: Path, directory: Path | None = None) -> Path:
         if variant == 'intelligent':
             replay_mae.settings(request)
         path = root / 'configs' / f'{variant}.toml'
-        path.parent.mkdir(exist_ok=True)
+        rio.mkdir(path.parent, exist_ok=True)
         dump_toml(path, request)
         experiment = prepare(path, root / variant)
         frozen = read(experiment / 'experiment.json')
-        seeds = sorted(experiment.glob('seed-*'))
+        seeds = sorted(rio.glob(experiment, 'seed-*'))
         if len(seeds) != 5 or frozen['round_count'] != 40 or frozen['batch_size'] != 40:
             raise ValueError('MAE suite requires exactly five matched 40-round trajectories')
         for seed in seeds:
@@ -157,9 +158,9 @@ def status(root: Path) -> dict[str, Any]:
     evaluations: list[dict[str, Any]] = []
     for item in plan['experiments']:
         experiment = Path(item['root'])
-        for seed in sorted(experiment.glob('seed-*')):
+        for seed in sorted(rio.glob(experiment, 'seed-*')):
             state = read(seed / 'state.json')
-            points = [read(p) for p in sorted(seed.glob('round-*/evaluation-summary.json'))]
+            points = [read(p) for p in sorted(rio.glob(seed, 'round-*/evaluation-summary.json'))]
             states.append({'variant': item['variant'], 'seed': state['seed'],
                            'phase': state['phase'], 'round': state['round'],
                            'sampled_pairs': len(state['selected_ids']),
@@ -177,25 +178,25 @@ def status(root: Path) -> dict[str, Any]:
         report = replay_core_hours.aggregate(evaluations, [x['variant'] for x in plan['experiments']],
                                              plan['evaluation_budgets_core_hours'])
         save(root / 'evaluation-summary.json', {'evaluation_role': 'reporting-only', **report})
-        lines = ['# 核时预算下的 Ground-truth MAE', '',
-                 '目标：在预设累计代理计算核时预算下最小化 ground-truth MAE。',
-                 '各预算取每条轨迹最新的预算内 checkpoint；五个匹配 seed 均有观测覆盖后才报告均值。',
-                 '预算节点用于评价，未知真实耗时无法保证硬费用上限。SAR/智能体开销另记。', '',
-                 '| 策略 | 核时预算（core-hours） | seed数 | MAE均值 | RMSE均值 |',
+        lines = ['# Ground-truth MAE under core-hour budgets', '',
+                 'Objective: minimize ground-truth MAE at predefined cumulative proxy core-hour budgets.',
+                 'At each budget, use the latest affordable checkpoint per trajectory; report means only when all five matched seeds have observed coverage.',
+                 'Budget milestones are for evaluation; unknown actual runtimes prevent a guaranteed hard cost cap. Record SAR and agent overhead separately.', '',
+                 '| Strategy | Core-hour budget (core-hours) | Seeds | Mean MAE | Mean RMSE |',
                  '| --- | ---: | ---: | ---: | ---: |']
         for row in report['summaries']:
             lines.append(f"| {row['variant']} | {row['budget_core_hours']:g} | 5 | {row['mae_mean']:.4f} | {row['rmse_mean']:.4f} |")
         if report.get('intelligent_comparison'):
             comparison = report['intelligent_comparison']
             save(root / 'intelligent-comparison.json', comparison)
-            lines += ['', '智能采样策略的目标：在全部预设核时节点，匹配五个 seed 的平均 MAE 低于每条静态基线。',
-                      f"评价状态：{comparison['status']}；覆盖不足为 pending，持平或未优于任一基线为 not-met。", '',
-                      '| 核时预算 | 达标状态 | 缺少完整覆盖的方法 |', '| ---: | --- | --- |']
+            lines += ['', 'Intelligent sampling objective: lower mean MAE than every static baseline across five matched seeds at every predefined core-hour milestone.',
+                      f"Evaluation status: {comparison['status']}; insufficient coverage is pending; a tie or failure to outperform any baseline is not-met.", '',
+                      '| Core-hour budget | Objective status | Methods missing complete coverage |', '| ---: | --- | --- |']
             for row in comparison['budgets']:
                 lines.append(f"| {row['budget_core_hours']:g} | {row['status']} | {', '.join(row['missing_coverage'])} |")
-            lines += ['', '[智能策略与全部静态基线的配对比较](intelligent-comparison.json)；仅用于评价，不进入决策。']
-        lines += ['', '[核时配对统计](evaluation-summary.json) · [冻结协议](suite.json)', '',
-                  '| 策略 | seed | 阶段 | 已评价轮数 | 错误 |', '| --- | ---: | --- | ---: | --- |']
+            lines += ['', '[Paired comparisons of the intelligent strategy against all static baselines](intelligent-comparison.json); evaluation only, excluded from decisions.']
+        lines += ['', '[Paired core-hour statistics](evaluation-summary.json) · [Frozen protocol](suite.json)', '',
+                  '| Strategy | Seed | Phase | Evaluated rounds | Error |', '| --- | ---: | --- | ---: | --- |']
         for s in states:
             error = str(s['last_error'] or '').replace('|', '/').replace('\n', ' ')
             lines.append(f"| {s['variant']} | {s['seed']} | {s['phase']} | {s['evaluations']} | {error} |")
@@ -229,23 +230,23 @@ def status(root: Path) -> dict[str, Any]:
     save(root / 'evaluation-summary.json', {'evaluation_role': 'reporting-only', 'summaries': summaries,
                                            'paired_differences': paired,
                                            'limits': 'Partial seed support is descriptive; no significance claim. Initial 40-pair point precedes adaptive selection.'})
-    lines = ['# MAE 优先智能采样实验', '',
-             f"{len(plan['experiments'])} 种策略 × 五个匹配 seed × 四十轮；每批四十对，统一训练配置。",
-             '主要评价：匹配样本量下的主模型 MAE；成本、RMSE 和运行耗时单独报告。',
-             '固定辅助验证仅含八个初始有标签底物对，支持有限，不代表主模型泛化误差。', '',
-             '| 策略 | seed | 阶段 | 已评价轮数 | 当前采样对数 | 错误 |',
+    lines = ['# MAE-first intelligent sampling experiment', '',
+             f"{len(plan['experiments'])} strategies × five matched seeds × forty rounds; forty pairs per batch, with shared training configuration.",
+             'Primary evaluation: main-model MAE at matched sample counts; report cost, RMSE, and runtime separately.',
+             'The fixed auxiliary panel contains only eight initially labeled substrate pairs; its limited support does not establish main-model generalization error.', '',
+             '| Strategy | Seed | Phase | Evaluated rounds | Current sampled pairs | Error |',
              '| --- | ---: | --- | ---: | ---: | --- |']
     for s in states:
         error = str(s['last_error'] or '').replace('|', '/').replace('\n', ' ')
         lines.append(f"| {s['variant']} | {s['seed']} | {s['phase']} | {s['evaluations']} | {s['sampled_pairs']} | {error} |")
-    lines.extend(['', '## 主模型评价', '',
-                  '初始40对的结果先于智能选样。未齐五个seed的均值仅作进度描述。', '',
-                  '| 策略 | 样本对数 | seed数 | MAE均值 | RMSE均值 |',
+    lines.extend(['', '## Main-model evaluation', '',
+                  'Results for the initial 40 pairs precede intelligent selection. Means from fewer than five seeds describe progress only.', '',
+                  '| Strategy | Sampled pairs | Seeds | Mean MAE | Mean RMSE |',
                   '| --- | ---: | ---: | ---: | ---: |'])
     for summary in summaries:
         if summary['sampled_pairs'] in (40, 400, 800, 1160, 1200, 1600):
             lines.append(f"| {summary['variant']} | {summary['sampled_pairs']} | {summary['n_seeds']} | {summary['mae_mean']:.4f} | {summary['rmse_mean']:.4f} |")
-    lines.extend(['', '[逐轮评价数据](evaluation-curves.json) · [配对统计](evaluation-summary.json) · [冻结实验清单](suite.json)', ''])
+    lines.extend(['', '[Per-round evaluation data](evaluation-curves.json) · [Paired statistics](evaluation-summary.json) · [Frozen experiment manifest](suite.json)', ''])
     write_text(root / 'REPORT.md', '\n'.join(lines))
     return result
 
@@ -255,7 +256,7 @@ def watch(root: Path, *, live: bool, allow_submit: bool, once: bool) -> None:
     if not live:
         status(root)
         return
-    with (root / '.supervisor.lock').open('a') as lock:
+    with rio.open(root / '.supervisor.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with ThreadPoolExecutor(max_workers=len(plan['experiments'])) as pool:
             futures = [pool.submit(supervise, Path(e['root']), live=live,
@@ -274,10 +275,11 @@ def service_file(root: Path) -> Path:
     path = root / 'supervisor.plist'
     environment = {'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
     for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy',
-                'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE'):
+                'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+                'TRICYCLE_TRAJECTORY_ALERTS_ENABLED', 'TRICYCLE_TRAJECTORY_ALERT_CONFIG'):
         if key in os.environ:
             environment[key] = os.environ[key]
-    with path.open('wb') as handle:
+    with rio.open(path, 'wb') as handle:
         plistlib.dump({'Label': 'org.tricycle.' + plan['execution_id'],
                       'ProgramArguments': [sys.executable, '-m', 'tricycle_sampling.replay.suite',
                                            'watch', '--run-dir', str(root), '--live', '--allow-submit'],
@@ -304,7 +306,7 @@ def main() -> None:
         return
     if args.run_dir is None:
         parser.error('--run-dir is required')
-    root = args.run_dir.resolve()
+    root = rio.resolve(args.run_dir)
     if args.action == 'service-file':
         if not args.allow_submit:
             parser.error('service-file requires explicit --allow-submit')

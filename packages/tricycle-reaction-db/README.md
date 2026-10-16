@@ -1,103 +1,91 @@
 # tricycle-reaction-db
 
-`tricycle-reaction-db` 是反应计算日志进入数据库以及从数据库导出训练数据的边界组件。
-它负责请求校验、批次文件边界、数据库权威筛选条件、导出字段契约和 provenance receipt；
-具体数据库 API、凭据和 schema 由注入的 adapter 实现。
+`tricycle-reaction-db` is the boundary for importing reaction calculation logs into a database and exporting training data. It handles request validation, batch file boundaries, database-authoritative filters, export field contracts, and provenance receipts. Injected adapters implement the actual database API, credentials, and schema.
 
-原生采样池的导出和适配位于 `pools.py`，底物立体身份匹配的唯一实现位于 `substrate_adaptation.py`。安装 `tricycle-reaction-db[adaptation]` 提供 RDKit；普通数据库接口不要求化学依赖。直接使用包内 CLI：
+Native sampling-pool export and adaptation live in `pools.py`; `substrate_adaptation.py` contains the sole implementation of substrate stereochemical identity matching. Install `tricycle-reaction-db[adaptation]` for RDKit; ordinary database interfaces require no chemistry dependencies. Use the package CLI directly:
+
+Reusable pool exports default to `artifacts/datasets/<date>/<timestamp>/database-sampling-pools/`. Their manifest retains export/adaptation provenance alongside the data; downstream runs reference the bundle. Explicit output roots remain supported. Individual task execution records still follow [run record scope](../../docs/run-records.md).
 
 ```bash
 uv run --package tricycle-reaction-db --extra adaptation python -m tricycle_reaction_db.pools export --config configs/database-sampling-pools.toml
 uv run --package tricycle-reaction-db --extra adaptation python -m tricycle_reaction_db.pools adapt --config configs/database-sampling-pools.toml --root /absolute/export --output-root /absolute/new-adaptation
 ```
 
-`export` 默认只生成离线计划，显式 `--live` 才通过 adapter 读取数据库；`adapt` 核验原生导出回执并保留全部源字段和行。两者不依赖 sampling、analysis 或 tools。
+`export` defaults to an offline plan and reads the database through an adapter only with explicit `--live`. `adapt` verifies the native export receipt and preserves every source field and row. Neither operation depends on sampling, analysis, or tools.
 
-请求只接受模型声明的字段。批量导入使用 `[project]` 的 `slug` / `name` 和唯一 `[batch]` 的 `batch_id` / `root`；单条校验使用 `[record]`。导出目录使用 `destination`。旧字段别名、平铺项目字段和 `batches` 输入均拒绝。
+Requests accept only model-declared fields. Batch import uses `slug` / `name` in `[project]` and `batch_id` / `root` in exactly one `[batch]`; single-record validation uses `[record]`. Export directories use `destination`. Legacy aliases, flat project fields, and `batches` input are rejected.
 
-## 能力
+## Capabilities
 
-原生插件 ID 为 `tricycle.reaction-database`：
+The native plugin ID is `tricycle.reaction-database`:
 
-| 能力 | 作用 |
+| Capability | Purpose |
 | --- | --- |
-| `reaction.validate` | 校验单反应记录 |
-| `reaction.ingest` | 通过 repository/adapter 录入单条反应记录 |
-| `reaction.upsert` | 暴露repository 写入边界 |
-| `reaction.batch.validate` | 解析并审计一个计算日志批次 |
-| `reaction.batch.ingest` | 一个新 project 导入一个批次 |
-| `reaction.filter.cycloaddition` | 使用固定 cycloaddition rxn-SMARTS 筛选清洗数据 |
-| `reaction.space.rits.export` | 导出 RitS 所需 mapped reaction + TS structure |
-| `reaction.space.rxnresid.export` | 导出 RxnResid 所需能量和分阶段耗时 |
+| `reaction.validate` | Validate one reaction record |
+| `reaction.ingest` | Ingest one reaction record through a repository/adapter |
+| `reaction.upsert` | Expose the repository write boundary |
+| `reaction.batch.validate` | Parse and audit one calculation-log batch |
+| `reaction.batch.ingest` | Import one batch into one new project |
+| `reaction.filter.cycloaddition` | Filter cleaned data using the fixed cycloaddition rxn-SMARTS |
+| `reaction.space.rits.export` | Export mapped reactions and TS structures for RitS |
+| `reaction.space.rxnresid.export` | Export energies and stage-specific timings for RxnResid |
 
-应用层的常用操作名是 `reaction-db.ingest`、`reaction-db.batch-import`、
-`reaction-db.filter`、`reaction-db.export-rits` 和 `reaction-db.export-rxnresid`。
+Common application operation names are `reaction-db.ingest`, `reaction-db.batch-import`, `reaction-db.filter`, `reaction-db.export-rits`, and `reaction-db.export-rxnresid`.
 
-## 批次导入边界
+## Batch import boundary
 
-`ReactionBatchImportRequest` 强制一次请求只创建一个内部 database project 并导入一个批次：
+`ReactionBatchImportRequest` enforces one new internal database project and one batch per request:
 
-- project 使用小写 slug 和 name 描述，不能带已有 `project_id`；
-- batch root 必须存在，默认只递归选择 `downloads/` 下的 `*.log`；
-- symlink、越界文件、非普通文件和空批次会被拒绝；
-- 计划保存 log 数量、总字节数和 manifest digest；
-- Bohr 来源必须保留 job group ID、Bohr project ID、workflow 和初猜来源 provenance；
-- 未显式提供 idempotency key 时，根据 project、batch 和 manifest digest 确定性生成。
+- Describe the project with a lowercase slug and name; an existing `project_id` is not allowed.
+- The batch root must exist. By default, select only `*.log` recursively under `downloads/`.
+- Reject symlinks, escaping paths, nonregular files, and empty batches.
+- Record log count, total bytes, and manifest digest in the plan.
+- Preserve Bohr job group ID, Bohr project ID, workflow, and initial-guess provenance for Bohr sources.
+- If no explicit idempotency key is supplied, derive one deterministically from the project, batch, and manifest digest.
 
-这保证一次批量导入不会误把 Gaussian 输入、worker 输出或 sibling 目录文件上传到数据库。
+This prevents accidental upload of Gaussian inputs, worker outputs, or sibling-directory files during batch import.
 
-## 数据库权威筛选
+## Database-authoritative filtering
 
-筛选固定使用数据库实际的 `reaction_smarts` predicate：
+Filtering uses the database's actual `reaction_smarts` predicate:
 
 ```text
 [#6,#7]=,:[#6,#7].[#6,#7]=,:[#6,#7]-,:[#6,#7]=,:[#6,#7]>>[#6,#7]1[#6,#7][#6,#7][#6,#7]=,:[#6,#7][#6,#7]1
 ```
 
-请求必须是 `reaction_filter="cycloaddition"`、`cleaned_only=true`，并使用上面的完整
-`reaction_smarts`。`reaction_class` 不受支持；TriCycle 不在本地重新解释反应类别，也不从
-日志自行推断 mapped reaction 关系。
+Requests must specify `reaction_filter="cycloaddition"`, `cleaned_only=true`, and the complete `reaction_smarts` above. `reaction_class` is unsupported. TriCycle neither reinterprets reaction classes locally nor infers mapped reaction relationships from logs.
 
-## 两类标准导出
+## Standard exports
 
 ### RitS
 
-`RitsDatasetExportRequest` 的最低字段契约为：
+The minimum `RitsDatasetExportRequest` field contract includes:
 
-- `mapped_reaction_smiles`；
-- 对应的 `ts_structure`，默认以 XYZ 物化；
-- 数据库 project ID、固定 reaction SMARTS 和导出行数/provenance。
+- `mapped_reaction_smiles`.
+- The corresponding `ts_structure`, materialized as XYZ by default.
+- Database project ID, fixed reaction SMARTS, exported row count, and provenance.
 
-MCP adapter 通过 `compose_query` 调用数据库 `MappedReactionQueryService.list_mapped_reactions`
-执行固定 reaction-SMARTS 筛选，再调用 `export_mapped_reaction_transition_state_geometries` 按
-`after_binding_id` 游标读取 bounded pages。该导出工具返回 mapped-SMILES key、verified geometry
-和逐原子 map number；adapter 按 map number 排序坐标并逐页物化 XYZ。成功 receipt 记录
-`RITS_EXPORT_API_CONTRACT`、筛选与几何 MCP 工具 provenance、页数及导出行数。
+Through `compose_query`, the MCP adapter calls the database's `MappedReactionQueryService.list_mapped_reactions` with the fixed reaction-SMARTS filter. It then calls `export_mapped_reaction_transition_state_geometries` in bounded pages using the `after_binding_id` cursor. This tool returns mapped-SMILES keys, verified geometries, and per-atom map numbers. The adapter sorts coordinates by map number and materializes XYZ files page by page. A successful receipt records `RITS_EXPORT_API_CONTRACT`, filtering and geometry MCP tool provenance, page count, and exported row count.
 
 ### RxnResid
 
-`RxnResidDatasetExportRequest` 通过数据库 MCP `compose_query` 接口导出：
+`RxnResidDatasetExportRequest` exports through the database MCP `compose_query` interface:
 
-- `mapped_reaction_smiles`；
-- `reaction_free_energy`、`activation_free_energy`；
-- `reactant_compute_seconds`、`transition_state_compute_seconds`、`product_compute_seconds`。
+- `mapped_reaction_smiles`.
+- `reaction_free_energy` and `activation_free_energy`.
+- `reactant_compute_seconds`, `transition_state_compute_seconds`, and `product_compute_seconds`.
 
-adapter 先按内部 `project_id` 和实际 `reaction_smarts` 分页读取 mapped reactions，再以每批最多 24 条
-alias 查询读取 materialized thermodynamics profile。每行能量和阶段耗时取自同一个 `profiles[0]`；不从
-本地日志重算或拼接。没有 profile 或 profile 格式无效时导出失败，缺少反应/活化能量的记录会排除并
-统计原因，null 阶段耗时保留为空。receipt 记录 MCP 查询 provenance、project ID、筛选式、页数、批次、
-行数及单位，不保存 bearer token。
-默认项目由 [导出请求模型](src/tricycle_reaction_db/models.py)提供；实际任务应在请求中显式绑定所需项目。未显式传入
-destination 时，CSV 与 `receipt.json` 写入
-`$TRICYCLE_RUN_ROOT/YYYY-MM-DD/<本地时间戳>/record/`（`TRICYCLE_RUN_ROOT` 未设置时使用 `runs/`）。
+The adapter first pages mapped reactions by internal `project_id` and the actual `reaction_smarts`, then reads materialized thermodynamics profiles using batches of at most 24 aliased queries. Each row's energies and stage timings come from the same `profiles[0]`; they are neither recomputed nor assembled from local logs. Missing or malformed profiles fail the export. Records missing reaction or activation energies are excluded with counted reasons; null stage timings remain empty. Receipts record MCP query provenance, project ID, filter, pages, batches, row counts, and units, without bearer tokens.
 
-## 架构和 adapter 边界
+The [export request model](src/tricycle_reaction_db/models.py) supplies the default project; actual tasks should bind their intended project explicitly. Without an explicit `destination`, the CSV and `receipt.json` are written to `$TRICYCLE_RUN_ROOT/YYYY-MM-DD/<local-timestamp>/record/`; `TRICYCLE_RUN_ROOT` defaults to `runs/`.
+
+## Architecture and adapter boundary
 
 ```mermaid
 flowchart LR
-    Q["TOML request"] --> V["typed request +\n固定 predicate 校验"]
-    V --> P["TaskPlan\n或本地 batch manifest"]
-    P --> A{"操作"}
+    Q["TOML request"] --> V["Typed request +\nfixed predicate validation"]
+    V --> P["TaskPlan\nor local batch manifest"]
+    P --> A{"Operation"}
     A -->|ingest| I["ReactionDatabaseAdapter"]
     A -->|filter| F["database-authoritative filter"]
     A -->|RitS export| R["mapped reactions + XYZ resources"]
@@ -108,34 +96,23 @@ flowchart LR
     X --> O
 ```
 
-`ReactionDatabaseAdapter` 提供 live 的导入、筛选和两种导出方法；仓库内置的
-`McpReactionDatabaseAdapter` 通过数据库的 Streamable HTTP MCP endpoint 调用
-`create_project` 和 `compose_query`；RxnResid 数据通过分页 mapped-reaction 和 materialized thermodynamics MCP 查询导出；导入使用数据库的
-`POST /api/upload-batches` 创建 durable queue，再通过
-`POST /api/upload-batches/{batch_id}/files` multipart 批量上传日志字节。该批量接口与单文件
-`upload_calculation_log` 共用 RustFS staging 和后台 worker，不依赖数据库服务可见的共享目录。
-adapter 的导入
-receipt 表示文件已提交到持久化队列（`submitted`），保留每个队列 ID 和状态，但不等待异步
-MolOP 解析或填充清洗反应数量。
-`ReactionRepository` 提供单条记录写入边界。dry-run 只解析请求、发现文件、生成计划和 receipt
-形状，不写数据库、不发 MCP 请求、不创建远程 project。测试可使用 `InMemoryReactionRepository`
-或内存 adapter。MCP endpoint/token、REST bearer token、organization ID 和超时策略只从 live
-环境变量读取，不能保存进请求 TOML。`TRICYCLE_REACTION_DB_REST_TOKEN` 必须是数据库接受的
-OIDC/REST bearer token；MCP access token 只可用于 `/mcp/`，不会回退用于 REST。
+`ReactionDatabaseAdapter` provides live import, filtering, and both export methods. The bundled `McpReactionDatabaseAdapter` calls `create_project` and `compose_query` through the database's Streamable HTTP MCP endpoint. RxnResid export uses paginated mapped-reaction and materialized thermodynamics MCP queries. Import creates a durable queue with `POST /api/upload-batches`, then uploads log bytes through multipart `POST /api/upload-batches/{batch_id}/files`. This batch API shares RustFS staging and background workers with single-file `upload_calculation_log` and requires no database-visible shared directory.
 
-需要核验数据库连接时，可调用 `McpReactionDatabaseAdapter.list_projects()`；这是只读 MCP
-`list_projects` 操作，不会创建 project 或提交文件。
+The import receipt means files have entered the durable queue (`submitted`). It retains every queue ID and status but does not wait for asynchronous MolOP parsing or fill in cleaned-reaction counts. `ReactionRepository` supplies the single-record write boundary. Dry-run only parses requests, discovers files, and creates plans/receipt shapes; it writes no database records, sends no MCP requests, and creates no remote projects. Tests can use `InMemoryReactionRepository` or an in-memory adapter.
 
-## CLI 示例
+MCP endpoint/token, REST bearer token, organization ID, and timeout policy are read only from live environment variables and must never be saved in request TOML. `TRICYCLE_REACTION_DB_REST_TOKEN` must be an OIDC/REST bearer token accepted by the database. MCP access tokens are only for `/mcp/` and are never reused as a REST fallback.
 
-批次导入请求见 [`configs/example-reaction-db-batch-import.toml`](../../configs/example-reaction-db-batch-import.toml)，
-筛选/导出示例见：
+To verify connectivity, call `McpReactionDatabaseAdapter.list_projects()`. This read-only MCP `list_projects` operation creates no projects and submits no files.
 
-- [`configs/example-reaction-db-filter.toml`](../../configs/example-reaction-db-filter.toml)；
-- [`configs/example-reaction-db-rits-export.toml`](../../configs/example-reaction-db-rits-export.toml)；
-- [`configs/example-reaction-db-rxnresid-export.toml`](../../configs/example-reaction-db-rxnresid-export.toml)。
+## CLI examples
 
-例如只规划 RitS 导出：
+See [`configs/example-reaction-db-batch-import.toml`](../../configs/example-reaction-db-batch-import.toml) for batch import. Filtering/export examples:
+
+- [`configs/example-reaction-db-filter.toml`](../../configs/example-reaction-db-filter.toml).
+- [`configs/example-reaction-db-rits-export.toml`](../../configs/example-reaction-db-rits-export.toml).
+- [`configs/example-reaction-db-rxnresid-export.toml`](../../configs/example-reaction-db-rxnresid-export.toml).
+
+Plan a RitS export:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent plan \
@@ -143,18 +120,15 @@ uv run --package tricycle-agent tricycle-agent plan \
   configs/example-reaction-db-rits-export.toml --run-id db-rits-export-demo
 ```
 
-真实导入或导出需要应用注入 adapter 并显式进入 live 路径；请求文件不应保存数据库凭据。
+Live import/export requires an application-injected adapter and explicit live execution. Request files must not contain database credentials.
 
-## 结果和验证
+## Results and validation
 
-成功 receipt 至少记录 project ID、筛选器、行数、目标文件、API contract 和实际请求形状。
-RxnResid 校验 mapped-reaction 与 thermodynamics `compose_query` provenance；RitS 校验数据库筛选与分页 geometry
-MCP 工具 provenance。
-错误 endpoint、`reaction_class`、缺少请求证明或单位信息都会被拒绝。
+A successful receipt records at least project ID, filter, row count, destination files, API contract, and actual request shape. RxnResid validates mapped-reaction and thermodynamics `compose_query` provenance; RitS validates database filtering and paginated geometry MCP tool provenance. Incorrect endpoints, `reaction_class`, missing request evidence, and missing units are rejected.
 
 ```bash
 uv run pytest packages/tricycle-reaction-db/tests tests/test_framework.py
 make check
 ```
 
-更完整的对象层次、查询边界和 skill 入口见 [`docs/reaction-db.md`](../../docs/reaction-db.md)。
+See [`docs/reaction-db.md`](../../docs/reaction-db.md) for the full object hierarchy, query boundaries, and skill entry points.

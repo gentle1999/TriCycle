@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 from tricycle_sampling.replay.campaign import digest, read, save
 from tricycle_sampling.replay.suite import verified_plan
 
@@ -19,12 +21,12 @@ def audit(root: Path, output: Path, *, snapshot: Path | None = None,
           query: bool = False, require_complete: bool = False) -> dict[str, Any]:
     if query == (snapshot is not None):
         raise ValueError('choose exactly one of --query and --snapshot')
-    root = root.resolve()
+    root = rio.resolve(root)
     plan = verified_plan(root)
     group = read(root / 'shared-bohr/job-group.json')
     sources: dict[str, str] = {}
     submissions = []
-    for path in sorted(root.glob('*/seed-*/round-*/submission.json')):
+    for path in sorted(rio.glob(root, '*/seed-*/round-*/submission.json')):
         value = read(path)
         if str(value['job_group_id']) != str(group['job_group_id']):
             raise ValueError('canonical submission belongs to another group')
@@ -82,7 +84,7 @@ def audit(root: Path, output: Path, *, snapshot: Path | None = None,
                                          'cancelled', 'canceled') for row in unclaimed))
     if require_complete and not complete:
         failures.append(f"all {plan['maximum_sar_jobs']} canonical jobs and unclaimed task termination are not proven")
-    output.mkdir(parents=True, exist_ok=False)
+    rio.mkdir(output, parents=True, exist_ok=False)
     save(output / 'platform-snapshot.json', listing)
     result = {'schema': 'tricycle.mae-platform-audit/v1', 'suite_sha256': digest(root / 'suite.json'),
               'source_sha256': digest(Path(__file__)),

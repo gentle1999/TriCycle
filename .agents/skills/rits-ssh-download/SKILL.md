@@ -3,9 +3,12 @@ name: rits-ssh-download
 description: "Download explicitly selected outputs from a remote RitS Docker training job."
 ---
 
-# 下载内网 RitS 产物
+# Download Internal RitS Outputs
 
-使用 rits.ssh.download，请求中指定 host、remote_root、job_id、相对安全路径列表
-download_paths 和本地 download_dir。仅显式 --live 时经 scp 下载。只选择 checkpoint、
-日志等需要的输出路径，不要下载含数据集与代码的整个远端任务目录。详见
-[RitS SSH 微调](../rits-ssh-finetune/SKILL.md)。
+Use `rits.ssh.download` with `host`, `remote_root`, `job_id`, safe relative `download_paths`, and local `download_dir`. Download via scp occurs only with explicit `--live`. Select needed checkpoints/logs, not the entire remote code/data directory. See [RitS SSH fine-tuning](../rits-ssh-finetune/SKILL.md).
+
+Environment/cache selectors are rejected. Downloads first enter disposable storage;
+loose files and ZIP/tar members are checked before publication. Contamination inside
+a selected directory is detected after transfer, so narrow the remote selection
+when validation fails. Existing local evidence is preserved, identical files are
+reused, and conflicting files fail instead of being overwritten.

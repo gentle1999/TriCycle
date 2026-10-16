@@ -12,8 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 from tricycle_core.validation import validate_fields
 
 from tricycle_sampling.protocols import LITERATURE_BASELINE_STRATEGIES
@@ -118,8 +118,12 @@ def prompt(brief: dict[str, Any], *, review: dict[str, Any] | None = None) -> st
         "not evidence of a generalization gain. Never use final evaluation or unselected true cost. "
         "State a falsifiable hypothesis and expected regional effect, justify adopted and omitted "
         "signals with sample support, and describe uncertainty. decision_action is retain/adjust/replace; "
-        "retain copies the immediately preceding expression and cost_expression exactly. "
-        "rationale: concise Chinese, <=180 characters; author_notes: <=1200 Chinese characters. "
+        "retain copies the LAST ACCEPTED ROUND's expression and cost_expression verbatim, "
+        "including variable names and formatting. It never refers to a rejected attempt or "
+        "the current unexecuted proposal. Keeping a changed proposal through correction or "
+        "review still requires adjust/replace relative to the last accepted round. "
+        "Use English for analysis, decisions, explanations, and records, even when user input or historical evidence is in Chinese, unless the user explicitly requests Chinese. "
+        "rationale: 2-4 concise English sentences, <=120 words; author_notes: concise English analysis <=600 words. "
         "Return schema JSON directly. No tools, file access, logs, hashes or table reproduction.\n"
     )
     if brief.get("decision_protocol", {}).get("name") == replay_core_hours.NAME:
@@ -176,6 +180,11 @@ def prompt(brief: dict[str, Any], *, review: dict[str, Any] | None = None) -> st
         )
     material = {k: v for k, v in brief.items() if k not in (
         "evidence_hashes", "task_sha256", "structure_provenance", "compiler_sha256")}
+    recent = brief.get('recent_functions', [])
+    material['last_accepted_round_formula'] = (
+        {key: recent[-1][key] for key in ('round', 'expression', 'cost_expression')}
+        if recent else None
+    )
     if review is not None:
         instruction += (
             "This is ONE bounded scientific review before any selection. Inspect the proposed "

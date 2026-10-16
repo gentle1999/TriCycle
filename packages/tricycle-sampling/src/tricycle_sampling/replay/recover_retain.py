@@ -11,6 +11,8 @@ import fcntl
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 from tricycle_sampling import AgentAuthoredAcquisitionSamplingStrategy, Candidate
 from tricycle_sampling.replay import mae as replay_mae
 from tricycle_sampling.replay.campaign import (
@@ -63,7 +65,7 @@ def canonical_retain(directory: Path, raw: dict[str, Any]) -> tuple[dict[str, An
 
 
 def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
-    directory = directory.resolve()
+    directory = rio.resolve(directory)
     seed = directory.parents[1]
     experiment = seed.parent
     verified_plan(experiment.parent)
@@ -87,7 +89,7 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
     if not live:
         return {'status': 'read-only exact equivalence', 'candidate_count': len(proof['candidate_scores']),
                 'proposal_attempts': maximum, 'new_proposal_calls': 0}
-    with (seed / '.lock').open('a') as lock:
+    with rio.open(seed / '.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if read(seed / 'state.json') != state:
             raise ValueError('trajectory changed during diagnosis')
@@ -100,13 +102,13 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
                    'correction_feedback_sha256': digest(directory / 'correction-feedback.json'),
                    'review_source_sha256': digest(Path(replay_mae.__file__)),
                    'recovery_source_sha256': digest(Path(__file__))}
-        if record.exists():
+        if rio.exists(record):
             if read(record) != binding or read(archive / 'blocked-state.json') != state:
                 raise ValueError('recovery archive does not bind this operation')
         else:
-            if any(directory.glob('review-agent*')) or (directory / 'response.json').exists():
+            if any(rio.glob(directory, 'review-agent*')) or rio.exists(directory / 'response.json'):
                 raise ValueError('unowned response or review already exists')
-            archive.mkdir(parents=True, exist_ok=False)
+            rio.mkdir(archive, parents=True, exist_ok=False)
             save(archive / 'blocked-state.json', state)
             save(archive / 'original-proposal.json', read(proposal_path))
             save(archive / 'equivalence.json', proof)
@@ -116,7 +118,7 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
         replay_mae.review(directory, canonical)
         save(directory / 'proposal-response.json', canonical)
         reviewed_path = directory / 'review-response.json'
-        if not reviewed_path.exists():
+        if not rio.exists(reviewed_path):
             try:
                 reviewed_path = _run_agent_once(directory / 'task.json', config, review_pass=True)
             except DecisionOutputError as exc:

@@ -87,7 +87,7 @@ def normalize(result: dict[str, Any], bucket: str = "codex") -> dict[str, Any]:
     details = []
     for window in windows:
         resets = datetime.fromtimestamp(window["resets_at"], UTC).astimezone().isoformat() if window["resets_at"] is not None else "unknown"
-        details.append(f"{window['window']} ({window['window_minutes']} 分钟窗口)：剩余 {window['remaining_percent']}%，重置时间 {resets}")
+        details.append(f"{window['window']} ({window['window_minutes']}-minute window): {window['remaining_percent']}% remaining, resets at {resets}")
     return {
         "amount": str(min(number(w["remaining_percent"]) for w in windows)),
         "unit": "%", "metric": "codex_allowance_remaining_percent",

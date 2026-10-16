@@ -1,94 +1,95 @@
 ---
 name: code-structure
-description: "在 TriCycle 新增、修改、拆分、迁移或审阅代码时使用；明确目录职责、包依赖、CLI 与 worker 入口、运行资产和验证边界，防止业务逻辑回流 tools、薄转发、重复实现与历史源码固化。适用于结构重构和接口调整，不用于仅执行现有实验或修改实验数据。"
+description: "Use when adding, changing, splitting, moving, or reviewing TriCycle code. Define module ownership, dependencies, CLI and worker boundaries, runtime assets, and validation. Applies to structural refactoring and interface changes, not merely running existing experiments or editing experimental data."
 ---
 
-# TriCycle 代码结构规范
+# TriCycle Code Structure
 
-将每项能力放在负责该领域的包中，让调用方依赖明确接口。遵守用户当前意图和仓库 [AGENTS.md](../../../AGENTS.md)；本技能不扩大改动范围，也不为普通本地重构增加审批。
+Place each capability in the package responsible for its domain, and make callers depend on explicit interfaces. Follow the user's current intent and repository [AGENTS.md](../../../AGENTS.md). This skill does not expand task scope or add approval requirements for routine local refactoring. Work in English, including delegated analysis, decisions, and records, unless the user explicitly requests otherwise; Chinese input alone does not change that default.
 
-## 开始改动前
+## Before editing
 
-1. 查看工作树和目标模块，保留已有改动。阅读所属包的 README、相关调用方与测试；用 `rg` 搜索导入、模块名、脚本路径和配置引用，不能只按文件名判断用途。
-2. 用一句话确定“这段逻辑负责什么、应归哪个模块、谁调用它”。混合多个职责的脚本按职责拆分；不要把整个 `tools` 文件机械搬进一个包就算完成。
-3. 先找已有接口和实现。局部修复沿用现有模块；确有独立职责才新增模块。没有实际复用需求时，不增加通用框架、工厂、适配层或 `utils` 集合。
+1. Inspect the working tree and target modules; preserve existing changes. Read the owning package's README, callers, and tests. Search imports, module names, script paths, and configuration references with `rg`; filenames alone do not establish responsibility.
+2. State what the logic does, which module should own it, and who calls it. Split scripts with mixed responsibilities; moving an entire `tools` file into a package is not sufficient by itself.
+3. Find existing interfaces and implementations first. Use existing modules for local fixes, and add a module only for a distinct responsibility. Do not introduce generic frameworks, factories, adapters, or `utils` collections without actual reuse needs.
 
-## 规范、流程与配置分开维护
+## Separate guidance, procedures, and configuration
 
-- `AGENTS.md` 仅保留全局工程约定和技能入口，不放具体模块的模型、环境、命令或实验细节。模块接口与实现约束放在包 README 或模块文档。
-- 技能描述何时执行、读取哪个配置、需要哪些字段、怎样校验和处理失败；不保存具体源码 commit、校验 hash、镜像 digest，也不把这些值写成技能的适用条件。
-- 预期 revision、资产校验值和环境绑定由所属配置或资产清单提供，代码负责读取和校验；实际使用值写入运行记录。技能可以链接配置并说明字段，不复制当前值形成第二份配置。
-- 仅更新绑定值时无需修改技能；配置字段、接口或操作流程改变时才同步相关说明。文档中的示例也引用配置，避免旧值与实际任务不一致。
-- `configs/` 只维护当前配置和可用示例。被替代的实验绑定按原字节移入 Git 忽略的 `artifacts/config-archive/`，记录原路径、哈希与替代入口；同步清理默认值、测试和操作说明的旧引用，不让当前执行依赖本地归档。已有运行记录与数据不改写。
+- Keep global engineering conventions and skill entry points in `AGENTS.md`, not module-specific models, environments, commands, or experiment details. Package READMEs or module documentation own interfaces and implementation constraints.
+- Skills describe when to act, which configuration to read, required fields, validation, and failure handling. Do not embed source commits, checksums, or image digests, or make them conditions for using a skill.
+- Owning configuration or asset manifests supply expected revisions, checksums, and environment bindings. Code reads and validates them; run records capture actual values. Skills may link configuration and explain fields without becoming a second configuration source.
+- Binding-value changes alone do not require skill edits. Update guidance when configuration fields, interfaces, or procedures change. Documentation examples should reference configuration instead of duplicating values that can become stale.
+- `configs/` maintains current configuration and usable examples only. Archive replaced experiment bindings byte for byte under Git-ignored `artifacts/config-archive/`, recording original paths, hashes, and replacements. Remove stale references from defaults, tests, and procedures; current execution must not depend on local archives. Do not rewrite existing run records or data.
+- Documentation maintains current interfaces and reusable procedures, not individual experiment scores, completion status, task IDs, or one-off audit counts. Follow [run record scope](../../../docs/run-records.md): execution/recovery evidence belongs in `runs/`, offline result packages and figures in `reports/`, reusable assets and independent audits in `artifacts/`, host-service state in `.tricycle/`, and disposable validation in temporary directories. Do not add ignore exceptions for individual experiments.
+- Archive obsolete documents byte for byte in `artifacts/document-archive/`, with original paths, hashes, and replacements, before removing them from maintained directories and Git tracking. For mixed guides and experiment records, preserve the original first, then extract reusable guidance. Tests use small synthetic data to validate interfaces, not local experiment reports.
 
-- 文档维护当前接口和通用流程，不保存某次实验成绩、完成状态、任务 ID 或一次性审计统计。结果包、图表和复现报告留在 Git 忽略的 `runs/`、`reports/` 或 `artifacts/`；不为具体实验添加 Git 忽略例外。
-- 过时文档按原字节归档到 `artifacts/document-archive/`，清单记录原路径、哈希和替代入口，再清理维护目录及 Git 跟踪。混合指南与实验记录的文件先保存原文，再抽出可复用说明。测试用自建小型数据验证接口，不依赖本机实验报告。
+## Directory ownership
 
-## 目录与职责
+Package names below refer to subprojects under `packages/`; runtime code lives in `src/<package_name>/`.
 
-下表的包名均指 `packages/` 下对应子项目，运行代码放在 `src/<package_name>/`。
-
-| 位置 | 应承担的职责 |
+| Location | Responsibility |
 | --- | --- |
-| `tricycle-core` | 跨插件公共类型、能力契约、运行记录和通用基础设施；不包含具体模型或业务策略 |
-| `tricycle-bohr` | 单任务平台协议、模型任务公共请求与执行基础层 |
-| `tricycle-bohrsubmit` | 批量任务准备、输入打包、任务组、提交/查询/下载/恢复，以及具体 Bohr CLI adapter |
-| `tricycle-sar` | SAR 后端、环境初始化、训练/推理、任务装配、运行诊断、预测与结果校验 |
-| `tricycle-rits` | RitS 训练/推理及其任务准备与执行集成 |
-| `tricycle-sampling` | 候选选择、采集函数、采样指标、主动学习、replay、逐轮决策、监督恢复、采样空间快照与 worker |
-| `tricycle-reaction-db` | 数据库协议与 adapter、导出、反应和底物身份适配；结构匹配不是绘图逻辑 |
-| `tricycle-reactionopt` | 反应配置、候选枚举、构象与 reaction profile 构建 |
-| `tricycle-exploration` | 探索轮次契约、证据记录、候选空间决策和训练 gate |
-| `apps/tricycle-agent` | 能力注册、依赖注入、CLI 分发及跨能力 campaign 编排；领域算法仍归领域包 |
-| `analysis/` | 离线统计、科研绘图、报告生成及其独立依赖环境 |
-| `tools/` | 独立开发、CI、运维诊断或示例编排；可以消费包 API，不作为运行库或 worker 源码仓库 |
-| `configs/` | 请求、示例及声明式绑定；不承载另一套算法、初始化或执行实现 |
-| `runs/`、`reports/` | 运行产物与发布结果；不是可导入的源码树，不从中提取旧实现驱动新任务 |
-| `.agents/skills/` | 项目唯一技能目录，统一维护领域流程、能力操作和开发规范；同名技能合并，不保留平行目录或转发文件 |
+| `tricycle-core` | Shared types, capability contracts, run records, and common infrastructure; no specific models or domain strategies |
+| `tricycle-bohr` | Single-job platform protocols and shared request/execution infrastructure for model tasks |
+| `tricycle-bohrsubmit` | Batch preparation, input packaging, job groups, submission/status/download/recovery, and concrete Bohr CLI adapters |
+| `tricycle-sar` | SAR backends, environment initialization, training/inference, task assembly, runtime diagnostics, predictions, and result validation |
+| `tricycle-rits` | RitS training/inference and task preparation/execution integration |
+| `tricycle-sampling` | Candidate selection, acquisition functions, sampling metrics, active learning, replay, round decisions, supervised recovery, space snapshots, and workers |
+| `tricycle-reaction-db` | Database protocols/adapters, exports, and reaction/substrate identity adaptation; structural matching is not plotting logic |
+| `tricycle-reactionopt` | Reaction configuration, candidate enumeration, conformers, and reaction profiles |
+| `tricycle-exploration` | Exploration-round contracts, evidence records, candidate-space decisions, and training gates |
+| `apps/tricycle-agent` | Capability registration, dependency injection, CLI dispatch, and cross-capability campaign orchestration; domain algorithms stay in domain packages |
+| `analysis/` | Offline statistics, scientific plotting, report generation, and their independent dependency environment |
+| `tools/` | Standalone development, CI, operations diagnostics, and example orchestration; may consume package APIs, but is not a runtime library or worker source repository |
+| `configs/` | Requests, examples, and declarative bindings; no parallel algorithms, initialization, or execution implementation |
+| `runs/` | Task-owned execution, verification, and recovery records under an existing task/campaign manifest |
+| `reports/` | Offline comparisons, figures, and published result packages referencing source evidence |
+| `artifacts/`, `.tricycle/` | Reusable assets/independent audits and host-service state, respectively; neither is an alternative source tree |
+| `.agents/skills/` | The sole project skill directory for domain procedures, capability operations, and development conventions; merge duplicate names without parallel directories or forwarding files |
 
-训练损失、会影响下一轮选择的统计、科学结果有效性检查属于运行逻辑。仅用于事后解释和展示的分布统计、曲线与绘图属于 `analysis/`。同一个旧脚本包含两者时拆分，并让分析代码消费包内结果。
+Training losses, statistics that affect next-round selection, and scientific validity checks are runtime logic. Distribution statistics, curves, and plotting used only for retrospective explanation belong in `analysis/`. Split mixed scripts and let analysis consume package results.
 
-## 依赖与入口
+## Dependencies and entry points
 
-- 依赖方向为应用层调用领域包，领域包调用公共基础层。领域包之间可以有明确、已声明的依赖，但不得形成循环；`core` 不反向依赖具体插件。
-- `packages/` 不导入 `apps`、`tools`、`analysis`，也不通过读文件、复制源码、动态加载、子进程或字符串路径绕过此边界。不要由包启动 `tricycle-agent` CLI 来复用业务功能；调用包 API 并注入所需 adapter。
-- 包需要的运行源码与资产随包交付。避免通过 `__file__.parents[n]`、修改 `sys.path` 等方式回到 checkout 寻找 `tools/` 或其他源码。由调用方显式传入的数据、请求和配置路径可以在包外；默认路径必须有明确约定，不能依赖源码目录层级。
-- CLI 负责参数解析、请求绑定、调用 API 和呈现结果。库之间复用 API，不解析另一 CLI 的打印输出。声明的控制台入口、包内 `__main__` 与公开 API 导出可以保留。
-- 请求字段、策略名称和操作名称只保留当前规范拼写；迁移时更新调用方与示例，旧字段和未知字段明确报错，不静默忽略或按优先级消解重复别名。用于再次执行的序列化请求必须可按同一契约重新解析；平台 job、应用运行目录与领域请求各按自己的契约传递，不靠别名兜底混用。
-- 迁移后直接更新调用方并删除旧脚本及对应 `.pyi`，不留下仅导入再调用的 Python 文件、仅跳转到另一入口的 shell 文件、`sys.modules` 别名或旧路径兼容壳。
-- 远端 worker 可以生成必要的启动脚本，用于工作目录、环境激活、日志、退出状态和进程启动；实现仍来自包内当前模块。不要为每个模型、fold、seed 复制同一套启动或业务逻辑。
-- 外部服务通过 protocol/adapter 注入；依赖按实际使用在所属包或 extra 中声明。规划与 dry-run 默认不读取凭据、访问网络或提交任务。
+- Applications call domain packages; domain packages call the shared foundation. Explicit, declared dependencies between domain packages are allowed if acyclic. `core` must not depend on plugins.
+- `packages/` must not import `apps`, `tools`, or `analysis`, or bypass this boundary through file reads, source copies, dynamic loading, subprocesses, or string paths. Do not launch the `tricycle-agent` CLI from a package to reuse domain behavior; call package APIs and inject adapters.
+- Ship required runtime source and assets with the package. Do not traverse back to the checkout with `__file__.parents[n]`, modify `sys.path`, or otherwise locate `tools/` or external source implicitly. Caller-supplied data, request, and configuration paths may be outside packages; default locations need explicit contracts independent of source-tree depth.
+- CLIs parse arguments, bind requests, call APIs, and present results. Libraries reuse APIs rather than parse another CLI's output. Declared console entry points, package `__main__`, and public API exports may remain.
+- Keep only canonical request fields, strategy names, and operation names. Update callers and examples during migration; reject obsolete and unknown fields instead of ignoring them or resolving competing aliases by precedence. Serialized requests intended for replay must parse under the same contract. Platform jobs, application run directories, and domain requests each follow their own contracts, without fallback aliases that mix them.
+- Update callers directly and remove old scripts and adjacent `.pyi` files after migration. Do not retain import-and-call Python wrappers, shell redirectors, `sys.modules` aliases, or compatibility shells for old paths.
+- Remote workers may generate launch scripts for working directories, environment activation, logging, exit status, and process startup. Implementations still come from current package modules. Do not duplicate launch or domain logic per model, fold, or seed.
+- Inject external services through protocols/adapters. Declare dependencies in the package or extra that actually uses them. Default planning and dry-run paths read no credentials, access no network, and submit no jobs.
 
-## 当前实现与运行资产
+## Current implementation and runtime assets
 
-- 只维护一份当前项目实现。不为常规修复新增 `legacy`、历史 catalog、旧源码快照或版本化兼容分支，也不把上传目录再维护成第二套协议源码。
-- 数据格式版本、第三方固定权重、不可变数据/划分、既有任务记录与 checkpoint 不等于历史执行实现。结构清理不删除或改写已有实验事实；需要重跑时创建新 run，绑定当前实际方法。
-- 任务复用所属包的准备、执行与结果接口，从配置选择当前实现。共享数据、划分、环境与配置记一次，重复任务只记录差异。
-- 为交付 worker 从包内当前、已校验的源码和资产生成 bundle 是必要 staging，不是持久维护源码副本。核对实际交付内容，不能依赖本机 checkout 恰好提供缺失模块。
-- 有意修改受校验源码时，检查差异后更新受影响的配置或资产清单，并运行校验；不将新值抄入技能。未知 hash 漂移必须定位原因，不能以自动刷新 hash、关闭校验或改写历史 manifest 使检查变绿。
-- 目录重构保留所选配置的环境与依赖语义；具体资产、执行器和结果保留规则读取所属模块文档及配置，不在通用结构规范中另建模型约束。
+- Maintain one current project implementation. Routine fixes must not add `legacy` trees, historical catalogs, old source snapshots, or versioned compatibility branches. Upload directories are not a second maintained protocol implementation.
+- Data format versions, pinned third-party weights, immutable data/splits, existing run records, and checkpoints are not historical execution implementations. Structural cleanup must not delete or rewrite experimental facts. Reruns create new runs bound to the actual current method.
+- Tasks reuse their owning package's preparation, execution, and result interfaces and select current implementations through configuration. Record shared data, splits, environments, and configuration once; repeated tasks record only differences.
+- Generating delivery bundles from current verified packaged source and assets is necessary staging, not a persistent source fork. Inspect actual delivered contents; a local checkout must not mask missing modules.
+- For intentional changes to hash-checked source, inspect the diff, update affected configuration or asset manifests, and validate. Do not copy new hashes into skills. Investigate unexplained hash drift instead of automatically refreshing hashes, disabling checks, or rewriting historical manifests to make checks pass.
+- Directory refactoring preserves the selected configuration's environment and dependency semantics. Read asset, executor, and result-retention rules from owning module documentation and configuration; do not add model-specific constraints to this general structural skill.
 
-## 迁移与收尾
+## Migration and completion
 
-1. 将逻辑放入负责的模块，保留明确的请求、返回值与错误行为；跨包只暴露实际需要的接口。不要为消除导入问题把模型、数据库或采样业务塞进 `core`。
-2. 一并更新直接导入、动态模块名、子进程命令、staging 文件清单、配置、示例、文档和技能；有接口变化时同步 `.pyi`、依赖声明、打包资源和相关测试。
-3. 删除失效入口和重复实现，再搜索旧名称和路径。历史运行记录中的原始路径不作为待改源码；当前可执行调用链和当前操作说明不能继续引用已删除文件。
-4. 检查任务提交、失败恢复和重试语义是否保持。网络重试归平台 adapter，环境初始化重试归共用初始化器；不要增加多层重试放大失败，也不能在提交结果未知时无依据重提任务。
-5. 按下节验证受影响行为；完成说明中写明逻辑归属、删除的入口、实际验证结果及未验证范围。准备成功、环境 smoke 成功和完整训练/推理成功分别报告。
+1. Move logic to its owning module while preserving explicit requests, results, and error behavior. Expose only cross-package interfaces actually needed. Do not move model, database, or sampling business logic into `core` to solve imports.
+2. Update direct imports, dynamic module names, subprocess commands, staging inventories, configuration, examples, documentation, and skills together. Interface changes also require `.pyi`, dependency, packaged-resource, and relevant test updates.
+3. Remove obsolete entry points and duplicate implementations, then search for old names and paths. Historical run paths are original evidence, not source references to update. Current executable call chains and procedures must not reference deleted files.
+4. Preserve submission, failure-recovery, and retry semantics. Network retries belong to platform adapters; environment-setup retries belong to shared initializers. Avoid layered retry amplification and unsupported resubmission when the original submission outcome is unknown.
+5. Validate affected behavior using the guidance below. Report ownership, removed entry points, actual checks, and unverified scope. Distinguish successful preparation, environment smoke checks, and full training/inference.
 
-## 验证选择
+## Validation selection
 
-优先复用现有检查，命令均在仓库根目录执行：
+Prefer existing checks; run commands from the repository root.
 
-| 变更 | 相关检查 |
+| Change | Relevant checks |
 | --- | --- |
-| 目录迁移、包依赖 | [运行包不依赖 tools](../../../packages/tricycle-sampling/tests/test_sampling_runtime_boundary.py)、[运行与分析边界](../../../tests/analysis/test_runtime_boundary.py) |
-| worker 打包、资源定位、准备入口 | [脱离 checkout 的交付检查](../../../packages/tricycle-sar/tests/test_smoke_staging.py)及受影响准备流程的离线 smoke |
-| 函数接口、类型声明 | [源码与 `.pyi` 一致性](../../../tests/test_type_interfaces.py)，并检查所属包类型与调用行为 |
-| SAR 当前后端与完整性绑定 | `uv run --all-packages python -m tricycle_sar validate`，再运行受影响后端的针对性检查 |
-| 跨包运行逻辑 | 相关回归测试；按影响范围执行 `uv run --all-packages pytest`、`uv run ruff check .`、`make typecheck` |
+| Directory moves and package dependencies | [Runtime independence from tools](../../../packages/tricycle-sampling/tests/test_sampling_runtime_boundary.py), [runtime/analysis boundaries](../../../tests/analysis/test_runtime_boundary.py) |
+| Worker packaging, resource lookup, preparation entry points | [Delivery without checkout access](../../../packages/tricycle-sar/tests/test_smoke_staging.py) and affected offline preparation smoke checks |
+| Function interfaces and stubs | [Source/`.pyi` consistency](../../../tests/test_type_interfaces.py), owning package types, and caller behavior |
+| Current SAR backends and integrity bindings | `uv run --all-packages python -m tricycle_sar validate`, followed by targeted checks for affected backends |
+| Cross-package runtime logic | Relevant regressions; use `uv run --all-packages pytest`, `uv run ruff check .`, and `make typecheck` according to impact |
 
-结构迁移可先执行：
+A structural migration can start with:
 
 ```bash
 uv run --all-packages pytest \
@@ -99,16 +100,16 @@ uv run --all-packages pytest \
 git diff --check
 ```
 
-静态扫描只能覆盖部分语法；仍须检查动态路径、subprocess 和 staging。交付验证应在没有仓库源码兜底的目录运行，只提供声明的依赖和资源；stdlib-only 入口可用 `python -I -S`，需要第三方依赖的入口用明确安装依赖的隔离环境。
+Static scans cover only some syntax. Inspect dynamic paths, subprocesses, and staging too. Validate delivery in a directory without repository-source fallback, providing only declared dependencies and resources. Standard-library-only entry points can use `python -I -S`; third-party entry points need an isolated environment with explicitly installed dependencies.
 
-只为新的行为风险补测试，不用固定文件数量或照抄实现的断言维持“冻结”目录。文档、技能和低影响可逆修改验证链接、格式与约定即可，不机械运行模型训练。真实 Bohr smoke 按用户已授权范围执行；本技能本身不授权云端提交、终止任务或修改宿主服务。
+Add tests for new behavioral risks, not fixed file counts or assertions that merely copy implementation details to freeze a directory. Documentation, skills, and low-impact reversible changes need link, format, and convention checks rather than model training. Live Bohr smoke checks must stay within existing user authorization. This skill does not itself authorize cloud submission, task termination, or host-service changes.
 
-## 判断示例
+## Decision examples
 
-| 需求或发现 | 应采取的动作 |
+| Request or finding | Action |
 | --- | --- |
-| replay worker 从 `tools/foo.py` 复制实现 | 将实现移入 sampling，staging 从已交付包取资源，移除旧入口并验证隔离执行 |
-| 一个脚本同时导出数据库、做身份匹配、画分布图 | 导出与适配归 reaction-db，图表归 analysis，调用链使用包 API |
-| 新模型复用现有初始化器，只差参数和 runner | 在当前 catalog 组合，不复制目录、不增加逐模型转发脚本 |
-| 仅迁移文件就要求新增“冻结 v2”或兼容旧命令 | 更新当前实现及调用方，保留已有实验记录，不新增项目源码版本副本 |
-| worker 需要设置环境、写日志并执行训练 | 保留负责进程生命周期的启动入口，复用包内初始化和训练实现 |
+| Replay worker copies `tools/foo.py` | Move implementation into sampling, stage resources from the delivered package, remove the old entry point, and validate isolated execution |
+| One script exports database data, matches identities, and plots distributions | Put export/adaptation in reaction-db and figures in analysis; connect them through package APIs |
+| A new model reuses an initializer with different parameters and runner | Compose the current catalog without copied directories or per-model forwarding scripts |
+| A file move is proposed to require a frozen v2 or old-command compatibility | Update the current implementation and callers, preserving existing run records without another project-source version |
+| Worker needs environment setup, logging, and training | Keep a process-lifecycle launcher that reuses packaged initialization and training |

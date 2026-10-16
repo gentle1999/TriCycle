@@ -1,12 +1,12 @@
-# TriCycle 请求元数据使用 TOML；RitS 的 Hydra 配置仍作为任务 artifact。
+# TriCycle request metadata uses TOML; the native RitS Hydra configuration remains a task artifact.
 model_name = "rits-smoke"
 
-# 也可以省略 image、project_id 和 machine_type，改由环境变量提供。
+# You may omit image, project_id, and machine_type to use environment defaults.
 image = "registry.dp.tech/dptech/dp/native/prod-23278/dl:260828"
 # project_id = "replace-with-bohr-project"
 machine_type = "c6_m60_1 * NVIDIA 4090"
 
-# input_directory 是 Bohr CLI 上传的本地任务目录，应包含以下代码、数据和配置。
+# input_directory is the local task directory uploaded by the Bohr CLI; it must contain the code, data, and configuration below.
 input_directory = "/path/to/RitS"
 code_artifact = { artifact_id = "rits-source", location = "/path/to/RitS", kind = "directory" }
 dataset = { artifact_id = "rits-dataset", location = "/path/to/RitS/data/rits_dataset", kind = "directory" }

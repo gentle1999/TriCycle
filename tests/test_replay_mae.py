@@ -106,7 +106,7 @@ class MaeDecisionTests(unittest.TestCase):
         save(self.directory / 'acquisition-history.json', {'previous_rounds': []})
         self.response = {'expression': 'epistemic_variance',
                          'cost_expression': 'product_count * mean_product_atom_count',
-                         'rationale': '优先验证高不确定度区域。', 'author_notes': 'No cost penalty; evidence limited.',
+                         'rationale': 'Prioritize validation in high-uncertainty regions.', 'author_notes': 'No cost penalty; evidence limited.',
                          'decision_action': 'replace', 'hypothesis': 'Uncertain region is undersampled.',
                          'expected_effect': 'Reduce regional validation error.',
                          'objective': replay_mae.OBJECTIVE,
@@ -179,10 +179,62 @@ class MaeDecisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'preserve'):
             replay_mae.compile_response({**value, 'expression': 'sampled_novelty'}, task, self.response)
 
+    def test_retry_prompt_distinguishes_accepted_rule_from_rejected_proposal(self) -> None:
+        accepted = {**self.response, 'expression': 'sampled_novelty'}
+        rejected = {**self.response, 'decision_action': 'retain'}
+        save(self.directory / 'acquisition-history.json', {'previous_rounds': [{'function': accepted}]})
+        save(self.directory / 'rejected-attempts/0001/response.pending.json', rejected)
+        save(self.directory / 'correction-feedback.json', {
+            'rejected_attempts': 1, 'error': 'retain must preserve the previous expression exactly',
+            'previous_output_directory': 'rejected-attempts/0001'})
+        brief = {'decision_protocol': self.protocol,
+                 'recent_functions': [{'round': 0, **accepted}]}
+        save(self.directory / 'decision-brief.json', brief)
+        with patch.object(replay_campaign, 'build_decision_brief', return_value=brief), \
+                patch.object(replay_campaign.subprocess, 'Popen') as popen:
+            process = popen.return_value
+            process.pid, process.returncode = 123, 0
+
+            def respond(*_: object, **__: object) -> None:
+                save(self.directory / 'response.pending.json', {**rejected, 'decision_action': 'adjust'})
+
+            process.communicate.side_effect = respond
+            response = replay_campaign._run_agent_once(self.directory / 'task.json', {'agent_command': ['fake']})
+            prompt = process.communicate.call_args.args[0].decode()
+        self.assertIn('Rejected proposal (NOT the last accepted round)', prompt)
+        self.assertIn('AUTOMATIC VALIDATION REPAIR', prompt)
+        self.assertIn('not to restart scientific strategy design', prompt)
+        self.assertNotIn('\nPrevious formula:', prompt)
+        material = json.loads(prompt.split('\n')[1])
+        self.assertEqual(material['last_accepted_round_formula']['expression'], 'sampled_novelty')
+        self.assertEqual(replay_campaign.read(response)['decision_action'], 'adjust')
+
     def test_nonfinite_unsafe_and_constant_rankings_are_rejected(self) -> None:
         for expression in ('1', '1 / 0', "__import__('os')"):
             with self.subTest(expression=expression), self.assertRaises(DecisionOutputError):
                 validate(self.directory, {**self.response, 'expression': expression})
+
+    def test_invalid_decision_is_repaired_automatically_before_returning(self) -> None:
+        calls: list[int] = []
+        task_path = self.directory / 'task.json'
+        save(task_path, {**replay_campaign.read(task_path), 'round': 0})
+        self.response['task_sha256'] = digest(task_path)
+
+        def invoke(*_: object, **__: object) -> Path:
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                save(self.directory / 'response.pending.json', {**self.response, 'decision_action': 'retain'})
+                raise DecisionOutputError('cannot retain a function before the first decision')
+            feedback = replay_campaign.read(self.directory / 'correction-feedback.json')
+            self.assertEqual(feedback['rejected_attempts'], 1)
+            save(self.directory / 'response.json', self.response)
+            return self.directory / 'response.json'
+
+        with patch.object(replay_campaign, '_run_agent_once', side_effect=invoke):
+            result = replay_campaign.run_agent(self.directory / 'task.json', {'max_decision_attempts': 3})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(replay_campaign.read(result)['decision_action'], 'replace')
+        self.assertTrue((self.directory / 'rejected-attempts/0001/response.pending.json').exists())
         validate(self.directory, self.response)
 
     def test_batch_review_uses_no_evaluation_file(self) -> None:
@@ -398,7 +450,7 @@ class MaeWorkerTests(unittest.TestCase):
                     self.assertIn('acquisition_guidance', brief)
                     self.assertIn('COVERAGE AND COST', replay_mae.prompt(brief))
                 value = {'expression': 'epistemic_variance', 'cost_expression': 'estimated_core_hours' if core_hours else 'product_count * mean_product_atom_count',
-                         'rationale': '检验认知不确定度。', 'author_notes': 'Evidence supports a simple rule.',
+                         'rationale': 'Test epistemic uncertainty.', 'author_notes': 'Evidence supports a simple rule.',
                          'decision_action': 'replace', 'hypothesis': 'Uncertain region needs labels.',
                          'expected_effect': 'Reduce regional error.'}
                 history = replay_campaign.read(task.parent / 'acquisition-history.json')['previous_rounds']

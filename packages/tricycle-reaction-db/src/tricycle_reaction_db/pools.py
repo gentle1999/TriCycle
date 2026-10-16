@@ -75,7 +75,7 @@ def export_database_collections(
         from tricycle_reaction_db import McpReactionDatabaseAdapter
 
         adapter = McpReactionDatabaseAdapter.from_env(Path.cwd() / ".env")
-    root = output_root or timestamped_run_directory(Path("runs"), "database-sampling-pools")
+    root = output_root or timestamped_run_directory(Path("artifacts/datasets"), "database-sampling-pools")
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     shutil.copyfile(config_path, root / "request.toml")
@@ -158,9 +158,9 @@ def adapt_database_collections(
         manifest["pools"][project["name"]] = {"export": exported, "adaptation": adapted}
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = [
-        "# 导出与底物匹配统计", "",
-        "每个数据库导出行保持独立；只追加 ene/diene 匹配字段。原始字段与行数已逐行核验。", "",
-        "| 池 | 原生导出行 | 全部行已匹配 | 待匹配行 | 有活化自由能 | 标签已匹配 | 有标签组合 |",
+        "# Export and substrate matching statistics", "",
+        "Each database export row remains independent; only ene/diene matching fields are appended. Original fields and row counts have been verified row by row.", "",
+        "| Pool | Native export rows | Matched rows | Unmatched rows | With activation free energy | Matched labeled rows | Labeled pairs |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     statistics: list[dict[str, object]] = []
@@ -190,12 +190,12 @@ def adapt_database_collections(
         )
     _write_csv(root / "matching-statistics.csv", list(statistics[0]), statistics)
     summary.extend([
-        "", "匹配以完整分子图等价性为准，保留 E/Z、手性、同位素、电荷及自由基状态。",
-        "mapping 编号、原子遍历及底物排列变化不作为身份差异。连接关系键仅用于检索，不能证明匹配。",
-        "组合数是当前策略下匹配出的底物组合数，不是数据库完整性证明。",
-        "原始计算输入覆盖、数据库导出完整性与底物匹配覆盖分别审计，不能从组合数减少推断缺数据。",
-        "未匹配和缺少标签的记录仍保留；详细原因见各池 unmatched.csv。",
-        "本表及 matching-statistics.csv 是离线统计，不作为智能采样输入。",
+        "", "Matching requires full molecular graph equivalence, preserving E/Z configuration, chirality, isotopes, charge, and radical state.",
+        "Atom-map numbers, atom traversal, and substrate order do not distinguish identities. Connectivity keys support retrieval but do not prove a match.",
+        "Pair counts describe substrate pairs matched by the current policy; they do not prove database completeness.",
+        "Audit original calculation input coverage, database export completeness, and substrate matching coverage separately. A lower pair count does not establish missing data.",
+        "Unmatched and unlabeled records are retained; see each pool's unmatched.csv for details.",
+        "This table and matching-statistics.csv are offline statistics, not intelligent sampling inputs.",
     ])
     (root / "summary.md").write_text("\n".join(summary) + "\n", encoding="utf-8")
     return {"root": str(root), "pools": {name: pool["adaptation"] for name, pool in manifest["pools"].items()}}

@@ -16,13 +16,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 
 def read(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(rio.read_text(path, encoding="utf-8"))
 
 
-from tricycle_core.io import atomic_write_text as atomic_write  # noqa: E402
-from tricycle_core.io import file_sha256 as digest  # noqa: E402
+from tricycle_core.record_io import atomic_write_text as atomic_write  # noqa: E402
+from tricycle_core.record_io import file_sha256 as digest  # noqa: E402
 
 
 def accepted_round(directory: Path, experiment: dict[str, Any], seed: int) -> dict[str, Any]:
@@ -92,13 +94,13 @@ def collect(root: Path) -> dict[str, Any]:
             errors.append({"path": str(experiment_root), "error": str(exc)})
             continue
         group_latest = []
-        for seed_root in sorted(experiment_root.glob("seed-*")):
+        for seed_root in sorted(rio.glob(experiment_root, "seed-*")):
             try:
                 state = read(seed_root / "state.json")
                 seed = int(seed_root.name.removeprefix("seed-"))
                 base = {"project": item["project"], "variant": item["variant"], "seed": seed}
                 completed = []
-                for summary in sorted(seed_root.glob("round-*/evaluation-summary.json")):
+                for summary in sorted(rio.glob(seed_root, "round-*/evaluation-summary.json")):
                     try:
                         row = {**base, **accepted_round(summary.parent, experiment, seed)}
                         completed.append(row)
@@ -138,24 +140,24 @@ def number(value: Any, signed: bool = False) -> str:
 
 
 def markdown(report: dict[str, Any]) -> str:
-    lines = ["## 最新验证集合 MAE", "", f"更新时间：{report['updated_at']}；单位 kcal/mol。",
-             "每条轨迹取最近已完成并通过产物 hash、固定验证面板和模型版本校验的轮次；轮次 0 为初始训练。",
-             "辅助验证 MAE 来自固定初始留出底物对的独立辅助模型，不代表主模型验证误差。",
-             "GT MAE 来自主模型在完整固化 GT 上的只读评估，不反馈到采样决策。",
-             "各 seed 当前轮次和累计核时不同，下表均值仅用于监控；公平策略比较仍使用预设核时预算。", "",
-             "| 空间 | 策略 | 有结果 seed | 最近完成轮次（seed 顺序） | 辅助验证 MAE 均值 | 主模型 GT MAE 均值 |",
+    lines = ["## Latest validation-set MAE", "", f"Updated: {report['updated_at']}; unit: kcal/mol.",
+             "For each trajectory, use the latest completed round that passes artifact hash, fixed validation panel, and model revision checks; round 0 is initial training.",
+             "Auxiliary validation MAE comes from an independent auxiliary model on the fixed initial holdout pairs; it is not main-model validation error.",
+             "GT MAE comes from read-only evaluation of the main model on the complete frozen GT set and is not fed back into sampling decisions.",
+             "Seeds differ in current round and cumulative core-hours. The means below are for monitoring only; fair strategy comparisons use predefined core-hour budgets.", "",
+             "| Space | Strategy | Seeds with results | Latest completed rounds (by seed) | Mean auxiliary validation MAE | Mean main-model GT MAE |",
              "| --- | --- | --- | --- | ---: | ---: |"]
     for group in report["groups"]:
         rounds = ", ".join(f"{r['seed']}:{r['completed_round'] if r['completed_round'] is not None else '—'}" for r in group["latest"])
         lines.append(f"| {group['project']} | {group['variant']} | {group['available_seed_count']}/{group['seed_count']} | {rounds} | {number(group['validation_mae_mean'])} | {number(group['gt_mae_mean'])} |")
-    lines.extend(["", "### 每条 seed 的最新记录", "", "Δ 为相较上一条已完成记录的变化，负值表示 MAE 下降；缺失值显示为 —。", "",
-                  "| 空间 | 策略 | seed | 当前轮次/阶段 | 完成轮次 | 辅助验证 MAE | Δ | 验证路径数 | GT MAE | Δ | 累计核时 |",
+    lines.extend(["", "### Latest record for each seed", "", "Δ is the change from the previous completed record; negative values mean lower MAE. Missing values appear as —.", "",
+                  "| Space | Strategy | Seed | Current round/phase | Completed round | Auxiliary validation MAE | Δ | Validation paths | GT MAE | Δ | Cumulative core-hours |",
                   "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"])
     for row in report["latest"]:
         lines.append(f"| {row['project']} | {row['variant']} | {row['seed']} | {row['current_round']}/{row['phase']} | {row['completed_round'] if row['completed_round'] is not None else '—'} | {number(row['validation_mae'])} | {number(row['validation_mae_delta'], True)} | {row.get('validation_n', '—')} | {number(row['gt_mae'])} | {number(row['gt_mae_delta'], True)} | {number(row.get('cumulative_sampling_cost_core_hours'))} |")
-    lines.extend(["", "[完整逐轮历史](VALIDATION_MAE_HISTORY.csv) · [每条轨迹最新值](VALIDATION_MAE_LATEST.csv) · [校验及来源记录](VALIDATION_MAE_STATUS.json)", ""])
+    lines.extend(["", "[Full round history](VALIDATION_MAE_HISTORY.csv) · [Latest values per trajectory](VALIDATION_MAE_LATEST.csv) · [Validation and provenance records](VALIDATION_MAE_STATUS.json)", ""])
     if report["errors"]:
-        lines.extend([f"有 {len(report['errors'])} 条产物读取或校验错误；未纳入对应结果，详见来源记录。", ""])
+        lines.extend([f"There are {len(report['errors'])} artifact read or validation errors; affected results are excluded. See the provenance records.", ""])
     return "\n".join(lines)
 
 
@@ -169,7 +171,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def update(root: Path) -> dict[str, Any]:
-    with (root / ".validation-monitor.lock").open("a") as lock:
+    with rio.open(root / ".validation-monitor.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         report = collect(root)
         atomic_write(root / "VALIDATION_MAE_STATUS.json", json.dumps(report, ensure_ascii=False, indent=2) + "\n")
@@ -185,7 +187,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(update(args.run_dir.resolve()), ensure_ascii=False))
+    print(json.dumps(update(rio.resolve(args.run_dir)), ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -1,29 +1,25 @@
 # tricycle-agent
 
-`tricycle-agent` 是 TriCycle 的组合应用和 CLI。它在启动时显式注册各个 package 的 plugin，
-构建 Codex-facing `CapabilityCatalog`，把 TOML 请求分发到对应组件，并用 core 的 `RunStore`
-保存运行状态。
+`tricycle-agent` is TriCycle's composition application and CLI. At startup it explicitly registers package plugins, builds the Codex-facing `CapabilityCatalog`, dispatches TOML requests to their components, and persists run state through core's `RunStore`.
 
-它不是一个自带模型、数据库或云平台实现的闭环服务。领域逻辑位于 `packages/`，外部服务由
-执行时注入的 adapter 负责。
+Domain logic resides in `packages/`; external services are supplied by adapters injected at execution time. The application does not bundle model, database, or cloud-platform implementations into a closed-loop service.
 
-## 启动时组合的组件
+## Components composed at startup
 
-`bootstrap.py` 当前注册：
+`bootstrap.py` registers:
 
-- `tricycle.bohr.compute`；
-- `tricycle.bohr.submit`；
-- `tricycle.reaction-database`；
-- `tricycle.sar`（RxnResid）；
-- `tricycle.rits` 与 `tricycle.rits.ssh`；
-- `tricycle.sampling`；
-- `tricycle.reactionopt`；
-- `tricycle.exploration`。
+- `tricycle.bohr.compute`.
+- `tricycle.bohr.submit`.
+- `tricycle.reaction-database`.
+- `tricycle.sar` (RxnResid).
+- `tricycle.rits` and `tricycle.rits.ssh`.
+- `tricycle.sampling`.
+- `tricycle.reactionopt`.
+- `tricycle.exploration`.
 
-公开 capability 到 plugin operation 的映射集中在 `capabilities.py`，调用方不需要直接导入
-具体组件的内部类。
+`capabilities.py` centralizes public capability-to-plugin-operation mappings. Callers do not need to import component internals directly.
 
-`reactionopt.enumerate-da` 接受一组 ene/diene 底物对，生成全原子映射反应 SMILES 候选，并将列表写到本地 CSV；它不调用 Bohr 或其它外部服务。
+`reactionopt.enumerate-da` accepts ene/diene substrate pairs, generates fully atom-mapped reaction SMILES candidates, and writes them to a local CSV without calling Bohr or other external services.
 
 ## CLI
 
@@ -32,47 +28,38 @@ uv run --package tricycle-agent tricycle-agent plugins
 uv run --package tricycle-agent tricycle-agent capabilities
 ```
 
-### 规划
+### Planning
 
-`plan` 读取 TOML 并输出 JSON-safe `TaskPlan`，不会发起外部副作用：
+`plan` reads TOML and emits a JSON-safe `TaskPlan` without external side effects:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent plan \
   rits.infer configs/example-rits-infer-request.toml --run-id rits-plan-demo
 ```
 
-### 执行
+### Execution
 
-`run` 默认是 dry-run；只有显式传入 `--live` 才允许 capability 声明的外部副作用。非本地
-能力的 live adapter 由应用按能力类型装配：
+`run` defaults to dry-run. Only explicit `--live` permits a capability's declared external side effects. The application assembles live adapters for nonlocal capabilities according to capability type:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   candidate.select configs/example-sampling-request.toml --run-id sampling-demo
 ```
 
-通用参数包括：
+Common arguments:
 
-- `--run-id`：运行 ID；
-- `--workdir`：相对路径和临时输入的工作目录；
-- `--run-dir`：准备类能力的输出目录，或已有运行的目标目录；
-- `--live`：允许远程读/写；
-- `--confirm`：破坏性能力（例如 batch terminate）所需的显式确认；
-- `--bohr-config`：Bohr CLI adapter 的配置文件。
+- `--run-id`: run ID.
+- `--workdir`: working directory for relative paths and temporary inputs.
+- `--run-dir`: output directory for preparation capabilities, or the target directory of an existing run.
+- `--live`: permit remote reads/writes.
+- `--confirm`: explicit confirmation required by destructive capabilities such as batch termination.
+- `--bohr-config`: Bohr CLI adapter configuration file.
 
-Reaction DB 的 live capability 会在执行阶段自动注入
-`McpReactionDatabaseAdapter`。配置数据库的 Streamable HTTP MCP 地址
-`TRICYCLE_REACTION_DB_MCP_URL`、MCP Token `TRICYCLE_REACTION_DB_MCP_TOKEN`、
-`TRICYCLE_REACTION_DB_ORGANIZATION_ID`；这些凭据不会写入 TOML 或 `run.toml`。MCP 导入先
-调用 `create_project`，然后通过数据库的批量 multipart 接口
-`/api/upload-batches` 和 `/api/upload-batches/{batch_id}/files` 发送日志字节；该路径与单文件
-上传共用 durable worker，不使用共享目录。live
-导入在所有文件进入持久化队列后返回 `submitted`，不等待异步 MolOP 解析。默认启用 TLS 校验，
-内部 CA 使用 `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`。
+Reaction DB live capabilities inject `McpReactionDatabaseAdapter` during execution. Configure the database's Streamable HTTP MCP URL, token, and organization through `TRICYCLE_REACTION_DB_MCP_URL`, `TRICYCLE_REACTION_DB_MCP_TOKEN`, and `TRICYCLE_REACTION_DB_ORGANIZATION_ID`. Credentials are never written to TOML requests or `run.toml`. MCP import first calls `create_project`, then sends log bytes through the database's batch multipart endpoints `/api/upload-batches` and `/api/upload-batches/{batch_id}/files`. This path shares the single-file upload's durable worker and does not use shared directories. Live import returns `submitted` after all files enter the durable queue; it does not wait for asynchronous MolOP parsing. TLS verification is enabled by default; configure an internal CA with `TRICYCLE_REACTION_DB_MCP_CA_BUNDLE`.
 
-### 查看和恢复
+### Inspection and recovery
 
-可恢复能力会在 run 目录下保存 `run.toml` 和 `request.toml`：
+Resumable capabilities save `run.toml` and `request.toml` in the run directory:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent inspect \
@@ -82,14 +69,11 @@ uv run --package tricycle-agent tricycle-agent resume \
   --run-dir 'runs/<date>/<timestamp>/example' --live
 ```
 
-未指定 `--run-dir` 时，CLI 会将记录创建在
-`runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`；日期和时间使用本机时区。执行结果会打印
-实际目录。恢复时使用该路径；显式指定 `--run-dir` 或请求中的 `out_dir` 会按指定位置写入。
+Without `--run-dir`, the CLI creates records at `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>` using the local timezone. Execution prints the actual directory; use it for recovery. An explicit `--run-dir` or request `out_dir` is honored.
 
-恢复动作来自 `run.toml.resume.next_action`。如果运行目录已有状态，`run` 不会覆盖它，应该
-使用 `resume` 继续，避免重复提交远程任务。
+The recovery action comes from `run.toml.resume.next_action`. If a run directory already contains state, `run` refuses to overwrite it. Use `resume` to continue without duplicate remote submissions.
 
-## 分发边界
+## Dispatch boundary
 
 ```mermaid
 flowchart LR
@@ -98,33 +82,30 @@ flowchart LR
     C --> D["CapabilityDispatcher"]
     D --> P["plugin.plan / validate"]
     D --> E{"dry-run?"}
-    E -->|是| R["planned TaskResult"]
-    E -->|否| A["显式注入 adapter"]
+    E -->|yes| R["planned TaskResult"]
+    E -->|no| A["Explicitly injected adapter"]
     A --> X["Bohr / database / ReactionOpt profile"]
     R --> S["RunStore\nrun.toml"]
     X --> S
 ```
 
-应用层会在调用前检查 capability 的副作用和认证要求；破坏性能力还要求 `--confirm`。默认
-路径不构造 Bohr CLI gateway、不加载凭据、不访问网络。没有注入 live adapter 时，执行会明确
-抛出集成未配置错误，而不会退化成隐式网络调用。
+Before invocation, the application checks capability side effects and authentication requirements. Destructive capabilities also require `--confirm`. The default path constructs no Bohr CLI gateway, loads no credentials, and performs no network access. Missing live adapters produce an explicit integration-not-configured error rather than an implicit network call.
 
-## 目录
+## Layout
 
-| 路径 | 作用 |
+| Path | Purpose |
 | --- | --- |
-| `src/tricycle_agent/bootstrap.py` | 注册 plugin 和创建 capability catalog |
-| `src/tricycle_agent/capabilities.py` | 公开 capability 定义及 component-operation 映射 |
-| `src/tricycle_agent/execution.py` | adapter 装配和 capability 分发 |
-| `src/tricycle_agent/cli.py` | CLI 参数、plan/run/inspect/resume 生命周期 |
-| `src/tricycle_agent/run_state.py` | 请求、计划及恢复动作的应用层装配；`RunStore` 由 core 提供 |
-| `src/tricycle_agent/campaign.py` / `campaign_cli.py` | 持久化探索监督与 campaign CLI |
-| `src/tricycle_agent/toml_requests.py` | 用户请求读取和输入限制 |
+| `src/tricycle_agent/bootstrap.py` | Plugin registration and capability catalog creation |
+| `src/tricycle_agent/capabilities.py` | Public capability definitions and component-operation mappings |
+| `src/tricycle_agent/execution.py` | Adapter assembly and capability dispatch |
+| `src/tricycle_agent/cli.py` | CLI arguments and plan/run/inspect/resume lifecycle |
+| `src/tricycle_agent/run_state.py` | Application assembly of requests, plans, and recovery actions; core provides `RunStore` |
+| `src/tricycle_agent/campaign.py` / `campaign_cli.py` | Persistent exploration supervision and campaign CLI |
+| `src/tricycle_agent/toml_requests.py` | User request loading and input restrictions |
 
-各领域组件的详细说明：[`packages/`](../../packages/)。开发契约见
-[`docs/plugin-contract.md`](../../docs/plugin-contract.md)。
+See [`packages/`](../../packages/) for domain components and [`docs/plugin-contract.md`](../../docs/plugin-contract.md) for the development contract.
 
-## 验证
+## Validation
 
 ```bash
 uv run --frozen --all-packages pytest apps/tricycle-agent/tests

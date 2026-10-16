@@ -14,7 +14,9 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import record_io as rio
 from .io import file_sha256, write_json
+from .transfer import validate_transfer_file, validate_transfer_path, validate_transfer_tree
 
 
 def _identifier(value: str) -> str:
@@ -31,6 +33,7 @@ def _relative(value: str) -> Path:
 
 
 def put_file(source: Path, store: Path) -> dict[str, Any]:
+    validate_transfer_file(source)
     store = store.resolve()
     checksum = file_sha256(source)
     target = store / "blobs" / checksum[:2] / checksum
@@ -70,17 +73,24 @@ def resolve_file(reference: dict[str, Any]) -> Path:
 def put_tree(source: Path, store: Path, *, prefix: str = "") -> dict[str, Any]:
     if not source.is_dir():
         raise ValueError(f"Asset tree source is not a directory: {source}")
+    validate_transfer_path(source.name)
+    paths = [p for p in sorted(source.rglob("*"))
+             if "__pycache__" not in p.relative_to(source).parts and p.suffix != ".pyc"]
+    for path in paths:
+        validate_transfer_path(path.relative_to(source).as_posix())
+        if path.is_symlink() and path.is_dir():
+            raise ValueError(f"Asset tree source contains a directory symlink: {path}")
+    if prefix:
+        validate_transfer_path(prefix)
     store = store.resolve()
     files = {
         p.relative_to(source).as_posix(): {
             **{k: v for k, v in put_file(p, store).items() if k != "store"},
             "executable": bool(p.stat().st_mode & 0o111),
         }
-        for p in sorted(source.rglob("*"))
-        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+        for p in paths if p.is_file()
     }
-    directories = [p.relative_to(source).as_posix() for p in sorted(source.rglob("*"))
-                   if p.is_dir() and "__pycache__" not in p.parts]
+    directories = [p.relative_to(source).as_posix() for p in paths if p.is_dir()]
     if prefix:
         base = _relative(prefix)
         files = {(base / name).as_posix(): record for name, record in files.items()}
@@ -163,6 +173,7 @@ def externalize_tree(directory: Path, store: Path) -> dict[str, Any]:
 
 def materialize_directory(source: Path, destination: Path) -> None:
     """Dereference a prepared view into an independent writable execution tree."""
+    validate_transfer_tree(source)
     shutil.copytree(source, destination)
     for path in destination.rglob("*"):
         if path.is_file():
@@ -171,7 +182,7 @@ def materialize_directory(source: Path, destination: Path) -> None:
 
 def input_paths(manifest: Path) -> tuple[dict[str, Path], set[str]]:
     """Verify a delivery manifest and resolve its files without a run-local view."""
-    value = json.loads(manifest.read_text())
+    value = json.loads(rio.read_text(manifest))
     schema = value.get("schema")
     if schema not in {"tricycle.asset-input/v1", "tricycle.asset-input/v2"}:
         raise ValueError("Unsupported asset input manifest")
@@ -211,9 +222,12 @@ def input_paths(manifest: Path) -> tuple[dict[str, Path], set[str]]:
 def materialize_input(manifest: Path, overlay: Path | None, destination: Path) -> None:
     """Expand verified references into an independent, disposable upload tree."""
     files, directories = input_paths(manifest)
-    executable_files = {name for name, ref in json.loads(manifest.read_text()).get("files", {}).items()
+    for name in (*files, *directories):
+        validate_transfer_path(name)
+    executable_files = {name for name, ref in json.loads(rio.read_text(manifest)).get("files", {}).items()
                         if ref.get("executable", False)}
     if overlay is not None:
+        validate_transfer_tree(overlay)
         for path in overlay.rglob("*"):
             name = path.relative_to(overlay).as_posix()
             if path.is_symlink():
@@ -224,6 +238,8 @@ def materialize_input(manifest: Path, overlay: Path | None, destination: Path) -
                 if name in files:
                     raise ValueError("Asset overlay collision or symlink")
                 files[name] = path
+    for source in files.values():
+        validate_transfer_file(source)
     destination.mkdir(parents=True, exist_ok=False)
     for name in sorted(directories):
         (destination / _relative(name)).mkdir(parents=True, exist_ok=True)
@@ -237,7 +253,7 @@ def materialize_input(manifest: Path, overlay: Path | None, destination: Path) -
 def freeze_inputs(directory: Path, paths: tuple[Path, ...], store: Path) -> None:
     """Publish input references before removing their run-local entities."""
     manifest = directory / "input-assets.json"
-    value: dict[str, Any] = json.loads(manifest.read_text()) if manifest.exists() else {
+    value: dict[str, Any] = json.loads(rio.read_text(manifest)) if manifest.exists() else {
         "schema": "tricycle.asset-input/v2", "trees": {}, "files": {},
     }
     if value.get("schema") != "tricycle.asset-input/v2":
@@ -274,7 +290,7 @@ def resolve_input(directory: Path, name: str) -> Path:
     relative = _relative(name)
     manifest = directory / "input-assets.json"
     if manifest.exists():
-        value = json.loads(manifest.read_text())
+        value = json.loads(rio.read_text(manifest))
         if value.get("schema") != "tricycle.asset-input/v2":
             raise ValueError("Unsupported input record schema")
         if name in value["files"]:

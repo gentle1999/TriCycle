@@ -1,0 +1,14 @@
+# Notification behavior only; never part of the frozen scientific protocol.
+# Activate with TRICYCLE_TRAJECTORY_ALERTS_ENABLED=true and point
+# TRICYCLE_TRAJECTORY_ALERT_CONFIG at a private copy of this file.
+# SMTP host, port, TLS, credentials, sender, and recipients come from environment.
+state_dir = ".tricycle/alerts"
+retry_seconds = 300
+max_attempts = 3
+poll_seconds = 30
+
+[agent]
+command = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+model = "gpt-6-luna"
+reasoning_effort = "low"
+timeout_seconds = 120

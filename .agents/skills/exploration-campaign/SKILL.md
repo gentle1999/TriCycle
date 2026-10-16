@@ -3,43 +3,49 @@ name: exploration-campaign
 description: "Supervise a persistent multi-round Bohr exploration, hand off analysis to an agent, and recover from interruptions."
 ---
 
-# 持续探索与子 agent 交接
+# Persistent Exploration and Agent Handoffs
 
-## 统一采样并行实验
+Use English for execution plans, delegated tasks, decisions, analysis, and new records even when the user writes in Chinese, unless the user explicitly requests another language. Propagate any explicit language exception to delegated agents. Preserve existing evidence in its original form.
 
-用户选择新的匹配采样比较时，使用
-`python -m tricycle_sampling.replay.suite prepare --config configs/dpa-unified-sampling-suite.toml`。
-prepare 仅生成本地产物，不读凭据或访问网络；核验 suite/preflight 的共同数据、初始集合、
-辅助面板、训练与评价 hash。得到本实验执行授权后才以
-`watch --run-dir <suite> --live --allow-submit` 推进。
-`service-file --run-dir <suite> --allow-submit` 仅生成独立 launchd 文件，不自动安装。
+## Matched sampling experiments
 
-比较方法读取套件的 `sampling_strategies`，基线由共同数值 adapter 执行，智能策略按所选协议制定规则。
-从 `suite.json`、`preflight.json` 和各 `experiment.json` 核对初始集合、种子数、轮数、批量、epochs、
-评价与并发上限。准备入口只接受当前实现支持的实验形状；这些限制属于所选套件，不作为其他 campaign 的默认预算。
+For a new matched comparison use `python -m tricycle_sampling.replay.suite prepare --config configs/dpa-unified-sampling-suite.toml`. Preparation is local and reads no credentials or network. Check suite/preflight bindings for shared data, initial sets, auxiliary panels, training, and evaluation. After experiment execution is authorized, advance with `watch --run-dir <suite> --live --allow-submit`. `service-file --run-dir <suite> --allow-submit` generates an independent launchd file without installing it.
 
-协议 `autonomous-core-hours-mae-v1` 比较给定累计代理核时下的 GT MAE，评价只取预算内
-最新已完成 checkpoint，不外推，不按 GT 优劣停止或切换。候选费用只用已揭示历史校准，
-未知真实成本不用于采集；核时节点不是硬费用保证。配置指定的固定代理辅助面板反馈不等于主模型全池 GT 误差。种子启动门槛读取 `rollout.pilot_evaluations`；不按评价误差淘汰策略。
+Read comparison methods from `sampling_strategies`. Baselines use the shared numerical adapter; intelligent strategies follow their selected protocol. Check `suite.json`, `preflight.json`, and each `experiment.json` for initial sets, seed/round counts, batch sizes, epochs, evaluation, and concurrency limits. Supported preparation shapes constrain this suite, not every campaign's budget.
 
-全部任务复用一个持久 Bohr 任务组；故障按 seed 隔离，保留 inflight、已接受决策和回执，
-不得盲目重提。源码、配置、数据或 worker hash 不匹配时默认拒绝接续，旧实验不刷新 hash 迁移。
-用户明确授权存储适配后继续时，先比对与原 hash 一致的资产源码、验证输入字节等价，
-再按包 README 的 `storage-compatibility.json` 契约记录独立审计回执。
-仅允许已审核的存储兼容变化，保留原配置/历史 hash，不扩大科学协议或预算。
-可选智能策略由 `replay.suite.AGENT_VARIANTS` 定义，比较集合以当前配置为准；任务数、审计
-与绘图布局须匹配实际配置。seed-watch 按所选策略监督，公式恢复按各工具的协议范围执行。
-智能 DSL 审计支持 intelligent 参照与表达式，不能替代五条确定性基线的完整数值验收；
-平台审计单页上限也须检查。详见
-[统一实验与恢复指南](../../../docs/mae-intelligent-sampling.md)、
-[方法与文章](../../../docs/sampling-baselines.md)和
-[包接口](../../../packages/tricycle-sampling/README.md)。
+`autonomous-core-hours-mae-v1` compares GT MAE at fixed cumulative proxy core-hour budgets using only the latest completed checkpoint within each budget. Do not extrapolate or stop/switch based on GT performance. Estimate costs from revealed history only, without unknown actual costs in acquisition. Evaluation nodes are not hard spending guarantees. Fixed proxy-panel feedback differs from main-model full-pool GT error. Read seed launch gates from `rollout.pilot_evaluations`; do not eliminate strategies by evaluation error.
 
-本能力属于应用编排层，复用现有领域插件。输入为
-`configs/example-exploration-campaign.toml`，状态为独立目录中的 `campaign.toml`。
-无需保持聊天记忆；启动或接手时先读状态、当前任务及历史产物。
+All jobs share a persistent Bohr group. Isolate failures per seed and preserve inflight state, accepted decisions, and receipts. Never resubmit blindly. Source/config/data/worker hash mismatches reject continuation by default; do not refresh historical hashes to migrate experiments.
 
-## 启动与监督
+For replay supervision, maintain state once per seed trajectory: resume from
+`seed-XX/state.json` and inspect `seed-XX/state-events.json` for compact operational
+transitions. Do not copy controller state or its journal into individual round
+submissions. Ordinary polls update only current state; old `history/*.json`
+snapshots remain historical evidence. A journal event ahead of the current state
+revision may be an interrupted write, not a committed transition. Keep per-round
+submission receipts, decision evidence, and sampling history unchanged.
+
+For user-authorized blocked-trajectory email, follow the
+[alert guide](../../../docs/trajectory-alerts.md). Configure SMTP host, port, TLS,
+credentials, sender, and recipients through environment variables, and explicitly
+enable `TRICYCLE_TRAJECTORY_ALERTS_ENABLED`. The reporting subagent works in English
+but authors equivalent English and Chinese email fields as the requested exception.
+It must not send mail, choose recipients, change scientific work, or infer a proven
+root cause from an error alone. The controller validates its response and delegates
+delivery to the shared SMTP service. Keep outbox evidence/drafts/receipts under
+`.tricycle/alerts`, not in every round. Inspect exhausted deliveries and use an
+explicit `alerts scan --live --retry-failed` after repair; do not delete deduplication
+receipts or resume scientific work merely to resend an alert. An independent alert
+observer can monitor existing blocked states without changing frozen controller
+bindings. Dry-run inspection never calls the agent or sends email.
+
+If the user explicitly authorizes continuation after storage adaptation, first compare source assets matching original hashes and verify byte-equivalent inputs, then create a separate audit receipt under the package README's `storage-compatibility.json` contract. Only reviewed storage-compatible changes are allowed; retain original configuration/hashes and scientific protocol/budgets.
+
+Optional intelligent variants come from `replay.suite.AGENT_VARIANTS`; current configuration determines comparisons. Job counts, audits, and figure layout must match it. Seed-watch supervises the selected strategy; formula recovery follows each tool's protocol scope. Intelligent DSL audits support intelligent references/expressions and do not replace complete numerical acceptance of deterministic baselines. Also check platform audit pagination limits. See the [experiment/recovery guide](../../../docs/mae-intelligent-sampling.md), [methods](../../../docs/sampling-baselines.md), and [package interfaces](../../../packages/tricycle-sampling/README.md).
+
+## QM campaign startup and supervision
+
+This application orchestration capability reuses domain plugins. Input is `configs/example-exploration-campaign.toml`; state is `campaign.toml` in a dedicated directory. On startup/handoff, read state, active task, and prior artifacts instead of relying on chat memory.
 
 ```bash
 uv run --package tricycle-agent tricycle-agent campaign start campaign-request.toml
@@ -48,69 +54,66 @@ uv run --package tricycle-agent tricycle-agent campaign tick --run-dir /absolute
 uv run --package tricycle-agent tricycle-agent campaign watch --run-dir /absolute/campaign --live
 ```
 
-`start` 只注册一个已经提交的批次，不连接服务。`tick/watch` 默认只读 dry-run，不加载凭据、
-调用 agent 或推进阶段。`--live` 才查询、下载和执行配置的 agent 命令。
-得到用户对本探索后续批次的明确授权后，使用 `--live --allow-submit`；授权限定在请求的
-`max_new_batches` 和 `max_selected_candidates` 内。这两个限制不包含初始批次，也不代表费用额度。
-请求中的 `initial_selected_ids` 应包含已有已采集合；完整结构、标签和模型信息通过
-`context_paths` 中的不可变文件提供。不要修改已启动的请求来扩大预算。
+`start` registers an already-submitted batch without contacting services. Default `tick/watch` is read-only dry-run: no credentials, agent invocation, or stage advancement. `--live` enables query/download/configured agent commands. Explicit user authorization for later batches permits `--live --allow-submit`, within `max_new_batches` and `max_selected_candidates`. These exclude the initial batch and are not monetary budgets.
 
-只有一个进程可以推进同一 campaign，进程退出会释放锁。`watch` 定时检查，阶段转换后立即
-继续，不为等待计算调用模型。`--max-ticks N` 可限制本次监督时长；状态由文件保存。
-生产运行应让系统服务或现有监督进程重启 `watch`；TriCycle 不自动安装系统服务。
+`initial_selected_ids` should include the already-sampled set. Immutable `context_paths` files provide full structures, labels, and model information. Do not edit an active request to expand budget.
 
-## 子 agent 执行协议
+Only one process advances a campaign; exit releases its lock. `watch` polls and immediately continues after stage changes, without model calls just to wait. `--max-ticks N` bounds this supervision session; files retain state. Production restarts use existing supervisors/system services; TriCycle does not install them automatically.
 
-`agent_command = []` 时，监督者读取 `state.agent_task_path` 指向的任务，交给一个子 agent
-执行；同一任务只交给一个执行者。子 agent 完成后原子写入任务指定的 `response_path`。
-每次重新接手先检查已有 response 和 selection，不能重新生成已完成的决策。
+## Delegated-agent protocol
 
-也可注入 `agent_command = ["/absolute/path/to/agent-wrapper", "argument"]`。程序追加
-`task.toml` 与 `response.toml` 的绝对路径，以 argv 执行，不经过 shell。wrapper 必须等待
-agent 完成，退出码为零，并写响应。任何模型 SDK/账户接入都由 wrapper 明确配置；仓库不假设
-某个平台的子 agent API。日志与 PID 保存在该阶段目录。命令启动后若中断，系统不会盲目重复启动。
+When `agent_command = []`, the supervisor reads the task at `state.agent_task_path` and delegates it to one subagent. Assign each task to exactly one executor. The agent atomically writes the specified `response_path`. On handoff, check existing responses/selections first; do not regenerate completed decisions.
 
-### analyzing 阶段
+Alternatively inject `agent_command = ["/absolute/path/to/agent-wrapper", "argument"]`. The program appends absolute `task.toml` and `response.toml` paths and executes argv without a shell. The wrapper waits for completion, exits zero, and writes the response. Configure SDK/account access explicitly in the wrapper; the repository assumes no platform-specific subagent API. Logs/PID remain in the stage directory. Interrupted invocations are not blindly restarted.
 
-读取 task 中的 batch、evidence、context 和之前的 rounds。必须遵循
-[agent-authored-acquisition](../agent-authored-acquisition/SKILL.md)：检查全部 worker 下载，
-整理有效标签和失败记录，完成必要的模型更新/推理与逐轮 RDKit 分析，检查分组误差，生成完整
-`exploration.round` TOML 请求。独立模型任务只在已有授权范围内执行，并保存它们的 run 与产物。
-不能把 planned checkpoint 当作已经训练完成的模型；不能提交新的 QM 候选批次。
+### Analyzing stage
 
-请求的 `exploration_id` / `round_index` 必须等于 task；`budget` 不超过剩余候选额度。
-`metadata.agent_acquisition.evidence` 中的 calculation_status/downloaded_results 必须与
-`evidence.toml` 完全一致。完整候选池和标签历史来自上下文及以前各轮，不能只处理 top-N。
+Read task batch/evidence/context and prior rounds. Follow [agent-authored-acquisition](../agent-authored-acquisition/SKILL.md): verify all worker downloads, collect valid labels/failures, finish required model updates/inference and per-round RDKit analysis, inspect grouped errors, and generate a complete `exploration.round` TOML request. Independent model jobs must remain within existing authorization and preserve runs/artifacts. Planned checkpoints are not trained models. Do not submit new QM candidates.
 
-响应格式：
+`exploration_id`/`round_index` must match the task and `budget` cannot exceed remaining candidate allowance. `metadata.agent_acquisition.evidence` calculation_status/downloaded_results must exactly match `evidence.toml`. Use complete pools/history from context/prior rounds, not only top-N.
 
 ```toml
-task_sha256 = "<task.toml 的 SHA-256>"
+task_sha256 = "<SHA-256 of task.toml>"
 request_path = "/absolute/persistent/exploration-round-request.toml"
-request_sha256 = "<请求文件的 SHA-256>"
+request_sha256 = "<SHA-256 of request file>"
 ```
 
-若候选耗尽或有证据支持的精度目标已达到，可返回 `action = "stop"` 与非空 `reason`，
-同时保留 task_sha256。分析和支持结论的原始报告必须保存在阶段目录，不依赖聊天文本。
+If candidates are exhausted or evidence supports a reached accuracy target, return `action = "stop"`, nonempty `reason`, and `task_sha256`. Preserve analysis and original supporting reports in the stage directory, not only chat text.
 
-### preparing 阶段
+### Preparing stage
 
-读取并核对 task 的 `selection_path` / `selection_sha256`。使用现有 prepare 能力，
-将**全部选中候选**转换为一个新的独立 QM 批次；保留候选到实际计算输入的映射证据。
-不得提交。准备时只生成非空 worker；当前智能采集证据契约不接受 SKIPPED_EMPTY。
+Validate task `selection_path`/`selection_sha256`. Use existing preparation capabilities to convert **all selected candidates** into a new independent QM batch, preserving mappings to actual calculation inputs. Do not submit. Create only nonempty workers; the current acquisition evidence contract rejects SKIPPED_EMPTY.
 
 ```toml
-task_sha256 = "<task.toml 的 SHA-256>"
+task_sha256 = "<SHA-256 of task.toml>"
 batch_run_dir = "/absolute/path/to/new-prepared-batch"
-plan_sha256 = "<submit-plan.tsv 的 SHA-256>"
-selection_sha256 = "<task 中的 selection_sha256>"
-candidate_ids = ["<选中候选 ID>"]
+plan_sha256 = "<SHA-256 of submit-plan.tsv>"
+selection_sha256 = "<selection_sha256 from task>"
+candidate_ids = ["<selected candidate ID>"]
 ```
 
-调度器核对 ID、选样 hash 和准备文件，冻结 worker 输入的 hash 后再提交。
-候选到 Gaussian/DPA 等实际任务的化学语义映射由准备者负责，不能靠声明 ID 替代核对。
+The scheduler checks IDs, selection hash, and prepared files, then freezes worker-input hashes before submission. The preparer owns chemical mapping into Gaussian/DPA tasks; declaring IDs does not replace that validation.
 
-## 暂停、恢复与失败
+## Pause, recovery, and failures
+
+### Live replay record containers
+
+New replay preparations write directly to one SQLite namespace per seed during
+execution. Configure durable local `TRICYCLE_RECORDS_ROOT`; never use a remote
+mount for live WAL writes. Read logical records through campaign interfaces or
+`replay.runtime_records read/list/verify`. State and its transition journal are
+logical keys, not ordinary files. External handoffs are temporary local files
+whose locations are recorded for recovery.
+
+Follow [live replay records](../../../docs/compact-replay-records.md) for consistent
+snapshots, explicit migration, and `recover-agent`. Migration requires paused
+supervisors and readers, exact-byte preservation, and an audited storage-only
+source amendment when bindings change. Preserve original failure records and
+scientific bindings. New agents use the same English instructions and numerical
+validation. Interrupted output imports never authorize duplicate model calls or
+remote submissions. Native containers need no completion-time consolidation;
+`record_store watch` finalization only verifies them. Historical sealed records
+retain their explicit restore path. These interfaces do not replace the QM CLI.
 
 ```bash
 uv run --package tricycle-agent tricycle-agent campaign pause --run-dir /absolute/campaign
@@ -118,116 +121,72 @@ uv run --package tricycle-agent tricycle-agent campaign resume --run-dir /absolu
 uv run --package tricycle-agent tricycle-agent campaign watch --run-dir /absolute/campaign --live --allow-submit
 ```
 
-pause 在当前操作返回后生效，不终止远程任务。resume 清除暂停/错误计数，不直接执行外部操作。
-状态查询和下载错误按退避重试，达到 max_failures 后 blocked。修复原因后 resume。
-Bohr 原始下载报告位于 `downloads/download-results.tsv`；编排器将其原子复制到批次根目录，
-供采集证据校验，并在本轮 `download-source.toml` 保存原始路径/hash。
-子 agent 响应必须写临时文件后 rename，避免读到半个 TOML。
+Pause takes effect after the current operation and does not terminate remote jobs. Resume clears pause/error counters without directly performing external actions. Status/download errors use backoff and become blocked at max_failures; repair the cause before resuming.
 
-若 agent 命令中断，先根据 `agent-process.toml`、日志和已生成产物确认进程状态，恢复 response。
-确需重新启动时，先确认旧进程已停止，再显式删除该阶段的 `agent-invocation.toml`，然后 resume。
-不要删除已接受的响应或已冻结的 selection 请求来重做决定。
+Original Bohr download reports live at `downloads/download-results.tsv`. The orchestrator atomically copies them to batch root for acquisition validation and records source path/hash in round `download-source.toml`. Agents write responses to temporary files then rename, preventing partial TOML reads.
 
-若提交异常或提交时进程退出，`state.inflight` 会保留。先核对 Bohr 和各 worker 的 `submit.out`，
-补全真实 `submit-results.tsv`；只有所有计划 worker 都有提交回执后才会自动转入监控。
-不确定是否已提交时禁止清空 inflight 或直接重复提交。部分批次确需补交时，必须先完成远程核对，
-再通过原有 Bohr 恢复流程处理。自动监督不会猜测缺失的远程 ID。
+After interrupted agent commands, inspect `agent-process.toml`, logs, and artifacts to establish process state and recover responses. If restart is necessary, confirm the old process stopped, explicitly remove that stage's `agent-invocation.toml`, then resume. Do not delete accepted responses or frozen selection requests to redo decisions.
 
-预算达到后仍监控并下载最后一个已提交批次，再标记 complete；不会再调用采集决策。
-`history/*.toml`、各轮任务/响应/证据、选样 trace 与结果用于审计。
+Submission errors/process exits preserve `state.inflight`. Check Bohr and each worker `submit.out`, then complete truthful `submit-results.tsv`. Monitoring begins automatically only when all planned workers have receipts. Never clear inflight or resubmit when submission outcome is uncertain. For genuinely missing partial-batch submissions, complete remote reconciliation first and use the existing Bohr recovery flow; supervision never guesses remote IDs.
 
-## 历史标签回放：新的 SAR 主动学习轨迹
+Replay submission timeouts retain the round's `submission-inflight.json` and automatically reconcile through the Bohr adapter. Reuse an exact remote match; permit resubmission only after two complete absence checks at least 60 seconds apart, with at most three restarts per round. Incomplete or ambiguous remote listings cannot prove absence. Preserve `submission-reconciliation/` and `submission-timeouts/`. Agent invocation timeouts use separate proposal/review restart counters (three restarts each) and retain failed calls under `decision/timeout-attempts/`; they do not consume scientific correction attempts. A timed-out review restarts from its validated proposal. Exhaustion retains evidence for explicitly authorized recovery.
 
-用户明确选择历史标签回放时，新实验使用 `python -m tricycle_sampling.replay.suite prepare`
-和 `configs/dpa-unified-sampling-suite.toml`；已有单实验通过 `python -m tricycle_sampling.replay.campaign`
-读取其 run 目录内的配置恢复。操作和恢复见
-[`docs/intelligent-replay.md`](../../../docs/intelligent-replay.md)。历史实验的具体操作记录属于本地研究归档，不是新 campaign 的默认流程。不要把它接入上述 QM preparing 阶段。
+After budget exhaustion, monitor/download the last submitted batch before marking complete, without another acquisition call. Audit with `history/*.toml`, round tasks/responses/evidence, selection traces, and results.
 
-该入口按已核验的基线初始集合创建新轨迹，从基线初始集合**重新训练**，不会复用基线 checkpoint 或后续选样。
-主模型和独立验证模型使用请求指定的 epochs。历史标签只按选中 pair
-逐轮揭示；最新 ground truth 专用于最终评价。每轮完成 SAR 下载及 RDKit 分析后调用 agent
-编写采集函数，通过包内 `tricycle_sampling.replay.selection.select_round` 确定性选出下一批并保存审计记录，然后训练本轨迹下一轮模型。通用 QM 探索仍使用 `exploration.round`；回放运行不反向依赖 exploration 或 tools。
-默认 dry-run 不连接服务；真实启动仍需 --live --allow-submit，并限制在准备记录中的种子和轮次预算内。
+## Historical-label replay
 
-历史回放实验的全部 Bohr 任务必须复用实验根目录 `job-group.json` 中的 CLI 任务组 ID，
-包括五条轨迹和后续追加的轮次。首次提交前在共享文件锁内创建一次；不得逐 seed/逐轮另建组。
-已提交任务如需取消重提，应取得明确授权并归档旧回执，不得仅修改本地 group 字段冒充已迁移。
+When explicitly selected, new replay experiments use `python -m tricycle_sampling.replay.suite prepare` and `configs/dpa-unified-sampling-suite.toml`. Existing single experiments recover through `python -m tricycle_sampling.replay.campaign` using their run-local configuration. See [intelligent replay](../../../docs/intelligent-replay.md). Historical experiment operation records are local research archives, not defaults for new campaigns. Replay does not enter the QM preparing stage above.
 
-### 决策故障隔离与自动修正
+Create new trajectories from validated baseline initial sets and **retrain from those sets**, without baseline checkpoints or later baseline selections. Main/independent validation models use requested epochs. Reveal historical labels only for selected pairs round by round; latest GT is exclusively final evaluation. After SAR download/RDKit analysis, the agent writes a formula; `tricycle_sampling.replay.selection.select_round` selects deterministically and records audit evidence before training the trajectory's next model. Generic QM still uses `exploration.round`; replay does not depend back on exploration/tools.
 
-历史回放的各 seed 独立运行决策进程，不共享串行模型执行锁。模型与推理强度读取 `decision_agent` 配置，受 `agent_timeout_seconds` 限制。输出格式、任务 hash、采集公式或数值校验失败，以及模型进程失败或超时，会保存 rejected-attempts 并把具体错误反馈给模型；尝试次数读取 `max_decision_attempts`，耗尽后只阻塞该 seed。采集公式通过完整候选池预校验后才接受，不改写已完成的选择。远程提交状态不明确仍需核对回执，禁止盲目重提。
+Dry-run does not connect. Live startup needs `--live --allow-submit` within prepared seed/round budgets. All replay Bohr tasks, including five trajectories and appended rounds, reuse the CLI group ID in root `job-group.json`, created once under a shared file lock before first submission. Never create groups per seed/round. Cancellation/resubmission requires explicit authorization and preserved old receipts; changing a local group field does not migrate submitted jobs.
 
-历史回放 Bohr 提交默认 max_reschedule_times = 2，可在 [bohr] 中设置非负整数。adapter 将它传给 CLI 的 --max_reschedule_times；每轮 job-spec.json 保留实际值。节点被回收或物理机异常时由平台最多重新调度两次，按整轮任务重新执行，不宣称支持本轮中途 checkpoint 续算。该策略不重试提交 API（submit_retry_mode 仍为 none），也不修改已提交任务；缺省值以 adapter 的当前接口为准，配置只影响后续提交。
+### Decision failures and bounded correction
 
-### 回放决策交付与恢复
+Each seed runs an independent decision process without a shared serial model-execution lock. Read model/reasoning from `decision_agent` and timeout from `agent_timeout_seconds`. Format, task-hash, formula, numerical, process, and timeout failures preserve rejected-attempts and feed concrete errors back to the model. `max_decision_attempts` bounds retries; exhaustion blocks only that seed. Accept formulas only after full-pool prevalidation, without changing completed selections. Uncertain submission still requires receipt reconciliation.
 
-控制器生成当前 `decision-brief.json` 和 `response-schema.json`，模型审阅材料并返回公式与分析。
-材料、响应字段、任务绑定和调用边界统一见
-[采集技能的回放决策说明](../agent-authored-acquisition/SKILL.md#回放决策材料与响应)。
-监督器核对完整原始证据、响应绑定与全池校验结果，再推进下一轮；保留已接受的决策和选择。
-`decision_protocol` 的未知字段或矛盾目标值会被拒绝，恢复时按记录中的协议核对，不静默关闭反馈或复核。
+Replay Bohr `max_reschedule_times` defaults to 2 and accepts nonnegative integers in `[bohr]`. The adapter passes CLI `--max_reschedule_times`, and each `job-spec.json` records it. Node reclamation/physical-host failures may trigger up to two whole-round platform reruns; this does not imply mid-round checkpoint resume. Submission API retries remain disabled (`submit_retry_mode = none`), and existing jobs are unchanged. Adapter defaults are authoritative; configuration affects future submissions only.
 
-模型认证失败（401、失效 API key 或过期 token）单独报告为认证问题，不进入公式纠错重试。恢复前检查失败调用启动时间与本地登录更新时刻；保留全部失败产物，只恢复尚未完成选择的决策阶段。不要重新训练已完成轮次或重提交已有 Bohr 任务。
+Validation failures enter automatic agent repair with the exact error, last accepted round formula, and separately labeled rejected proposal. The agent makes the minimal necessary correction; the controller revalidates and continues automatically. `retain` refers only to the accepted previous round, never a failed proposal. After exhaustion, user-authorized repairs use the package README's `decision-controller-amendment.json` and task-bound `recovery-authorization.json` contracts. Preserve original hashes and rejection counters, allow only the explicitly bounded additional attempts, and disclose the intervention in comparisons. Do not use the storage-compatibility receipt for decision-protocol changes.
 
-余额告警由独立的 tools.balance_alert 提供，不消耗模型额度、不改变实验预算。配置实际余额 adapter、阈值与 SMTP 收件人后才可启用；详情见 docs/balance-alert.md。认证失败与余额耗尽分别处理，不能仅凭 401 判断余额。
+### Decision delivery and recovery
 
-### 单空间对照套件
+Controllers generate `decision-brief.json` and `response-schema.json`; agents review supplied evidence and return formulas/analysis. See [replay decision materials and response](../agent-authored-acquisition/SKILL.md#replay-decision-materials-and-response) for fields, task bindings, and invocation boundaries. Supervisors check complete raw evidence, response bindings, and full-pool validation before advancing, preserving accepted decisions/selections. Unknown `decision_protocol` fields or contradictory objectives are rejected; recovery must not silently disable feedback/review.
 
-`python -m tricycle_sampling.replay.suite prepare --config configs/dpa-unified-sampling-suite.toml`
-在本地准备五条文献基线与 intelligent 智能策略的统一套件。`suite.json` 记录根目录、配置 hash 和初始集合，
-`preflight.json` 记录全部首轮输入准备与初始集合一致性。旧的硬编码 DPA 一次性准备脚本已移除。
-用户授权启动后，使用包内 suite 的 `watch --live --allow-submit` 或 `service-file` 入口。
+Report model 401/invalid API key/expired token failures as authentication issues, not formula-correction retries. Before recovery compare failed-call startup with local login refresh time. Preserve failures and resume only unfinished selection decisions; do not retrain completed rounds or resubmit existing jobs.
 
-`sampling_strategy` 的确定性选择范围读取 `replay.baselines.STRATEGIES`，只包含当前文献基线；新准备会记录当前 `sampling_experiment` schema，缺失或不支持的旧 schema 不执行回退算法。旧记录保留，重新计算须准备新 run。通用 `candidate.select` 接口的其他策略不受影响。这些基线由程序确定性执行，
-不调用模型，也不标记为 agent-authored。完整排名与选择请求分别保存在
-baseline-ranking.json 和 baseline-selection-request.json；实现 hash 在准备时冻结。
+Independent `tools.balance_alert` provides balance warnings without consuming model quota or changing experiment budgets. Enable only after configuring a real balance adapter, threshold, and SMTP recipients; see [balance alerts](../../../docs/balance-alert.md). Authentication failure and exhausted balance are distinct; 401 alone does not prove low balance.
 
-套件配置 `bohr.shared_group_dir` 时，全部实验通过共享文件锁和持久回执创建、复用唯一任务组。
-`rollout.pilot_evaluations=3` 使 seed01–04 等待本策略 seed00 的第三轮评价文件，再自动推进。
-不得因某策略误差较高而跳过其余种子，或清除不确定提交标记重复提交。
+### Single-space comparison suites
 
-用户明确要求各随机种子尽量并行时，可将 rollout.pilot_evaluations 设置为 0，
-五条轨迹独立推进。已启动实验调整调度时，先暂停本地监督并等待各seed操作释放锁，
-归档原配置和hash，再记录此次用户授权并更新配置hash；保留已有回执和轨迹状态。
-此项只改变启动顺序，不扩大seed数量、轮数或采样预算；同一轨迹的轮次仍依次执行。
+`python -m tricycle_sampling.replay.suite prepare --config configs/dpa-unified-sampling-suite.toml` prepares five literature baselines and intelligent sampling locally. `suite.json` records root/config hash/initial sets; `preflight.json` records all first-round input preparation and initial-set consistency. The old hardcoded one-off DPA preparation script is removed. After startup authorization, use suite `watch --live --allow-submit` or `service-file`.
 
-追加已授权的静态策略实验时，为每个空间/策略新建独立轨迹，不修改已启动实验的冻结配置。
-rits-zero-shot-da 与 autode 的 aleatoric-uncertainty、predictive-uncertainty 沿用 DPA 的
-确定性实现：对无标签先验产物路径的不确定度求和，降序排序，pair ID 决定并列顺序。
-逐 seed 核对首轮训练输入、初始 pair 集合、固定验证面板、数据/hash、版本、epochs 和
-核时评价节点与同空间已有对照一致；不得复用其他策略 checkpoint 或借用 GT 排名。
-追加到采样计划和监督器清单后，同步总实验数、轨迹数、最大任务数及状态报告。
+Deterministic `sampling_strategy` choices come from `replay.baselines.STRATEGIES`, containing current literature baselines only. New preparations record current `sampling_experiment` schema; missing/unsupported old schemas do not trigger fallback algorithms. Preserve old records and prepare new runs for recomputation. Other generic `candidate.select` strategies are unaffected. Baselines run numerically without model calls and are not labeled agent-authored. Preserve full `baseline-ranking.json`, `baseline-selection-request.json`, and preparation-frozen implementation hash.
 
-### 采样监督中的验证 MAE
+With `bohr.shared_group_dir`, all experiments create/reuse one group under shared lock with durable receipt. `rollout.pilot_evaluations=3` holds seed01–04 until that strategy's seed00 third evaluation, then advances automatically. Do not skip remaining seeds because error is high or clear uncertain-submission markers to resubmit.
 
-`python -m tricycle_sampling.replay.validation_monitor --run-dir <包含 sampling-plan.json 的根目录>`
-只读取已完成且通过 worker 输出 hash、源码版本、固定验证面板与无训练泄漏校验的轮次，
-生成 `VALIDATION_MAE_REPORT.md`、最新值/逐轮历史 CSV 和含来源 hash 的 JSON。
-监督器可调用其 `update(root)` 并将报告加入执行总览，不修改实验的训练协议或已完成决策，也不保存历史控制器源码。
-固定初始面板上的辅助模型留出 MAE 和主模型完整 GT 评估 MAE 必须分别标明；
-后者仅用于只读评价，不加入采样决策。逐 seed 显示最近完成轮次、当前阶段、MAE、
-相较上一完成轮次的变化、样本数和累计核时；无完成结果显示缺失值，不写成零。
-各 seed 最新值的策略均值只用于监控，轮次和核时不同，不作为公平策略排名。
+When the user explicitly requests maximal seed parallelism, `rollout.pilot_evaluations = 0` lets all five trajectories advance independently. Before changing active scheduling, pause local supervision, await released seed-operation locks, archive original config/hash, record authorization, and update config hash while preserving receipts/state. This changes launch order only, not seed/round/sample budgets; rounds within a trajectory remain sequential.
 
-用户要求采样成本与 GT 误差图时，使用 `analysis.sampling.replay_sampling_panels`：
-从包含 sampling-plan.json 或 suite.json 的根目录冻结完成检查点，再在报告环境渲染快照。
-按实际出现空间布局，上排 GT MAE，下排同 seed 同成本的“方法−参照”差值；
-新集合参照 predictive uncertainty，历史快照含 random 时保留 random。
-静态虚线、智能实线，误差带为样本标准差；未完成轨迹逐点记录可用 seed 数，
-覆盖不足完整 seed 集合时按绘图接口标记，n=1 不画带。使用最新已完成且预算内 checkpoint，不超出实际成本覆盖，
-不外推；下排只汇总配对 seed 差值。固定辅助面板 MAE 与全池 GT MAE 分开报告。
+For authorized additional static strategies, create separate trajectories per space/strategy without editing active frozen configurations. `rits-zero-shot-da` and `autode` aleatoric-uncertainty/predictive-uncertainty reuse DPA's deterministic implementation: sum uncertainties across unlabeled prior product routes, rank descending, break ties by pair ID. Per seed, match first-round inputs, initial pairs, fixed validation panel, data/hashes, version, epochs, and core-hour nodes to existing same-space controls. Never reuse another strategy's checkpoint or GT ranking. Update sampling plans, supervisor lists, experiment/trajectory/job totals, and status reports together.
 
-### 共享资产与精简输入
+### Validation MAE monitoring
 
-新 replay 的 `asset_store` 指向项目级共享存储；未设置时使用当前工作目录下
-`artifacts/task-assets`。检查 `asset-references.json`、逐轮 `input-assets.json` 及其绑定，
-用当前控制器/adapter 提交；新 run 不保留 `assets/`、`private/`、逐轮 `input/` 或它们的软链接。
-`input-assets.json` 绑定该轮完整交付内容，本地读取使用 `input_file`，adapter 上传时临时展开。
-提交会临时组装完整输入并自动清理。恢复/审计核对共享资产与 checkpoint 链；缺失或变更时停止，
-不得改 hash 或借用另一轨迹模型。下载和结果通过 hash 共享保存，移动/归档 run 时须同时保留其引用的
-资产库。旧实验不刷新绑定；结构修改后按原科学协议准备新 run。
+`python -m tricycle_sampling.replay.validation_monitor --run-dir <root-containing-sampling-plan.json>` reads only completed rounds validated for worker-output hashes, source version, fixed panel, and no training leakage. It produces `VALIDATION_MAE_REPORT.md`, latest/history CSV, and source-hashed JSON. Supervisors may call `update(root)` and include the report in their overview without changing training/decisions or preserving historical controller source.
 
-采样下载仅选择 worker 的 `outputs/round/`；训练暂存目录与上传资产不属于结果。
-worker 按结果清单发布新权重、预测、指标和日志；复用上一轮权重时只返回绑定 hash 的
-`output_references`，控制器从该轨迹输入恢复本地引用，不再次下载同一模型。
-不要扩大 backward_files 到整个工作目录，也不要把 refit 输入权重或预处理数据加入结果清单。
+Distinguish auxiliary holdout MAE on the fixed initial panel from main-model full-GT MAE. The latter is read-only evaluation, excluded from acquisition. Show per-seed last completed round, stage, MAE, change from prior completed round, sample count, and cumulative core-hours. Missing results remain missing, not zero. Strategy means of each seed's latest values are monitoring summaries, not fair rankings across different rounds/costs.
+
+For requested cost/GT-error figures use `analysis.sampling.replay_sampling_panels`. Freeze completed checkpoints from a root with sampling-plan.json or suite.json, then render in the report environment. Layout actual spaces; upper panels show GT MAE and lower panels paired same-seed/same-cost method-minus-reference differences. New comparisons use predictive uncertainty as reference; historical snapshots retain random when present.
+
+Static lines are dashed, intelligent solid; bands show sample SD. Record available seed count at every incomplete-trajectory point and mark incomplete coverage under the plotting interface; no band for n=1. Use latest completed budget-eligible checkpoints within observed cost coverage, without extrapolation. Lower panels aggregate paired-seed differences only. Report fixed auxiliary-panel MAE separately from full-pool GT MAE.
+
+For an authorized English-versus-Chinese policy comparison, use the offline `analysis.sampling.language_comparison` observer with a hash-bound comparison plan; see the [analysis interface](../../../analysis/README.md). Preserve historical records and freeze reference evidence before waiting. Compare paired seeds at the original budgets only after English trajectories complete or block, report partial coverage, and disclose other policy/infrastructure differences. Keep these GT comparisons outside acquisition evidence. The observer never submits or retries experimental work.
+
+Apply [run record scope](../../../docs/run-records.md): new comparison plans, snapshots, figures, and reports belong under `reports/`. Keep execution decisions, rejected attempts, receipts, and necessary recovery state in the owning run. Independent source backups, code diffs, and repository-wide repair audits belong under `artifacts/audits/`; a run stores only the intervention receipt and evidence path/hash. Preserve already-bound historical evidence paths.
+
+### Shared assets and compact inputs
+
+New replay `asset_store` points at project-level storage, defaulting to `artifacts/task-assets` under the working directory. Validate `asset-references.json`, per-round `input-assets.json`, and bindings; submit through current controllers/adapters. New runs retain no `assets/`, `private/`, per-round `input/`, or corresponding symlinks.
+
+`input-assets.json` binds complete round delivery. Local reads use `input_file`; adapters materialize complete upload inputs temporarily and clean them automatically. Recovery/audits check shared assets and checkpoint chains. Stop on missing/changed assets instead of changing hashes or borrowing trajectory models. Downloads/results are shared by hash; moving/archiving runs must preserve referenced stores. Do not refresh historical bindings; after structural changes prepare new runs under the same scientific protocol.
+
+Sampling downloads select only worker `outputs/round/`. Training staging/upload assets are not results. Workers publish new weights, predictions, metrics, and logs under the result manifest. Reused previous weights return only hash-bound `output_references`; the controller restores local references from that trajectory's inputs without downloading the model again. Do not widen backward_files to the entire workspace or add refit input weights/preprocessed data to results.

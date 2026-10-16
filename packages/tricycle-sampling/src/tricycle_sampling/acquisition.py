@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from tricycle_core import canonical_json
+from tricycle_core import record_io as rio
 from tricycle_core.errors import InvalidRequestError
-from tricycle_core.io import file_sha256 as core_file_sha256
+from tricycle_core.record_io import file_sha256 as core_file_sha256
 
 from .models import Candidate
 
@@ -436,7 +437,7 @@ def validate_calculation_evidence(evidence: Mapping[str, Any]) -> set[str]:
 
     status_path, status_workers = _validate_status_evidence(evidence.get("calculation_status"))
     download_path, download_workers = _validate_download_evidence(evidence.get("downloaded_results"))
-    if status_path.parent.resolve() != download_path.parent.resolve():
+    if rio.resolve(status_path.parent) != rio.resolve(download_path.parent):
         raise InvalidRequestError(
             "calculation_status.tsv and download-results.tsv must belong to the same local run"
         )
@@ -459,7 +460,7 @@ def _read_local_tsv_evidence(value: Any, *, name: str) -> tuple[Path, list[dict[
     if not isinstance(expected_hash, str) or not expected_hash.strip():
         raise InvalidRequestError(f"{name}.sha256 must not be empty")
     report_path = Path(path_value)
-    if not report_path.is_absolute() or not report_path.is_file():
+    if not report_path.is_absolute() or not rio.is_file(report_path):
         raise InvalidRequestError(
             f"{name} must already exist at an absolute local path: {report_path}"
         )
@@ -473,7 +474,7 @@ def _read_local_tsv_evidence(value: Any, *, name: str) -> tuple[Path, list[dict[
             f"{name}.manifest_path must point to Bohr batch {expected_name}"
         )
     try:
-        with report_path.open(encoding="utf-8", newline="") as handle:
+        with rio.open(report_path, encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle, delimiter="\t"))
     except (OSError, UnicodeError, csv.Error) as exc:
         raise InvalidRequestError(f"cannot read {name} report: {report_path}") from exc
@@ -526,11 +527,11 @@ def _validate_download_evidence(value: Any) -> tuple[Path, set[str]]:
         download_dir = Path(download_dir_value)
         if not download_dir.is_absolute():
             possible_dirs = {
-                download_dir.resolve(),
-                (report_path.parent / download_dir).resolve(),
+                rio.resolve(download_dir),
+                rio.resolve(report_path.parent / download_dir),
             }
             matching_dirs = [
-                path for path in possible_dirs if (path / "download-manifest.txt").is_file()
+                path for path in possible_dirs if rio.is_file(path / "download-manifest.txt")
             ]
             if len(matching_dirs) != 1:
                 raise InvalidRequestError(
@@ -539,26 +540,26 @@ def _validate_download_evidence(value: Any) -> tuple[Path, set[str]]:
                 )
             download_dir = matching_dirs[0]
         manifest_path = download_dir / "download-manifest.txt"
-        if not manifest_path.is_file():
+        if not rio.is_file(manifest_path):
             raise InvalidRequestError(
                 f"downloaded worker has no local download-manifest.txt: {download_dir}"
             )
         try:
-            entries = [line.strip() for line in manifest_path.read_text(encoding="utf-8").splitlines()]
+            entries = [line.strip() for line in rio.read_text(manifest_path, encoding="utf-8").splitlines()]
         except (OSError, UnicodeError) as exc:
             raise InvalidRequestError(f"cannot read worker download manifest: {manifest_path}") from exc
         if not entries:
             raise InvalidRequestError(f"worker download manifest is empty: {manifest_path}")
-        root = download_dir.resolve()
+        root = rio.resolve(download_dir)
         for entry in entries:
-            payload_path = (download_dir / entry).resolve()
+            payload_path = rio.resolve(download_dir / entry)
             try:
                 payload_path.relative_to(root)
             except ValueError as exc:
                 raise InvalidRequestError(
                     f"worker download manifest points outside its download directory: {entry}"
                 ) from exc
-            if not payload_path.is_file():
+            if not rio.is_file(payload_path):
                 raise InvalidRequestError(f"downloaded worker artifact is missing: {payload_path}")
     if len(workers) != len(rows):
         raise InvalidRequestError(f"download-results.tsv contains duplicate worker rows: {report_path}")

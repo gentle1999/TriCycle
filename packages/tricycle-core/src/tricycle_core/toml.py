@@ -68,8 +68,8 @@ def _sections(
     return scalar_lines, nested
 
 
-def dump_toml(path: Path, mapping: Mapping[str, object]) -> None:
-    """Write the deterministic TOML subset used by TriCycle run metadata."""
+def render_toml(mapping: Mapping[str, object]) -> str:
+    """Render the deterministic TOML subset without requiring a filesystem file."""
 
     lines: list[str] = []
     root_scalars, root_sections = _sections(mapping)
@@ -90,4 +90,9 @@ def dump_toml(path: Path, mapping: Mapping[str, object]) -> None:
                 lines.extend(child_scalars)
                 next_pending.extend(child_nested)
             pending = next_pending
-    atomic_write_text(path, "\n".join(lines) + "\n")
+    return "\n".join(lines) + "\n"
+
+
+def dump_toml(path: Path, mapping: Mapping[str, object]) -> None:
+    """Write deterministic TOML to an ordinary filesystem destination."""
+    atomic_write_text(path, render_toml(mapping))

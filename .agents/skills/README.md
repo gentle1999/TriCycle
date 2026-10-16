@@ -1,12 +1,14 @@
-# TriCycle 项目技能
+# TriCycle Project Skills
 
-`.agents/skills/` 是项目唯一技能目录，统一保存能力操作、领域工作流和开发规范。
-每个名称只有一份 `SKILL.md`；不维护平行目录、同名副本或只做转发的技能。
-模块接口见所属包 README；具体版本、hash 与镜像绑定读取配置或资产清单，不复制进技能。
+`.agents/skills/` is the sole project skill directory for capability operations, domain workflows, and development conventions. Each name has one `SKILL.md`; do not maintain parallel directories, duplicate names, or forwarding skills. Package READMEs define module interfaces. Read concrete revisions, hashes, and image bindings from configuration or asset manifests instead of copying them into skills.
 
-## 能力操作
+Use English for skill instructions, task execution, decisions, and records, including delegated work and tasks requested in Chinese, unless the user explicitly requests another language. Pass this requirement and any explicit language exception to subagents. See [AGENTS.md](../../AGENTS.md) for global collaboration rules.
 
-这些技能对应应用能力目录中的实际 capability。默认规划不连接外部服务；操作的授权与恢复边界见各技能。
+## Capability operations
+
+Before writing generated output, apply [run record scope](../../docs/run-records.md). A task's execution and recovery evidence belongs in its existing run; standalone reports, reusable assets, service state, and disposable checks use their designated destinations. Do not create a new run merely for an inspection or a development note.
+
+These skills correspond to capabilities registered in the application catalog. Default planning does not connect to external services; each skill defines its authorization and recovery boundaries.
 
 | Skill | Capability |
 | --- | --- |
@@ -45,25 +47,25 @@
 | [rits-ssh-terminate](rits-ssh-terminate/SKILL.md) | `rits.ssh.terminate` |
 | [rits-ssh-download](rits-ssh-download/SKILL.md) | `rits.ssh.download` |
 
-## 领域与组合工作流
+## Domain and composite workflows
 
-| Skill | 用途 |
+| Skill | Purpose |
 | --- | --- |
-| [bohr-compute](bohr-compute/SKILL.md) | 单任务计算的规划、提交与结果生命周期 |
-| [bohr-submit](bohr-submit/SKILL.md) | 批量 staging、计算输入与生命周期 |
-| [reactionopt-config](reactionopt-config/SKILL.md) | 反应配置生成与下游交接 |
-| [rits-model](rits-model/SKILL.md) | RitS 训练、微调、推理及执行器选择 |
-| [sar-model](sar-model/SKILL.md) | SAR 后端、任务准备与结果管理 |
-| [sar-benchmark](sar-benchmark/SKILL.md) | 分组交叉验证、多模型比较与发布 |
-| [sampling-strategy](sampling-strategy/SKILL.md) | 策略选择、匹配实验与采样边界 |
-| [agent-authored-acquisition](agent-authored-acquisition/SKILL.md) | 按所选协议编写并核验逐轮采集函数 |
-| [exploration-campaign](exploration-campaign/SKILL.md) | 持久 QM 探索或历史标签回放的监督与恢复 |
+| [bohr-compute](bohr-compute/SKILL.md) | Single-job calculation planning, submission, and result lifecycle |
+| [bohr-submit](bohr-submit/SKILL.md) | Batch staging, calculation inputs, and lifecycle |
+| [reactionopt-config](reactionopt-config/SKILL.md) | Reaction configuration generation and downstream handoff |
+| [rits-model](rits-model/SKILL.md) | RitS training, fine-tuning, inference, and executor selection |
+| [sar-model](sar-model/SKILL.md) | SAR backends, task preparation, and result management |
+| [sar-benchmark](sar-benchmark/SKILL.md) | Grouped cross-validation, model comparisons, and publication |
+| [sampling-strategy](sampling-strategy/SKILL.md) | Strategy selection, matched experiments, and sampling boundaries |
+| [agent-authored-acquisition](agent-authored-acquisition/SKILL.md) | Author and validate per-round acquisition functions under the selected protocol |
+| [exploration-campaign](exploration-campaign/SKILL.md) | Supervision and recovery of persistent QM exploration or historical-label replay |
 
-## 开发规范
+## Development conventions
 
-| Skill | 用途 |
+| Skill | Purpose |
 | --- | --- |
-| [code-structure](code-structure/SKILL.md) | 目录职责、依赖方向、配置归属与迁移验证 |
-| [commit-log](commit-log/SKILL.md) | 英文 Conventional Commits 提交说明与提交整理 |
+| [code-structure](code-structure/SKILL.md) | Directory responsibilities, dependencies, configuration ownership, and migration validation |
+| [commit-log](commit-log/SKILL.md) | English Conventional Commits messages and commit preparation |
 
-能力请求和 adapter 策略使用 TOML；模型原生输入、replay 状态与结果文件遵循所属模块的数据契约。命令输出不能直接当作请求配置。
+Capability requests and adapter policy use TOML. Native model inputs, replay state, and result files follow their owning modules' data contracts. Command output is not directly reusable as request configuration.

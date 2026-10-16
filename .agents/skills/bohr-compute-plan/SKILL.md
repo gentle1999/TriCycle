@@ -3,24 +3,17 @@ name: bohr-compute-plan
 description: "Build an auditable dry-run plan for one Bohr computational chemistry job from a TOML request."
 ---
 
-# 规划单个 Bohr 计算
+# Plan a Bohr Job
 
-请求至少包含稳定的 `job_name`、`operation`、`image` 和 `command`，可选输入 artifact、项目和机器类型。
-涉及 DPA 时必须明确选择 GPU 节点；纯 Gaussian 必须选择 CPU 节点。
-检查命令的实际计算引擎与资源是否匹配，不能以 CPU DPA 运行作为 smoke 通过证据。
+The request requires a stable `job_name`, `operation`, `image`, and `command`; input artifacts, project, and machine type are optional. Explicitly select a GPU node for DPA and a CPU node for pure Gaussian. Check the actual computation engine against the resources; a DPA run on CPU is not passing smoke evidence.
 
 ```bash
 uv run --package tricycle-agent tricycle-agent plan \
   bohr.compute.plan request.toml --run-id <id>
 ```
 
-该能力只有规划副作用，不读取认证、不访问网络，也不会提交任务。提交请改用 `bohr.compute.submit`。
+This capability only plans: it does not read authentication, access the network, or submit jobs. Use `bohr.compute.submit` for submission.
 
-## 失败与恢复
+## Failure recovery and routing
 
-请求校验失败时只修改 TOML 请求并重新规划；不要把规划失败当作远程任务失败。
-
-## 不适用
-
-需要提交、查询或下载已有 job 时分别使用 `bohr.compute.submit`、`bohr.job.status` 或
-`bohr.job.download`，不要让本 Skill 读取凭据。
+If validation fails, correct the TOML request and replan. A planning failure is not a remote job failure. Use `bohr.compute.submit`, `bohr.job.status`, or `bohr.job.download` for submission, status, or downloads; do not make this skill read credentials.

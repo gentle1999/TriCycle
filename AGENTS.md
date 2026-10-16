@@ -1,33 +1,100 @@
-# TriCycle Agent 开发指南
+# TriCycle Agent Development Guide
 
-新增、修改、拆分、迁移或审阅代码时，先使用项目技能 [code-structure](.agents/skills/code-structure/SKILL.md)，按职责确定模块归属、依赖方向与验证范围。仅运行现有实验或修改实验数据不触发结构重构。
+Before adding, changing, splitting, moving, or reviewing code, use the project
+[code-structure](.agents/skills/code-structure/SKILL.md) skill to determine module
+ownership, dependency direction, and validation scope. Running existing
+experiments or changing experimental data alone does not trigger structural
+refactoring.
 
-## 工程约定
+## Language and collaboration
 
-- Python `>=3.11`，每个可发布子项目使用 `src/` 布局。
-- 包管理使用 `uv` workspace；根目录的 `Makefile` 提供不依赖 uv 的基础 smoke test。
-- 公共契约归公共基础层；基础层不反向依赖业务模块，包之间不形成循环依赖。
-- 业务运行逻辑归所属包；`packages/` 不反向导入、读取、复制或执行 `apps/`、`tools/`、`analysis/` 的实现。迁移后更新调用方，不保留薄转发脚本或重复实现。
-- 离线分析、科研绘图及其依赖环境统一放在根目录 `analysis/`；影响任务决策与有效性校验的逻辑留在所属运行包。
-- 发布包提供 `py.typed`；运行代码的静态接口可用同目录 `.pyi` 声明，函数参数、默认值位置和 dataclass 字段必须与实际源码一致，并通过接口一致性检查。类型声明不替代运行验证，修改实现时同步接口与检查。
-- 外部服务必须通过 protocol/adapter 注入。不要在 dry-run 默认路径中读取凭据、发起网络请求或提交真实任务。
-- 默认 run 记录写入 `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`，日期与时间使用本机时区；显式 `run_dir` / `out_dir` 和恢复时的既有路径按请求保留。
-- 所有项目技能统一放在 `.agents/skills/<skill-name>/SKILL.md`，不建立第二套技能目录、同名副本或转发入口；代码接口与相关技能同步更新。
+- English is the primary language for this repository and its agent workflows.
+  Reply to the user in Chinese unless they request another conversation language.
+  Execute tasks and author project artifacts in English even when the user writes
+  in Chinese. A conversation-language request does not change artifact or subagent
+  language; apply an exception only when explicitly requested for that output.
+- Write documentation, skills, code comments, new human-readable reports,
+  decision rationales, work logs, reviews, commit messages, and subagent responses
+  in English by default. Keep identifiers, commands, schemas, and scientific
+  notation exact.
+- Pass this language requirement to every delegated agent and generated agent
+  task. Subagents must use English for task analysis, decision explanations,
+  plans, handoffs, and records, including when source material or previous
+  records are in Chinese. Carry any explicit user language exception into the
+  relevant delegation.
+- Preserve user data, historical run records, quoted source text, upstream
+  licenses, and multilingual parsing or test fixtures in their original form.
+  English-first authoring does not authorize translating immutable evidence or
+  reducing support for non-English input.
 
-## 计算执行与协议变更
+## Engineering conventions
 
-- 计算任务默认只执行用户选定的既定协议：准备输入、提交、查询、下载、校验结果，以及按既定策略重试。执行计算的授权不包含修改计算协议。
-- 未经用户明确授权，不自行调整算法、模型或权重绑定、训练/推理流程、数据划分、超参数、数值精度、环境依赖、CPU/GPU 策略或结果验收标准；不得为了通过 smoke 或绕过执行失败而改变这些约定。
-- 遇到需要变更协议的问题，保留失败记录，先报告原因、拟议变更及其影响，等待明确授权后再修改。可继续执行不依赖该变更的已授权任务，不为普通执行操作重复请求许可。
+- Use Python `>=3.11` and a `src/` layout for every publishable subproject.
+- Manage packages with the `uv` workspace. The root `Makefile` also provides
+  basic smoke checks that do not require uv.
+- Put shared contracts in the common foundation layer. The foundation must not
+  depend on domain modules, and package dependencies must remain acyclic.
+- Put domain execution logic in its owning package. Code in `packages/` must
+  not import, read, copy, or execute implementations from `apps/`, `tools/`, or
+  `analysis/`. Update callers after migration; do not retain forwarding scripts
+  or duplicate implementations.
+- Keep offline analysis, scientific plotting, and their dependency environment
+  in root-level `analysis/`. Logic that affects task decisions or result
+  validity belongs in the responsible runtime package.
+- Publish `py.typed` with each package. Static interfaces may use adjacent
+  `.pyi` files; parameters, default-value positions, and dataclass fields must
+  match the implementation and pass interface consistency checks. Stubs do not
+  replace runtime validation. Update interfaces and checks with implementation
+  changes.
+- Inject external services through protocols/adapters. Default dry-run paths
+  must not read credentials, access the network, or submit real jobs.
+- Write default run records to
+  `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>` using local dates and times.
+  Preserve explicit `run_dir` / `out_dir` values and existing recovery paths.
+- Admit only task-owned execution, verification, and recovery records to `runs/`.
+  Put offline reports in `reports/`, reusable assets and independent audits in
+  `artifacts/`, host-service state in `.tricycle/`, and disposable checks in
+  temporary directories. Follow [run record scope](docs/run-records.md) before
+  creating output; do not relocate historical evidence merely to enforce it.
+- Maintain project skills only at `.agents/skills/<skill-name>/SKILL.md`.
+  Do not create parallel skill directories, duplicate names, or forwarding
+  entry points. Update related skills when code interfaces change.
 
-## 规范与配置的归属
+## Computation and protocol changes
 
-- `AGENTS.md` 只保存全局工程和协作约定；模块职责、接口、环境与运行细节放在所属包 README 或模块文档，操作流程放在对应技能。
-- 源码 revision、资产 hash、镜像 digest 等具体绑定由配置文件或资产清单维护；运行产物记录实际绑定。`AGENTS.md` 和技能不保存这些字面值，也不把某个版本作为技能的适用条件。
-- 技能描述配置入口、字段语义、校验流程和失败处理。只变更配置值时不要求改技能；配置接口或操作流程变化时才同步说明。
-- 文档只维护当前接口、通用协议和操作指南；具体实验成绩、任务状态、图表及一次性审计记录保存在 Git 忽略的产物目录，不进入源码提交。过时文档先按原字节归档并记录原路径与哈希，再移出维护目录和 Git 跟踪；当前代码、测试和指南不依赖本机归档。
+- Execute the established protocol selected by the user: prepare inputs,
+  submit, query, download, validate results, and retry under the established
+  policy. Authorization to run computations does not authorize protocol changes.
+- Without explicit user authorization, do not change algorithms, model or
+  weight bindings, training/inference workflows, data splits, hyperparameters,
+  numerical precision, environment dependencies, CPU/GPU policy, or result
+  acceptance criteria. Do not change these to pass a smoke check or bypass an
+  execution failure.
+- If a protocol change is necessary, preserve the failure record, report its
+  cause and the proposed change and impact, and wait for explicit authorization.
+  Continue authorized work that does not depend on that change. Do not ask
+  again for permission to perform routine operations already authorized.
 
-## 常用命令
+## Ownership of guidance and configuration
+
+- Keep only global engineering and collaboration conventions in `AGENTS.md`.
+  Put module responsibilities, interfaces, environments, and runtime details
+  in package READMEs or module documentation, and procedures in the relevant skill.
+- Maintain concrete source revisions, asset hashes, and image digests in
+  configuration or asset manifests. Run artifacts record the bindings actually
+  used. Do not copy these literal values into `AGENTS.md` or skills or make a
+  particular version a condition for using a skill.
+- Skills describe configuration entry points, field semantics, validation, and
+  failure handling. Changing configuration values alone does not require a
+  skill update; changing configuration interfaces or procedures does.
+- Maintain current interfaces, general protocols, and operating guides in
+  documentation. Keep experiment scores, job status, figures, and one-off audit
+  records in Git-ignored artifact directories. Before removing obsolete
+  documentation from maintained directories and Git tracking, archive its
+  original bytes and record its original path and hash. Current code, tests,
+  and guides must not depend on a machine-local archive.
+
+## Common commands
 
 ```bash
 make check
@@ -38,6 +105,10 @@ uv run pytest
 uv run ruff check .
 ```
 
-## 新增插件的最小要求
+## Minimum requirements for a new plugin
 
-按 [插件契约](docs/plugin-contract.md) 实现类型化请求、规划接口与可注入 adapter，完成应用层注册，并提供包文档、操作技能、示例配置和 smoke test。业务规则不明确时保留 TODO 和扩展点，不猜测真实平台 API。
+Follow the [plugin contract](docs/plugin-contract.md): implement typed requests,
+a planning interface, and an injectable adapter; register the capability in the
+application; and provide package documentation, an operating skill, example
+configuration, and a smoke test. Leave TODOs and extension points where domain
+rules are unknown. Do not invent real platform APIs.

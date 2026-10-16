@@ -17,6 +17,8 @@ dist/
 
 # Agent run state and generated artifacts
 .tricycle/
+# Match the root run directory even when it is a symlink to mounted storage.
+/runs
 runs/
 outputs/
 artifacts/
@@ -49,6 +51,8 @@ tests/fixtures/rxnresid-mapped-reactant-schema/
 # Machine-local live alert settings (contain routing and filesystem details)
 /configs/codex-usage-alert.toml
 /configs/decision-model-balance-alert.draft.toml
+/configs/trajectory-alerts.toml
 # Experiment reports and one-off documentation archives never enter source commits.
 /reports/
 /docs/benchmarks/
+runs/

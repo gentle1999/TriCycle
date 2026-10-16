@@ -8,10 +8,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 from tricycle_sampling.replay.campaign import ReplayGateway, check_hashes, digest, read, save, tick
 from tricycle_sampling.replay.report import update as update_reports
 from tricycle_sampling.replay.suite import status, verified_plan
 
+from .alerts import notify_blocked
 from .inputs import input_file, verify_inputs
 
 
@@ -31,10 +34,10 @@ def validate_recovery(directory: Path, initial: dict[str, Any], record: Path) ->
     if initial['phase'] == 'complete' and initial['round'] + 1 != config['round_count']:
         raise ValueError('recovery completed before the final frozen round')
     owner_path = directory / 'recovery-supervisor.json'
-    if initial['round'] < archived['round'] or not owner_path.exists():
+    if initial['round'] < archived['round'] or not rio.exists(owner_path):
         raise ValueError('advanced recovery requires its original supervisor record')
     owner = read(owner_path)
-    if (owner.get('recovery_record') != str(record.resolve())
+    if (rio.resolve(Path(owner.get('recovery_record', ''))) != rio.resolve(record)
             or owner.get('recovery_record_sha256', digest(record)) != digest(record)):
         raise ValueError('recovery supervisor belongs to a different archived operation')
     expected = set(archived['selected_ids'])
@@ -93,7 +96,7 @@ def watch_seed(
         raise ValueError("live recovery requires an archived blocked state")
     if initial["phase"] == "blocked":
         raise ValueError("reconcile the blocked operation before starting its watcher")
-    with (directory / ".recovery-supervisor.lock").open("a") as lock:
+    with rio.open(directory / ".recovery-supervisor.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         initial = read(directory / 'state.json')
         if initial['phase'] == 'blocked':
@@ -107,7 +110,7 @@ def watch_seed(
             gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"))
         save(directory / "recovery-supervisor.json", {
             "pid": os.getpid(), "started_at": time.time(),
-            "recovery_record": str(recovery_record.resolve()),
+            "recovery_record": str(rio.resolve(recovery_record)),
             'recovery_record_sha256': digest(recovery_record),
             'supervisor_source_sha256': digest(Path(__file__)),
             "controller": "tricycle_sampling.replay.campaign.tick", "allow_submit": allow_submit,
@@ -115,6 +118,7 @@ def watch_seed(
         last_status = 0.0
         while True:
             current = tick(experiment, directory, gateway, allow_submit=allow_submit)
+            alert_pending = notify_blocked(experiment, directory, current, live=live)
             try:
                 update_reports(experiment)
             except (OSError, ValueError, KeyError) as exc:
@@ -123,7 +127,7 @@ def watch_seed(
             if terminal or time.monotonic() - last_status >= 30:
                 status(root)
                 last_status = time.monotonic()
-            if (once or terminal or (experiment / "PAUSE").exists()
+            if (once or (terminal and not alert_pending) or rio.exists(experiment / "PAUSE")
                     or (current["phase"] == "submit" and not allow_submit)):
                 return {k: current.get(k) for k in ("seed", "round", "phase", "external_id", "last_error")}
             time.sleep(2)
@@ -139,7 +143,7 @@ def main() -> None:
     parser.add_argument("--allow-submit", action="store_true")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    print(watch_seed(args.run_dir.resolve(), args.variant, args.seed,
+    print(watch_seed(rio.resolve(args.run_dir), args.variant, args.seed,
                      recovery_record=args.recovery_record, live=args.live,
                      allow_submit=args.allow_submit, once=args.once))
 

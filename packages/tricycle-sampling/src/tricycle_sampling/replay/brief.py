@@ -8,12 +8,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
+from tricycle_core import record_io as rio
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 
 
 def read(path: Path) -> dict[str, Any]:
-    return dict(json.loads(path.read_text()))
+    return dict(json.loads(rio.read_text(path)))
 
 
 
@@ -53,7 +54,7 @@ def build(directory: Path) -> dict[str, Any]:
     if set(ids) & set(history["selected_ids"]):
         raise ValueError("candidate pool overlaps selected history")
     by_pair: dict[str, list[dict[str, str]]] = defaultdict(list)
-    with (directory / "structure/structure-features.csv").open() as handle:
+    with rio.open(directory / "structure/structure-features.csv") as handle:
         for row in csv.DictReader(handle):
             by_pair[f'{row["ene_id"].zfill(12)}+{row["diene_id"].zfill(12)}'].append(row)
     if set(by_pair) != set(ids):
@@ -101,7 +102,7 @@ def build(directory: Path) -> dict[str, Any]:
     metrics = read(directory / "model-metrics.json")
     structure = read(directory / "structure/structure-analysis.json")
     validation_rows: dict[str, list[dict[str, str]]] = defaultdict(list)
-    with (directory / "validation-structure/structure-features.csv").open() as handle:
+    with rio.open(directory / "validation-structure/structure-features.csv") as handle:
         for row in csv.DictReader(handle):
             validation_rows[f'{row["ene_id"].zfill(12)}+{row["diene_id"].zfill(12)}'].append(row)
     if set(validation_rows) != set(metrics["by_pair"]):
@@ -165,7 +166,7 @@ def build(directory: Path) -> dict[str, Any]:
             previous_diagnostics = []
             for item in previous[-3:]:
                 path = directory.parent.parent / f"round-{item['round']-1:04d}" / 'decision/formula-assessment.json'
-                if path.exists():
+                if rio.exists(path):
                     assessment = read(path)
                     if assessment.get('resource_diagnostics'):
                         previous_diagnostics.append({'round': item['round'], **assessment['resource_diagnostics']})

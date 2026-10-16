@@ -208,7 +208,7 @@ def main() -> None:
         'Costs include initial sampling and count proxy TS CPU core-hours, excluding SAR training and '
         'agent overhead. Costs are rounded to 1e-6 core-hours only for curve alignment to remove '
         'floating-point summation noise; first-passage statistics use unrounded costs. '
-        'Dashed lines are empirical error floors (经验误差下限): mean endpoint GT MAE from five '
+        'Dashed lines are empirical error floors: mean endpoint GT MAE from five '
         f'Latin hypercube trajectories that acquired all {args.pool_pairs} pairs. '
         'The faint gray range is their sample SD. These references are not mathematical lower bounds '
         'or isolated proxy–GT computational errors; model error and coverage differences remain. '

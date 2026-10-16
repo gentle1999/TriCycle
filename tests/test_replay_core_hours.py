@@ -47,7 +47,7 @@ class CoreHourTests(unittest.TestCase):
     def test_objective_has_resource_context_and_cost_units_without_forcing_score(self) -> None:
         task = {'objective': core.OBJECTIVE, 'decision_protocol': {'name': core.NAME}}
         value = {'expression': 'epistemic_variance', 'cost_expression': 'estimated_core_hours',
-                 'rationale': '预算内探索。', 'author_notes': '成本可用于取舍，不固定惩罚。',
+                 'rationale': 'Explore within the budget.', 'author_notes': 'Cost informs tradeoffs without a fixed penalty.',
                  'decision_action': 'replace', 'hypothesis': 'Improve accuracy per core-hour.',
                  'expected_effect': 'Lower ground-truth MAE within the resource budget.'}
         response = replay_mae.compile_response(value, task, None)
@@ -119,9 +119,9 @@ class CoreHourTests(unittest.TestCase):
             save(root / 'suite-hash.json', {'sha256': digest(root / 'suite.json')})
             replay_mae_suite.status(root)
             report = (root / 'REPORT.md').read_text()
-            self.assertIn('核时预算', report)
-            self.assertNotIn('匹配样本量', report)
-            self.assertNotIn('样本对数', report)
+            self.assertIn('Core-hour budget', report)
+            self.assertNotIn('matched sample counts', report)
+            self.assertNotIn('Sampled pairs', report)
 
 
 class CoreHourWorkerTests(MaeWorkerTests):

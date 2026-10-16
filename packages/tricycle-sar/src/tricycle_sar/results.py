@@ -326,23 +326,69 @@ def publish(
     expected_protocol_sha256: str,
 ) -> Path:
     """Export one OOF prediction table; worker outputs remain in the source run."""
-    import os
-    import shutil
+    from tricycle_core.training_protocol import resolve_training_registry, training_method
 
-    from tricycle_core.training_protocol import file_sha256, resolve_training_registry
-
-    from .benchmark import write_rows
-    from .records import publication_files, write_method_bindings
-    from .training_inputs import validate_splits
+    from .protocol_identity import current_identity
 
     protocol_manifest, registry = resolve_training_registry(reference, expected_protocol_sha256)
-    if file_sha256(protocol_manifest) != expected_protocol_sha256:
+    if sha256(protocol_manifest) != expected_protocol_sha256:
         raise ValueError("Experiment training protocol differs")
+    identities = {}
+    for model, method_id in set((model, method_id) for (model, _), method_id in bindings.items()):
+        method = training_method(protocol_manifest, registry, model, method_id)
+        identities[method_id] = current_identity(protocol_manifest, method)
+    return _publish_observations(dataset, splits, predictions, bindings, output,
+                                 registry["benchmark_defaults"]["dataset"],
+                                 {"definition": str(protocol_manifest), "sha256": expected_protocol_sha256,
+                                  "method_identities": identities})
+
+
+def publish_recorded(run_record: Path, dataset: Path, splits: Path,
+                     predictions: Path, output: Path) -> Path:
+    """Publish immutable completed observations; never load or execute an old backend.
+
+    The original run record supplies method identities and frozen data hashes.
+    This verifies scientific results, not executable-source or retraining readiness.
+    """
+    from tricycle_core.toml import load_toml
+
+    state = load_toml(run_record)
+    if (state["schema"] != "tricycle.sar-benchmark/v1" or state["folds"] != 5
+            or state["target_unit"] != "kcal/mol"):
+        raise ValueError("Unsupported recorded benchmark")
+    if sha256(dataset) != state["dataset_sha256"] or sha256(splits) != state["splits_sha256"]:
+        raise ValueError("Recorded benchmark data or splits changed")
+    if set(state["models"]) != set(state["methods"]) or len(read(dataset)) != state["rows"]:
+        raise ValueError("Recorded benchmark coverage differs")
+    bindings = {(model, fold): state["methods"][model] for model in state["models"] for fold in range(5)}
+    for item in state.get("method_overrides", []):
+        key = item["model"], item["fold"]
+        if key not in bindings:
+            raise ValueError("Unknown recorded method override")
+        bindings[key] = item["method_id"]
+    return _publish_observations(dataset, splits, predictions, bindings, output, state,
+                                 {"definition": state["training_protocol_manifest"],
+                                  "sha256": state["training_protocol_manifest_sha256"],
+                                  "run_record_sha256": sha256(run_record),
+                                  **({"method_identities": {
+                                      state["methods"][model]: value
+                                      for model, value in state["method_identities"].items()
+                                  }} if "method_identities" in state else {}),
+                                  "validation_scope": "Recorded method provenance; scientific results independently verified"})
+
+
+def _publish_observations(dataset: Path, splits: Path, predictions: dict | Path,
+                          bindings: dict, output: Path, settings: dict, backend: dict) -> Path:
+    import shutil
+
+    from .benchmark import write_rows
+    from .records import publication_files, write_recorded_bindings
+    from .training_inputs import validate_splits
+
     output = output.resolve()
     if output.exists():
         raise FileExistsError(f"Refusing to replace results: {output}")
     data, assignments = read(dataset), read(splits)
-    settings = registry["benchmark_defaults"]["dataset"]
     validate_splits(data, assignments, settings)
     models = sorted({model for model, _ in bindings})
     expected = {(model, fold) for model in models for fold in range(5)}
@@ -410,11 +456,6 @@ def publish(
                 **{f"oof_{key}": value for key, value in metrics(rows).items()},
             }
         )
-    # Validate the method table before creating the result directory.
-    from tricycle_core.training_protocol import training_method
-
-    for (model, _), method_id in bindings.items():
-        training_method(protocol_manifest, registry, model, method_id)
     destination = output
     with publication_directory(destination) as output:
         for source, name in [(dataset, "data/dataset.csv"), (splits, "data/splits.csv")]:
@@ -424,7 +465,7 @@ def publish(
         write_rows(output / "results/oof-predictions.csv", oof)
         write_rows(output / "results/fold-metrics.csv", fold_metrics)
         write_rows(output / "results/model-summary.csv", summary)
-        write_method_bindings(output / "METHOD_BINDINGS.csv", bindings, protocol_manifest, registry)
+        write_recorded_bindings(output / "METHOD_BINDINGS.csv", bindings)
         (output / "manifest.json").write_text(
             json.dumps(
                 {
@@ -438,10 +479,7 @@ def publish(
                     "splits_sha256": sha256(splits),
                     "native_target_tolerance": 1e-5,
                     "metric_tolerance": 2e-12,
-                    "backend": {
-                        "definition": os.path.relpath(protocol_manifest, output),
-                        "sha256": expected_protocol_sha256,
-                    },
+                    "backend": backend,
                 },
                 indent=2,
             )

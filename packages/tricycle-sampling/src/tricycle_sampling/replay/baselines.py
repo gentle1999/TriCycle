@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import file_sha256 as digest
-from tricycle_core.io import write_json as save
+from tricycle_core import record_io as rio
+from tricycle_core.record_io import file_sha256 as digest
+from tricycle_core.record_io import write_json as save
 
 from tricycle_sampling import Candidate, validate_calculation_evidence
 from tricycle_sampling.experiment import EXPERIMENT_SAMPLING_SCHEMA, select_experiment_candidates
@@ -16,7 +17,7 @@ STRATEGIES = frozenset(LITERATURE_BASELINE_STRATEGIES)
 
 
 def read(path: Path) -> dict[str, Any]:
-    return dict(json.loads(path.read_text()))
+    return dict(json.loads(rio.read_text(path)))
 
 
 def make(directory: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -53,13 +54,13 @@ def make(directory: Path, config: dict[str, Any]) -> dict[str, Any]:
         "cost_expression": "report only; shared realized core-hours axis",
     }
     response = directory / "response.json"
-    if response.exists() and read(response) != definition:
+    if rio.exists(response) and read(response) != definition:
         raise ValueError("existing baseline decision differs")
     ranking = {"definition": definition, "selected_ids": list(result.selected_ids), "evidence": evidence,
                "sampling_details": result.metadata["sampling_details"]}
     ranking = json.loads(json.dumps(ranking, allow_nan=False))
     target = directory / "baseline-ranking.json"
-    if target.exists() and read(target) != ranking:
+    if rio.exists(target) and read(target) != ranking:
         raise ValueError("existing baseline ranking differs")
     save(target, ranking)
     save(response, definition)
@@ -78,7 +79,7 @@ def select(directory: Path, config: dict[str, Any], selected_before: list[str]) 
     selection={"candidate_ids":chosen,"request_sha256":digest(directory/"baseline-selection-request.json"),
                "acquisition_function_hash":digest(directory/"response.json")}
     target=directory/"selection.json"
-    if target.exists() and read(target)!=selection:
+    if rio.exists(target) and read(target)!=selection:
         raise ValueError("refusing to change completed baseline selection")
     save(directory/"accepted-response.json",{"sha256":digest(directory/"response.json")})
     save(target,selection)

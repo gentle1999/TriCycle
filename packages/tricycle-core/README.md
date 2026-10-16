@@ -1,25 +1,27 @@
 # tricycle-core
 
-`tricycle-core` 是 TriCycle Agent 的公共契约层和运行时基础设施。它只依赖 Python
-标准库，不实现具体的化学、模型或平台业务，也不反向依赖任何插件。
+`tricycle-core` provides TriCycle Agent's shared contracts and runtime infrastructure. It depends only on the Python standard library, contains no chemistry, model, or platform business logic, and never depends on plugins.
 
-## 职责
+## Responsibilities
 
-这个包为所有组件提供以下稳定边界：
+The package provides these stable boundaries for all components:
 
-| 模块 | 作用 |
+| Module | Purpose |
 | --- | --- |
-| `models` | `Artifact`、`TaskPlan`、`TaskResult`、`ExecutionContext`、`ReactionRecord`、`BohrJobSpec` 等跨组件数据模型 |
-| `protocols` | `BohrGateway`、`ReactionRepository`、`ArtifactStore`、`ReactionOptAdapter` 等外部依赖接口 |
-| `capabilities` | `CapabilityManifest`、`CapabilityBinding`、`CapabilityCatalog`，用于声明、校验和分发能力 |
-| `plugin` / `registry` | `Component` protocol、`PluginBase` 和 `PluginRegistry` |
-| `run_state` / `run_paths` | 以 `run.toml` 保存可审计、可恢复的运行状态 |
-| `trace` | 以 hash-chain JSONL 保存 append-only 执行事件，并提供校验和大 payload 引用 |
-| `toml` / `env` | 受限 TOML 读写、原子文件更新和 `.env` 查找/加载辅助函数 |
-| `io` / `metrics` / `training_protocol` | 公共文件操作、回归指标、训练绑定读取与校验 |
-| `errors` | 输入错误、集成未配置、运行状态和 artifact 错误 |
+| `models` | Cross-component models such as `Artifact`, `TaskPlan`, `TaskResult`, `ExecutionContext`, `ReactionRecord`, and `BohrJobSpec` |
+| `protocols` | External dependency interfaces, including `BohrGateway`, `ReactionRepository`, `ArtifactStore`, and `ReactionOptAdapter` |
+| `capabilities` | `CapabilityManifest`, `CapabilityBinding`, and `CapabilityCatalog` for capability declaration, validation, and dispatch |
+| `plugin` / `registry` | The `Component` protocol, `PluginBase`, and `PluginRegistry` |
+| `run_state` / `run_paths` | Auditable, resumable run state stored in `run.toml` |
+| `trace` | Append-only execution events in hash-chain JSONL, verification, and large-payload references |
+| `toml` / `env` | Restricted TOML I/O, atomic file updates, and `.env` discovery/loading helpers |
+| `io` / `metrics` / `training_protocol` | Shared file operations, regression metrics, and training binding loading/validation |
+| `errors` | Input, integration configuration, run-state, and artifact errors |
+| `transfer` | Shared checks for installed environments/caches, bounded result selectors, and validated download publication |
+| `record_ledger` / `record_io` | Transactional live namespaces, compressed contents, audit chains, and explicit logical I/O; no domain dependencies |
+| `mail` | Injectable TLS SMTP sender with lazy environment configuration; used by trajectory and balance alerts |
 
-## 核心对象
+## Core objects
 
 ```mermaid
 flowchart LR
@@ -33,56 +35,44 @@ flowchart LR
     A --> E["Bohr / database / artifact store"]
 ```
 
-- `PluginManifest` 描述组件身份、版本、类型、能力和依赖。
-- `TaskPlan` 是 JSON-safe 的执行计划，记录 task ID、输入 artifact、参数和元数据。
-- `TaskResult` 记录 `planned`、`submitted`、`running`、`succeeded`、`failed` 等结果状态以及输出 artifact。
-- `ExecutionContext` 携带 `run_id`、工作目录、`dry_run`、运行元数据和可注入的 `TraceSink`。
-- `Artifact` 用统一格式表示文件、目录、checkpoint、结构数据和远程任务结果。
+- `PluginManifest` describes component identity, version, type, capabilities, and dependencies.
+- `TaskPlan` is a JSON-safe execution plan containing a task ID, input artifacts, parameters, and metadata.
+- `TaskResult` records result states such as `planned`, `submitted`, `running`, `succeeded`, and `failed`, together with output artifacts.
+- `ExecutionContext` carries `run_id`, the working directory, `dry_run`, run metadata, and an injectable `TraceSink`.
+- `Artifact` represents files, directories, checkpoints, structured data, and remote job results in a common format.
 
-`TraceStore` 将事件写入 `<run_dir>/trace/events.jsonl`，每一行包含序号、前一事件 hash 和自身
-hash，并在追加时使用进程间文件锁。`verify()` 可在审计或恢复前检查序号连续性、run ID 和
-整条 hash 链；事件 payload 只允许 JSON-safe 值，较大的内容可通过 `write_payload()` 保存为
-带 SHA-256 的引用。
+`TraceStore` writes events to `<run_dir>/trace/events.jsonl`. Each line contains a sequence number, the previous event's hash, and its own hash; appends use an interprocess file lock. Before audit or recovery, `verify()` checks sequence continuity, run ID, and the full hash chain. Event payloads must be JSON-safe. `write_payload()` stores large payloads as references with SHA-256 hashes.
 
-## Plugin 与 capability
+## Plugins and capabilities
 
-插件实现 `PluginBase` 的 `manifest` 和 `plan`。`CapabilityCatalog` 另外维护能力 ID 到
-组件/操作的显式绑定，并在分发前校验输入类型、副作用级别、认证要求、dry-run 支持和依赖。
-组件不会因为被放在 `packages/` 下就自动获得执行权限；应用层必须在 bootstrap 中显式注册。
+Plugins implement `PluginBase.manifest` and `PluginBase.plan`. `CapabilityCatalog` also maintains explicit bindings from capability IDs to components and operations. Before dispatch, it validates input types, side-effect levels, authentication requirements, dry-run support, and dependencies. Placing a component under `packages/` does not authorize execution: application bootstrap must register it explicitly.
 
-`PluginBase.execute()` 的默认行为只处理 dry-run 计划结果。非 dry-run 执行如果没有对应的
-adapter，会抛出 `IntegrationNotConfiguredError`，因此 core 不会偷偷创建网络客户端或读取
-平台凭据。
+By default, `PluginBase.execute()` only handles dry-run plan results. Non-dry-run execution without the required adapter raises `IntegrationNotConfiguredError`; core does not implicitly create network clients or read platform credentials.
 
-## 外部服务 protocol
+## External service protocols
 
-core 只定义接口，不提供真实平台实现：
+Core defines interfaces without providing production platform implementations:
 
-- `BohrGateway`：提交、查询和下载单个 Bohr job；
-- `ReactionRepository`：写入反应记录；
-- `ReactionOptAdapter`：执行 ReactionOpt 配置或 profile；
-- `CandidateScorer`：对候选进行评分；
-- `ArtifactStore`：保存和读取 artifact。
+- `BohrGateway`: submit, query, and download a single Bohr job.
+- `ReactionRepository`: write reaction records.
+- `ReactionOptAdapter`: execute a ReactionOpt configuration or profile.
+- `CandidateScorer`: score candidates.
+- `ArtifactStore`: save and retrieve artifacts.
 
-生产 adapter 在应用组合层注入，测试和 dry-run 可以使用内存实现。这样模型组件、反应数据库
-和 ReactionOpt 不需要知道具体 HTTP、CLI、凭据或云平台实现。
+Production adapters are injected at the application composition layer. Tests and dry-runs can use in-memory implementations. Model components, the reaction database, and ReactionOpt therefore do not need knowledge of specific HTTP, CLI, credential, or cloud implementations.
 
-## 运行状态
+## Run state
 
-`RunStore` 将状态原子写入 `<run_dir>/run.toml`，当前 schema 为 `tricycle.run/v1`。状态中
-可以保存：
+`RunStore` atomically writes state to `<run_dir>/run.toml` using the `tricycle.run/v1` schema. State can include:
 
-- 运行和执行阶段；
-- `resume.next_action` 以及外部 job ID；
-- 输入/输出 artifact 和指纹；
-- 最终结果、错误和 adapter 元数据。
+- Run and execution stages.
+- `resume.next_action` and external job IDs.
+- Input/output artifacts and fingerprints.
+- Final results, errors, and adapter metadata.
 
-`RunStore` 支持创建、打开、读取、写入和更新，适合 `inspect`、恢复和审计。写入使用临时
-文件替换，避免中途失败留下半份状态文件。
-未指定运行目录时，`timestamped_run_directory` 按本机时间生成
-`runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`。
+`RunStore` supports creation, opening, reading, writing, and updating for inspection, recovery, and auditing. Writes replace a temporary file atomically, preventing partially written state after interruption. If no run directory is specified, `timestamped_run_directory` uses local time to generate `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`.
 
-## 使用示例
+## Example
 
 ```python
 from pathlib import Path
@@ -99,46 +89,50 @@ plan = TaskPlan(
 )
 ```
 
-实际插件应直接使用明确的 dataclass request，而不是把业务规则塞进 core 的通用 mapping。
-跨插件共享的字段才放入本包；具体领域模型应留在对应 package 中。
+Plugins should use explicit dataclass requests rather than place business rules in core's generic mappings. Only fields shared across plugins belong here; domain models belong in their respective packages.
 
-## 验证
+## Validation
 
-core 的契约测试位于 [`tests/`](tests/)；workspace 级跨组件测试仍位于根目录 `tests/`：
+Core contract tests are in [`tests/`](tests/). Workspace-level cross-component tests remain in the repository's root `tests/` directory:
 
 ```bash
 uv run --frozen --all-packages pytest packages/tricycle-core/tests
 ```
 
-开发约束见 [`docs/plugin-contract.md`](../../docs/plugin-contract.md)。
+See [`docs/plugin-contract.md`](../../docs/plugin-contract.md) for development requirements.
 
-## 共享不可变资产
+## Shared immutable assets
 
-`asset_store` 将文件按 SHA-256 保存到调用方指定的项目级存储：`blobs/` 保存唯一字节，
-`manifests/` 记录树的路径、hash、大小和执行位，`trees/` 提供只读目录视图。同内容文件跨树
-共享 inode；发布前独立复制可变来源，修改 checkout 不会改变已冻结资产。读取时校验 hash，
-缺失或漂移直接失败，不回填当前源码、不自动刷新历史绑定。
+`asset_store` stores files by SHA-256 in a caller-specified project store: `blobs/` holds unique bytes, `manifests/` records tree paths, hashes, sizes, and executable bits, and `trees/` exposes read-only directory views. Identical files share inodes across trees. Mutable sources are independently copied before publication, so checkout edits cannot change frozen assets. Reads verify hashes and fail on missing or changed assets; they never substitute current source or automatically refresh historical bindings.
 
-`put_file` / `put_tree` 返回可序列化引用；`externalize_tree` 用于结果目录的共享视图链接；新输入使用下述引用记录接口。
-`materialize_input` 将 `tricycle.asset-input/v1` 或 v2 的树引用、文件引用和可选 overlay 展开成独立的
-临时上传目录，拒绝越界与路径冲突。引用包含存储根路径，移动资产库时须显式迁移引用；
-不能只复制 run 后删除共享存储。当前无自动垃圾回收，任何仍被 run 引用的对象都应保留。
+`put_file` / `put_tree` return serializable references. `externalize_tree` creates shared-view links for result directories; new inputs use the reference-record interfaces below. `materialize_input` expands `tricycle.asset-input/v1` or v2 tree references, file references, and optional overlays into an independent temporary upload directory, rejecting path escapes and conflicts. References contain the store root, so moving the store requires explicit reference migration; copying a run alone does not permit deleting its shared store. There is no automatic garbage collection. Retain every object still referenced by a run.
 
-资产树清单还绑定目录结构，包括空目录；新写入采用 `tricycle.asset-tree/v2`，
-既有 v1 运行引用仍可按原哈希读取。`materialize_directory` 将已核验的目录视图展开为
-独立可写执行副本；引用核验由调用方在展开前完成。
+Asset tree manifests also bind directory structure, including empty directories. New manifests use `tricycle.asset-tree/v2`; existing v1 run references remain readable with their original hashes. `materialize_directory` expands a verified directory view into an independent writable execution copy. Callers verify references before materialization.
 
+New asset writes and transfer boundaries reject installed environments and caches,
+including `.venv`, `venv`, `pyvenv.cfg` in renamed environments, `conda-meta`,
+`site-packages`, `.cache`, `.pip-cache`, and Python/tool caches. Source, dependency
+declarations, launch scripts, data, and model checkpoints remain valid assets.
+ZIP and tar-family member names are checked without rewriting the archives.
+Existing asset references remain readable; validation does not migrate or delete
+historical objects. New tree publication retains its existing bytecode omission
+but rejects other contaminated input instead of silently changing its dependencies.
 
-## 运行记录与输入存储边界
+`transfer.validate_result_selector` requires named relative output directories or
+file patterns with explicit extensions, such as `results/`, `worker.log`, or
+`*.xyz`. Whole-workspace, recursive, wildcard-directory, and environment selectors
+are rejected. `publish_download` checks a disposable download before publishing
+files; identical existing files are reused and conflicting evidence is rejected.
 
-新 run 只长期保存请求/协议绑定、输入引用与哈希、执行状态、日志和结果。输入数据、
-划分、权重及 worker 交付树保存到共享资产库，不在 run 下保留输入实体或输入软链接。
-硬链接只用于资产库内部的本地去重；不可用时复制，不是调用方接口的要求。
+## Run records and input storage
 
-`freeze_inputs(directory, paths, store)` 先发布并校验 `input-assets.json`，再移除对应输入实体。
-`tricycle.asset-input/v2` 的 `trees` 按交付相对路径映射树引用，引用中的 `path` 选择树内目录；
-`files` 按交付相对路径映射文件引用，并记录执行位。v1 的树列表仍按根目录合并读取。
-`resolve_input` 供本地分析/准备按逻辑路径读取并校验输入；
-`materialize_input(manifest, None, destination)` 在执行/上传前展开独立可写副本，保留空目录及执行位。
-调用方负责临时目录生命周期。共享资产缺失或损坏时拒绝执行，不从当前源码或其他数据回填。
-历史 run 不自动改写或清理；资产清理必须考虑所有仍被引用的对象。
+New runs retain requests/protocol bindings, input references and hashes, execution state, logs, and results. Apply [run record scope](../../docs/run-records.md): every retained file must belong to an identifiable task and support execution, verification, or recovery. The timestamp helper only formats a path; it does not authorize storing arbitrary outputs under `runs/`. Independent audits, offline figures/reports, host-service state, and disposable checks use their separate roots. Input data, splits, weights, and worker delivery trees reside in the shared asset store; runs retain neither input entities nor input symlinks. Hard links are only an internal local deduplication mechanism; copying is the fallback, and callers do not need to support hard links.
+
+`freeze_inputs(directory, paths, store)` publishes and verifies `input-assets.json` before removing the corresponding input entities. In `tricycle.asset-input/v2`, `trees` maps delivery-relative paths to tree references, whose `path` selects a directory within the tree; `files` maps delivery-relative paths to file references and records executable bits. The v1 tree list is still read by merging trees at the root.
+
+`resolve_input` reads and verifies inputs by logical path for local analysis/preparation. Before execution/upload, `materialize_input(manifest, None, destination)` creates an independent writable copy, preserving empty directories and executable bits. Callers manage temporary directory lifetimes. Missing or corrupted shared assets prevent execution; current source or other data must not fill the gaps. Historical runs are not automatically rewritten or cleaned up, and asset cleanup must account for every referenced object.
+
+Live replay records use the shared transactional record interfaces described in
+[live replay records](../../docs/compact-replay-records.md). Database transactions
+never span external RPCs. Physical file I/O remains available for worker delivery
+and immutable external assets; callers explicitly choose logical record I/O.

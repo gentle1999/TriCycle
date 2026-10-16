@@ -1,35 +1,32 @@
 ---
 name: commit-log
-description: 为 TriCycle 编写或审阅 Git 提交说明时，使用英文 Conventional Commits 标题和正文；用户明确要求提交时，也用于整理并提交完整、准确的变更记录。
+description: "Write or review English Conventional Commits titles and bodies for TriCycle; prepare and create accurate commits when the user explicitly requests a commit."
 ---
 
-# TriCycle 提交日志
+# TriCycle Commit Messages
 
-为提交写出能说明变更意图、主要内容和实际验证结果的记录。以当前工作树和 `git log` 中的项目提交为依据，不从文件名或请求猜测未发生的行为。
+Describe the change's purpose, main behavior, and observed validation. Use the actual working tree and project `git log`; do not infer unimplemented behavior from filenames or requests.
 
-## 格式
+## Format
 
-标题采用 Conventional Commits：
+Use Conventional Commits:
 
 ```text
-<type>(<scope>): <简洁的英文动作描述>
+<type>(<scope>): <concise English action description>
 ```
 
-- 使用小写 type。按目的选择 `feat`、`fix`、`refactor`、`docs`、`test`、`build`、`chore` 或 `perf`；跨多个模块的变更可省略 scope。
-- scope 使用项目熟悉的模块名，例如 `sampling`、`reaction-db`、`bohr`、`exploration` 或 `reactionopt`。保持标题简洁，不加句号。
-- 标题和正文都使用英文，包括摘要、项目符号和验证记录。
+Choose lowercase `feat`, `fix`, `refactor`, `docs`, `test`, `build`, `chore`, or `perf` according to purpose. Use a familiar module scope such as `sampling`, `reaction-db`, `bohr`, `exploration`, or `reactionopt`; omit scope for cross-module changes when appropriate. Keep the title concise and omit a final period. Titles and bodies, including bullets and validation records, are in English.
 
-有实质内容的提交在标题后留空行，再写正文：
+For substantive commits, leave a blank line after the title and:
 
-1. 开头概述解决的问题、目的或新增能力，不重复标题。
-2. 用短段落或项目符号记录重要行为、相关工作流/接口和必须保留的约束。按逻辑归纳，不必逐个罗列文件。
-3. 最后写实际执行过的验证命令和结果，例如 `Validation: make check; uv run pytest (80 passed).`。没有运行验证时省略该项；不要推测或虚报结果。
+1. Explain the problem, purpose, or capability without repeating the title.
+2. Summarize important behavior, workflows/interfaces, and preserved constraints in short paragraphs or bullets grouped by purpose, not a file inventory.
+3. Record only commands actually run and results observed, for example `Validation: make check; uv run pytest (80 passed).` Omit validation if none ran; never invent results.
 
-小型且一眼可懂的修复可只用标题。除非用户要求，不添加签名、署名或其他 trailer。
+A small self-evident fix may need only a title. Do not add signatures, attribution, or other trailers unless requested.
 
-## 准备提交
+## Preparing a commit
 
-- 用户请求编写提交说明但未要求提交时，只提供建议的完整标题和正文。
-- 用户明确要求创建提交时，检查 `git status`、暂存区 diff、未暂存 diff 和相关未跟踪文件，确定真实变更范围后再暂存。不要纳入无法识别的临时产物、凭据或与本次变更无关的文件。
-- 提交前复查暂存区 diff，并确保标题与正文覆盖其中的主要变更。验证记录只能写入本轮实际执行的命令及观察到的结果。
-- 如果一个提交包含多个紧密相关的改动，在正文中按功能归纳；如果发现彼此无关的改动且无法判定是否属于用户要求的提交，先说明范围并询问。
+If asked only for a message, provide the complete proposed title/body without committing. When the user explicitly requests a commit, inspect `git status`, staged/unstaged diffs, and relevant untracked files before staging the actual scope. Exclude unexplained temporary outputs, credentials, and unrelated files.
+
+Review the staged diff before committing and ensure the message covers its main changes. Validation claims must reflect this turn's actual commands and observations. Group closely related work by feature in the body. If unrelated changes cannot be confidently assigned to the requested commit, describe the scope and ask.

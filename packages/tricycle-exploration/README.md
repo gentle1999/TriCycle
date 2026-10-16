@@ -1,36 +1,31 @@
 # tricycle-exploration
 
-`tricycle-exploration` 为主动学习/反应空间探索提供一轮可复现的本地 provenance 记录。它不
-提交 Bohr，也不自动启动 RitS；RitS 训练只由明确的 `training_policy` 决定。
+`tricycle-exploration` records reproducible local provenance for one round of active learning or reaction-space exploration. It does not submit Bohr jobs or automatically launch RitS; an explicit `training_policy` alone determines RitS training.
 
-## 一轮记录
+## Round records
 
-`ExplorationPlugin.execute_round()` 对完整候选池执行已注册的 sampling strategy，并保存：
+`ExplorationPlugin.execute_round()` runs a registered sampling strategy over the complete candidate pool and saves:
 
-- 版本化的输入空间和空间 hash；
-- 全量候选池、模型分数、模型快照、排除原因、排名和稳定 tie-break；
-- `fixed`/`explicit` 范围策略及其输入指标；
-- RitS 的 `train`、`finetune` 或 `skip` 决定、阈值和理由；
-- 输入快照到下一轮快照的 `snapshot-transition.toml`。
+- The versioned input space and its hash.
+- The complete candidate pool, model scores, model snapshot, exclusions, rankings, and stable tie-breaks.
+- The `fixed`/`explicit` range policy and its input metrics.
+- The RitS `train`, `finetune`, or `skip` decision, thresholds, and rationale.
+- `snapshot-transition.toml`, linking the input snapshot to the next round's snapshot.
 
-训练被跳过时，下一轮快照严格等于输入快照。训练被安排但 checkpoint 尚未产出时，模块根据
-输入快照、`round_decision_hash`、数据集 hash 和完整 `training_spec` 生成确定性的 planned
-snapshot 与 replay key；训练产出后可传入 `next_model_snapshot` 绑定实际 checkpoint，而不改变
-replay key。训练配方至少需要 `seed`、`dataset_manifest_hash`、`code_revision` 和
-`container_digest`。QM 计算本身不在本包重做，候选输入和数据集 hash 已作为边界证据保存。
+When training is skipped, the next snapshot exactly equals the input snapshot. When training is scheduled but no checkpoint exists yet, the module derives a deterministic planned snapshot and replay key from the input snapshot, `round_decision_hash`, dataset hash, and complete `training_spec`. Once training finishes, `next_model_snapshot` can bind the actual checkpoint without changing the replay key. The training recipe requires at least `seed`, `dataset_manifest_hash`, `code_revision`, and `container_digest`. The package does not repeat QM computations; candidate inputs and dataset hashes serve as boundary evidence.
 
-## 请求契约
+## Request contract
 
-请求只接受规范字段：`exploration_id`、`output_dir`、`parent_round_id` 和 `next_model_snapshot`。候选使用 `candidate_id`；空间额外属性显式放入 `space.definition`；模型快照使用 `snapshot_id`、`checkpoint_hash` 和 `source_run_id`。
+Requests use the canonical fields `exploration_id`, `output_dir`, `parent_round_id`, and `next_model_snapshot`. Candidates use `candidate_id`; additional space properties belong explicitly in `space.definition`; model snapshots use `snapshot_id`, `checkpoint_hash`, and `source_run_id`.
 
-历史选择放在 `history.seen_candidate_ids` / `history.exclude_seen`；训练上下文放在 `training_context`（`last_training_round`、`new_label_count`、`dataset_before_hash`、`dataset_after_hash`、`previous_checkpoint`、`action`），训练配方单独放在顶层 `training_spec`。`to_dict()` 输出同一请求结构，可再次解析；`round_id` 是对象的派生属性。未知字段和重复的旧入口直接报错。
+Selection history belongs in `history.seen_candidate_ids` / `history.exclude_seen`. Training context belongs in `training_context` (`last_training_round`, `new_label_count`, `dataset_before_hash`, `dataset_after_hash`, `previous_checkpoint`, and `action`), while the training recipe belongs separately in top-level `training_spec`. `to_dict()` emits the same reparsable request structure; `round_id` is a derived object property. Unknown fields and duplicate legacy entry points are errors.
 
-## 运行产物
+## Run artifacts
 
 ```text
 <run>/
-├── trace/events.jsonl                  # 全运行 hash-chain 事件账本
-├── request.toml                        # 原始请求
+├── trace/events.jsonl                  # Run-wide hash-chain event ledger
+├── request.toml                        # Original request
 └── rounds/0001/
     ├── space.toml
     ├── candidate-pool.tsv
@@ -44,12 +39,9 @@ replay key。训练配方至少需要 `seed`、`dataset_manifest_hash`、`code_r
     └── artifacts/manifest.toml
 ```
 
-`resume = true` 只会复用 request hash 相同且产物完整的轮次，不覆盖已有文件。
-CLI 运行状态中的 `resume.next_action` 保留为 `exploration.round`，用于安全复用/校验本轮；如果
-gate 决定训练，`resume.follow_up_action` 会明确写成 `rits.train` 或 `rits.finetune`，实际执行
-仍需提供独立的 RitS 请求。
+`resume = true` reuses only a round with the same request hash and complete artifacts; it never overwrites existing files. CLI state keeps `resume.next_action` as `exploration.round` for safe round reuse/verification. If the gate requests training, `resume.follow_up_action` explicitly records `rits.train` or `rits.finetune`; execution still requires a separate RitS request.
 
-## 示例
+## Example
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
@@ -57,5 +49,4 @@ uv run --package tricycle-agent tricycle-agent run \
   --run-id exploration-round-001
 ```
 
-策略和训练门控的纯函数入口是 `decide_range()`、`decide_training()` 和
-`resolve_snapshot_transition()`，便于在不写文件的测试中验证下一快照定义。
+The pure functions `decide_range()`, `decide_training()`, and `resolve_snapshot_transition()` allow tests to verify next-snapshot semantics without writing files.

@@ -3,20 +3,18 @@ name: bohr-batch-terminate
 description: "Terminate selected incomplete Bohr batch workers only after explicit destructive-action confirmation."
 ---
 
-# 终止 Bohr 批量任务
+# Terminate Bohr Batch Workers
 
-输入是已有批量运行目录和明确的 worker 选择；输出为终止报告及更新后的 `run.toml`。这是唯一的
-destructive 批量能力，不适用于普通状态查询或结果下载。
+Input is an existing batch run and an explicit worker selection. Outputs are a termination report and updated `run.toml`. This is the destructive batch capability; use other capabilities for status and downloads.
 
-这是 destructive 能力。先查询状态并明确列出要终止的 worker；默认 dry-run 只生成计划。真实执行必须同时满足：
+Query status and list the selected workers first. Dry-run only plans. Live execution requires all of:
 
-- 使用 `--live`；
-- 使用 `--confirm`；
-- 远程凭据通过环境变量或项目 `.env` 注入。
+- `--live`;
+- `--confirm`;
+- remote credentials injected through the environment or project `.env`.
 
-终止结果和公开 ID 写入 `run.toml`/报告。没有明确确认时不要调用该能力。
+Record termination results and public IDs in `run.toml`/reports. Do not execute without explicit confirmation.
 
-## 失败与恢复
+## Failure recovery
 
-终止失败时运行状态可能保留同一下一动作，但不会在无确认时自动执行。先检查报告和远程状态，
-复核目标 worker 与已有终止授权仍一致后，再发起一次同时带 `--live --confirm` 的调用；目标扩大时需要新的授权，不机械重复询问已授权的同一操作。
+State may retain the same next action after failure, but must not execute automatically without confirmation. Inspect the report and remote state, verify the target workers still match the existing authorization, then retry with both `--live --confirm`. An expanded target set needs new authorization; do not repeatedly ask about the same already-authorized operation.

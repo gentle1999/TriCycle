@@ -13,6 +13,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from tricycle_core import record_io as rio
+
 from tricycle_sampling import AgentAuthoredAcquisitionSamplingStrategy, Candidate
 from tricycle_sampling.replay import mae as replay_mae
 from tricycle_sampling.replay.campaign import (
@@ -70,12 +72,12 @@ def diagnostic_review(directory: Path, response: dict[str, Any] | None = None) -
                               for c in selected[:6]],
         'limits': 'No labels or generalization outcome for the proposed batch are available. Previous-rule overlap is determined solely by ID ties.',
         'proposal_sha256': digest(directory / 'proposal-response.json' if
-                                  (directory / 'proposal-response.json').exists() else directory / 'response.json'),
+                                  rio.exists(directory / 'proposal-response.json') else directory / 'response.json'),
     }
 
 
 def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
-    directory = directory.resolve()
+    directory = rio.resolve(directory)
     seed = directory.parents[1]
     experiment = seed.parent
     root = experiment.parent
@@ -85,7 +87,7 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
     state = read(seed / 'state.json')
     archive = directory.parent / 'review-recovery/attempt-0001'
     repair_path = archive / 'repair.json'
-    repair = read(repair_path) if repair_path.exists() else None
+    repair = read(repair_path) if rio.exists(repair_path) else None
     if (state['phase'] != 'blocked' or state.get('blocked_phase') != 'agent'
             or directory.parent != seed / f"round-{state['round']:04d}"):
         raise ValueError('recovery requires the current blocked agent round')
@@ -105,7 +107,7 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
         return {'proposal_unique_scores': assessment['unique_scores'],
                 'previous_unique_scores': assessment['previous_rule_diagnostic']['unique_scores'],
                 'status': 'read-only diagnosis'}
-    with (seed / '.lock').open('a') as lock:
+    with rio.open(seed / '.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if read(seed / 'state.json') != state:
             raise ValueError('trajectory changed during diagnosis')
@@ -117,12 +119,12 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
         worker = read(directory.parent / 'result/worker-report.json')
         check_hashes(directory.parent / 'result', worker['outputs'])
         validate(directory, proposal)
-        if (directory / 'review-approved.json').exists() and repair is None:
+        if rio.exists(directory / 'review-approved.json') and repair is None:
             raise ValueError('a review was already approved; inspect it without creating another pass')
         if repair is None:
-            if any(directory.glob('review-agent*')) or (directory / 'review-response.json').exists():
+            if any(rio.glob(directory, 'review-agent*')) or rio.exists(directory / 'review-response.json'):
                 raise ValueError('an unowned review invocation already exists; reconcile it first')
-            archive.mkdir(parents=True, exist_ok=False)
+            rio.mkdir(archive, parents=True, exist_ok=False)
             save(archive / 'blocked-state.json', state)
             save(archive / 'proposal-response.json', proposal)
             save(archive / 'repair.json', {'proposal_sha256': assessment['proposal_sha256'],
@@ -133,7 +135,7 @@ def recover(directory: Path, *, live: bool = False) -> dict[str, Any]:
              'assessment': assessment})
         elif digest(directory / 'response.json') not in (
                 repair['proposal_sha256'],
-                digest(directory / 'review-response.json') if (directory / 'review-response.json').exists() else ''):
+                digest(directory / 'review-response.json') if rio.exists(directory / 'review-response.json') else ''):
             raise ValueError('active response changed outside the archived review')
         save(directory / 'proposal-review.json', assessment)
         save(directory / 'proposal-response.json', proposal)

@@ -3,25 +3,28 @@ name: bohr-job-download
 description: "Download completed Bohr artifacts into a run directory through the configured adapter."
 ---
 
-# 下载 Bohr 结果
+# Download Bohr Results
 
-## 适用场景
+Use after status confirms completion or when the user explicitly requests a download.
 
-仅在状态确认任务完成或用户明确要求下载时使用。
+## Execution
 
-## 执行
-
-单任务 TOML 至少包含公开 `external_id`（新版 CLI 的 `BOHR_ID`）和 `destination`：
+A single-job TOML requires public `external_id` (the current CLI's `BOHR_ID`) and `destination`:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   bohr.job.download request.toml --run-id <id> --live
 ```
 
-已有 run 先 inspect，仅在 `resume.next_action` 为所需下载能力时使用 `resume --run-dir <目录> --live`；批量下载和报告位置见 [bohr-batch-download](../bohr-batch-download/SKILL.md)。单独查询/下载可创建新的操作记录，不对已有 `run.toml` 再执行 `run`。下载是远程读取加本地写入，
-必须检查目标目录、保留下载报告，并且不把凭据写入 `run.toml`。
+Inspect existing runs first; use `resume --run-dir <directory> --live` only when `resume.next_action` is the intended download capability. See [bohr-batch-download](../bohr-batch-download/SKILL.md) for batch downloads and report paths. Independent queries/downloads may create new operation records; do not call `run` again on an existing `run.toml` directory. Downloading reads remotely and writes locally: check the destination, preserve the download report, and keep credentials out of `run.toml`.
 
-## 失败与恢复
+## Failure recovery
 
-下载失败时保留目标目录和状态文件，修复凭据、网络、job ID（应为 `bohrId`）或目标路径后使用 `resume --live`；
-重复下载前确认 adapter 的覆盖和幂等策略，不要删除已有结果。
+Downloads are validated in disposable storage before publication. Environment/cache
+paths, including ZIP/tar members, reject publication without changing existing
+results. An old remote package may still be transferred before this check because
+the CLI has no member-level download filter. Preserve the error and remote job ID;
+request a narrower remote result package instead of repeatedly downloading it or
+rewriting an existing archive. Identical local files are reused; conflicts fail.
+
+Preserve the destination and state on failure. Repair credentials, network access, job ID (which must be `bohrId`), or destination before `resume --live`. Check adapter overwrite/idempotency behavior before repeating a download; do not delete existing results.

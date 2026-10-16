@@ -31,6 +31,8 @@ class BohrCliGatewayTests(unittest.TestCase):
             self.assertNotIn("BOHR_ACCESS_KEY", os.environ)
 
     def test_submit_uses_public_job_id_and_current_output_flag(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         gateway = BohrCliGateway(
             BohrCliConfig(retry_delay=0, retry_jitter=0),
             environ={"BOHR_ACCESS_KEY": "test-key"},
@@ -43,7 +45,8 @@ class BohrCliGatewayTests(unittest.TestCase):
             project_id="123",
             machine_type="c2_m4_cpu",
             parameters={
-                "input_directory": "./worker-001",
+                "input_directory": temporary.name,
+                "backward_files": ["worker.log", "results/"],
                 "command_string": "bash run_worker.sh",
                 "log_file": "worker.log",
                 "job_group_id": "456",
@@ -103,7 +106,9 @@ class BohrCliGatewayTests(unittest.TestCase):
 
         calls = [call.args[0] for call in run_once.call_args_list]
         self.assertEqual(calls[0], ["job", "describe", "--id", "22", "--output", "json"])
-        self.assertEqual(calls[1], ["job", "download", "22", "--out", str(destination)])
+        self.assertEqual(calls[1][:4], ["job", "download", "22", "--out"])
+        self.assertNotEqual(calls[1][4], str(destination))
+        self.assertFalse(Path(calls[1][4]).exists())
         self.assertEqual(calls[2], ["job", "log", "22", "--out", str(destination / "logs")])
 
     def test_status_prefers_current_cli_phase_over_numeric_status(self) -> None:
@@ -179,6 +184,8 @@ class BohrCliGatewayTests(unittest.TestCase):
             )
 
     def test_model_job_uploads_the_declared_input_directory(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         gateway = BohrCliGateway(
             BohrCliConfig(retry_delay=0, retry_jitter=0),
             environ={},
@@ -190,7 +197,7 @@ class BohrCliGatewayTests(unittest.TestCase):
             command=("bash", "run.sh"),
             project_id="123",
             machine_type="gpu-machine",
-            parameters={"input_directory": "/tmp/rits-job"},
+            parameters={"input_directory": temporary.name, "backward_files": ["results/"]},
         )
         result = SimpleNamespace(
             returncode=0,
@@ -201,7 +208,7 @@ class BohrCliGatewayTests(unittest.TestCase):
             self.assertEqual(gateway.submit(job), "22")
 
         args = run_once.call_args.args[0]
-        self.assertEqual(args[args.index("--input_directory") + 1], "/tmp/rits-job")
+        self.assertEqual(args[args.index("--input_directory") + 1], temporary.name)
         self.assertEqual(args[args.index("--image_address") + 1], job.image)
 
     def test_submit_uses_cli_config_for_declared_output_artifacts(self) -> None:
@@ -297,7 +304,8 @@ def test_shared_inputs_are_expanded_only_for_upload_and_cleaned(tmp_path: Path) 
     write_json(manifest, {"schema": "tricycle.asset-input/v1", "trees": [ref], "files": {}})
     job = BohrJobSpec(name="compact", operation="test", image="test", command=("true",),
                       project_id="1", machine_type="test", parameters={
-                          "input_directory": str(overlay), "input_assets_manifest": str(manifest)})
+                          "input_directory": str(overlay), "input_assets_manifest": str(manifest),
+                          "backward_files": ["results/"]})
     gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"), environ={})
     paths = []
 
@@ -331,7 +339,7 @@ def test_shared_directory_views_upload_as_independent_writable_files(tmp_path: P
     ref = externalize_tree(common, tmp_path / "store")
     job = BohrJobSpec(name="shared", operation="test", image="test", command=("true",),
                      project_id="1", machine_type="test",
-                     parameters={"input_directory": str(root)})
+                     parameters={"input_directory": str(root), "backward_files": ["results/"]})
     gateway = BohrCliGateway(BohrCliConfig(submit_retry_mode="none"), environ={})
     uploads = []
 

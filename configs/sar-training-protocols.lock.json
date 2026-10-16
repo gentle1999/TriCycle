@@ -1,5 +1,5 @@
 {
   "schema": "tricycle.sar.backend-reference/v2",
   "manifest": "../packages/tricycle-sar/src/tricycle_sar/backends/catalog.json",
-  "sha256": "3e4ff2efe56299955bbd04205703fcfe66509d21c55702ac109e894a50c8f54d"
+  "sha256": "a2ff58fa8c996f77502bd61b799cdfbc118799ba1180fe24aa4308f2db882d5b"
 }

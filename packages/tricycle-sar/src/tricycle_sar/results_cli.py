@@ -6,12 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
-from .results import index_assets, prepare_training, verify
+from .results import index_assets, prepare_training, publish_recorded, verify
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    recorded = commands.add_parser("publish-recorded")
+    for name in ("run-record", "dataset", "splits", "predictions", "out-dir"):
+        recorded.add_argument(f"--{name}", type=Path, required=True)
     for name in ("verify", "prepare", "assets"):
         child = commands.add_parser(name)
         child.add_argument("--result-dir", type=Path, required=True)
@@ -25,7 +28,10 @@ def main(argv: list[str] | None = None) -> None:
         elif name == "assets":
             child.add_argument("--file", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
-    if args.command == "verify":
+    if args.command == "publish-recorded":
+        result = {"result_dir": str(publish_recorded(args.run_record, args.dataset, args.splits,
+                                                    args.predictions, args.out_dir))}
+    elif args.command == "verify":
         result = verify(args.result_dir)
     elif args.command == "prepare":
         result = prepare_training(

@@ -6,6 +6,7 @@ import zlib
 from pathlib import Path
 
 from tricycle_core.errors import InvalidRequestError
+from tricycle_core.transfer import validate_transfer_path
 
 
 def safe_member_target(destination: Path, member_name: str) -> Path:
@@ -21,6 +22,7 @@ def archive_infos(zip_path: Path, destination: Path) -> tuple[zipfile.ZipInfo, .
         with zipfile.ZipFile(zip_path) as archive:
             infos = tuple(archive.infolist())
             for member in infos:
+                validate_transfer_path(member.filename)
                 safe_member_target(destination, member.filename)
                 if (member.external_attr >> 16) & 0o170000 == 0o120000:
                     raise InvalidRequestError("symlink in downloaded archive")

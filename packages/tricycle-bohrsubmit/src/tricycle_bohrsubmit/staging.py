@@ -14,6 +14,11 @@ from tricycle_core import timestamped_run_directory
 from tricycle_core.asset_store import put_tree
 from tricycle_core.errors import InvalidRequestError
 from tricycle_core.io import write_delimited, write_json
+from tricycle_core.transfer import (
+    validate_transfer_file,
+    validate_transfer_path,
+    validate_transfer_tree,
+)
 
 from .config import dump_toml
 from .dpa import build_dpa_tasks, render_task_files
@@ -64,9 +69,12 @@ def _assert_empty_output(path: Path) -> None:
 
 
 def _copy_path(source: Path, destination: Path) -> None:
+    validate_transfer_path(source.name)
     if source.is_dir():
+        validate_transfer_tree(source)
         shutil.copytree(source, destination)
     else:
+        validate_transfer_file(source)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
 

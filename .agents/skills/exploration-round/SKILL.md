@@ -3,30 +3,22 @@ name: exploration-round
 description: "Record a strict, replayable exploration round, including candidate-space decisions and the RitS train-or-skip gate."
 ---
 
-# Exploration round provenance
+# Exploration Round Provenance
 
-## 适用场景
+Use to record a complete active-learning/reaction-exploration round: pool, model scores, selection, next-space decision, and RitS train-or-skip decision.
 
-当主动学习或反应空间探索需要记录一轮完整的候选池、模型分数、采样选择、下一轮空间决定和
-RitS 训练决定时使用。
+## Inputs
 
-## 输入
+- `exploration_id`, positive integer `round_index`, optional `parent_round_id`.
+- Complete `candidates`, `budget`, strategy, and random `seed`.
+- `space.space_id`, `space.version`, and explicit `space.definition`.
+- Uncertainty strategies require `model_snapshot.snapshot_id` and checkpoint hash.
+- For `agent-authored-acquisition`, finish previous-worker status checks and download all results locally, then create the request under [its skill](../agent-authored-acquisition/SKILL.md).
+- `range_policy`: `fixed` preserves the space; `explicit` uses requested `next_space`.
+- `training_policy`: `never`, `always`, `every_n_rounds`, `new_labels`, `every_n_or_new_labels`, `dataset_changed`, or `manual`.
+- Scheduled training requires reproducible `training_spec`, including `seed`, `dataset_manifest_hash`, `code_revision`, and `container_digest`; optional `next_model_snapshot` binds an already-produced checkpoint.
 
-- `exploration_id`、正整数 `round_index` 和可选 `parent_round_id`；
-- 完整 `candidates`、`budget`、策略名和随机 `seed`；
-- `space.space_id`、`space.version` 和显式 `space.definition`，描述本轮搜索空间；
-- uncertainty 策略必须提供 `model_snapshot.snapshot_id` 和 checkpoint hash；
-- 使用 `agent-authored-acquisition` 时，先完成上一批 worker 状态检查并下载所有结果到本地，
-  再按 [`agent-authored-acquisition` skill](../agent-authored-acquisition/SKILL.md) 生成请求；
-- `range_policy`：`fixed` 保持当前范围，`explicit` 使用请求中的 `next_space`；
-- `training_policy`：`never`、`always`、`every_n_rounds`、`new_labels`、
-  `every_n_or_new_labels`、`dataset_changed` 或 `manual`。
-- 若训练被安排，`training_spec` 必须包含 `seed`、`dataset_manifest_hash`、`code_revision` 和
-  `container_digest` 等可复现训练配方字段；可选 `next_model_snapshot` 用于绑定已经产出的 RitS checkpoint。
-
-历史选择放在 `history`，训练上下文放在 `training_context`，输出目录使用 `output_dir`；具体字段见[包请求契约](../../../packages/tricycle-exploration/README.md)。只使用规范字段和策略 ID，未知字段报错；不填写重复的顶层训练上下文或旧别名。
-
-## 执行
+Put prior selections in `history`, training context in `training_context`, and destination in `output_dir`. See the [request contract](../../../packages/tricycle-exploration/README.md). Use canonical fields/strategy IDs only; unknown fields, old aliases, and duplicate top-level training context are not supported.
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
@@ -34,33 +26,26 @@ uv run --package tricycle-agent tricycle-agent run \
   --run-id exploration-round-001
 ```
 
-这项能力只产生本地 provenance artifact，不提交 Bohr，也不会自动启动 RitS 训练。
+This creates local provenance only; it neither submits Bohr nor automatically starts RitS training.
 
-## 输出
+## Outputs
 
-运行目录的 `rounds/NNNN/` 中会保存：
+`rounds/NNNN/` contains:
 
-- `space.toml`：空间定义及 hash；
-- `candidate-pool.tsv`：完整候选池和排除原因；
-- `model-scores.tsv`：分数来源、模型快照和 checkpoint hash；
-- `acquisition-function.toml`：仅智能体采集策略生成，记录逐轮公式、上下文、成本统计和证据；
-- `selection-decisions.tsv`：排名、稳定 tie-break、选中与否及理由；
-- `range-decision.toml`：下一轮空间的策略、输入依据和结果；
-- `training-decision.toml`：RitS train/finetune/skip 决定及理由；
-- `snapshot-transition.toml`：本轮输入快照、下一轮快照、训练配方和稳定 replay key；skip 时下一轮
-  快照明确等于输入快照，训练尚未产出 checkpoint 时记录确定性的 planned snapshot；
-- `artifacts/manifest.toml`：上述文件的 SHA-256 清单。
+- `space.toml`: definition/hash.
+- `candidate-pool.tsv`: complete pool and exclusions.
+- `model-scores.tsv`: score provenance, model snapshot, checkpoint hash.
+- `acquisition-function.toml`: agent strategy only; formula, context, cost statistics, evidence.
+- `selection-decisions.tsv`: ranking, stable tie-breaks, selection, and rationale.
+- `range-decision.toml`: next-space policy, input evidence, and outcome.
+- `training-decision.toml`: explicit RitS train/finetune/skip decision and rationale.
+- `snapshot-transition.toml`: input/next snapshots, training recipe, stable replay key. Skip explicitly retains the input snapshot; training without a produced checkpoint records a deterministic planned snapshot.
+- `artifacts/manifest.toml`: SHA-256 manifest.
 
-总运行 trace 位于 `trace/events.jsonl`，并通过 hash 链记录各阶段事件。`training_action = skip`
-也是一条明确的决定，不能用“没有训练 run”推断跳过原因。
-训练决策和采样/范围决策共同形成 `round_decision_hash`，再与输入模型快照、数据集 hash 和
-`training_spec` 形成下一快照的 replay key；因此不需要重新执行 QM，也能验证下一轮快照定义是否一致。
-CLI 的 `resume.next_action` 保留为可复用本轮的 `exploration.round`；若训练应当发生，真正的
-`rits.train`/`rits.finetune` 会记录在 `resume.follow_up_action`，需使用独立的 RitS 请求执行。
+`trace/events.jsonl` records stages through a hash chain. `training_action = skip` is an explicit decision; absence of a training run does not explain a skip. Training, selection, and range decisions form `round_decision_hash`; together with model snapshot, dataset hash, and `training_spec`, this defines the next-snapshot replay key, verifiable without rerunning QM.
 
-## 约束
+CLI `resume.next_action` remains `exploration.round` for round reuse. Required `rits.train`/`rits.finetune` appears in `resume.follow_up_action` and needs a separate RitS request.
 
-- 不要把范围变化或训练 gate 写成未版本化的临时代码；策略 ID、版本、参数和输入 hash 必须写入请求。
-- 完整候选池和模型分数是复现采样结果的必要输入，不能只保存 top-N。
-- 智能体采集策略只能在已有计算任务完成且结果下载到本地后独立运行；本能力不会提交计算任务。
-- `resume = true` 只复用请求 hash 一致的既有 round；不覆盖既有 artifact。
+## Constraints
+
+Record policy IDs, versions, parameters, and input hashes instead of unversioned ad hoc range/training code. Full pool/scores are required for replay; top-N alone is insufficient. Agent acquisition runs separately only after calculations terminate and downloads complete. `resume = true` reuses only an existing round with matching request hash and never overwrites artifacts. Write new decisions, explanations, and records in English unless the user explicitly requests another output language.

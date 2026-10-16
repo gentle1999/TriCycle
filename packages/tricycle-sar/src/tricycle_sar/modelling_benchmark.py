@@ -229,6 +229,11 @@ def prepare_modelling(
         for p in sorted(files)
         if p.is_relative_to(workspace / "data") or p.is_relative_to(workspace / "configs")
     ]
+    from .protocol_identity import current_identity
+
+    state["method_identities"] = {
+        model: current_identity(manifest, methods[model]) for model in models
+    }
     dump_toml(run / "run.toml", state)
     check(run)
     from .delivery import freeze
@@ -289,6 +294,11 @@ def check(run: Path) -> dict[str, Any]:
     )
     for name in run_models(run):
         method = training_method(manifest, registry, name, state["methods"][name])
+        if "method_identities" in state:
+            from .protocol_identity import current_identity
+
+            if current_identity(manifest, method) != state["method_identities"][name]:
+                raise ValueError("Recorded scoped method identity differs")
         prefix = f"common/{method['bundle_name']}/"
         unavailable = []
         for entry in method["files"]:

@@ -1,71 +1,54 @@
-# 余额邮件告警
+# Email balance alerts
 
-`tools/balance_alert.py` 是独立确定性监控器，不调用模型、不暂停或重提实验、不充值。
-余额读取与邮件发送通过 `BalanceSource` / `MailSender` 注入。
-提供显式命令 JSON adapter 和 TLS SMTP adapter。
+`tools/balance_alert.py` is a standalone deterministic monitor. It does not call models, pause or resubmit experiments, or add funds. Balance reads and email delivery are injected through `BalanceSource` / `MailSender`, with explicit command-JSON and TLS SMTP adapters.
 
-## 配置
+SMTP delivery is implemented once in `tricycle_core.mail` and shared with
+[trajectory alerts](trajectory-alerts.md). Existing balance-monitor configuration
+remains supported; standard `TRICYCLE_SMTP_*` environment settings override its
+corresponding routing fields. New trajectory-alert routing is entirely environment
+configured. Constructing a sender does not load credentials or contact SMTP.
 
-复制 `configs/example-balance-alert.toml`，确认实际账户、单位、阈值及收件人。
-示例数值和邮箱不是已启用配置。`command` 为不经过 shell 的 argv 数组；
-`json_path` 为提供方余额字段路径，`multiplier` 用于元/分等明确单位转换。
-查询必须只读，30 秒内返回 JSON。不能把 token 限额或认证状态当作余额。
+New monitor state defaults to `.tricycle/monitors/<date>/<timestamp>/balance-alert/`, outside experiment runs. An explicit `--run-dir` remains supported, including existing deployed services. Follow [run record scope](run-records.md); do not move a running monitor's state or synchronization files as part of directory cleanup.
 
-Bohrium CLI 提供 `bohr billing balance` / `bohr billing photon`；必须确认实际
-消费来源、返回字段及单位，不能混加现金和光子。模型余额由实际计费提供方查询。
-SMTP host、username、password 通过指定环境变量注入，不写入配置或审计记录。
-支持 STARTTLS（通常 587）或 SSL（通常 465）。
+## Configuration
 
-## 运行
+Copy `configs/example-balance-alert.toml` and verify the actual account, units, thresholds, and recipients. Example values and email addresses are not enabled settings. `command` is an argv array executed without a shell. `json_path` locates the provider's balance field; `multiplier` performs an explicit unit conversion such as dollars to cents. Queries must be read-only and return JSON within 30 seconds. Token limits or authentication status are not balances.
+
+Bohrium CLI provides `bohr billing balance` / `bohr billing photon`. Verify the actual billing source, returned fields, and units; never add cash and photons together. Model balances must come from the actual billing provider. Inject SMTP host, username, and password through the specified environment variables, outside configuration and audit records. STARTTLS (usually port 587) and SSL (usually port 465) are supported.
+
+## Execution
 
 ```bash
 uv run --frozen --all-packages python -m tools.balance_alert tick --config configs/balance-alert.toml
 uv run --frozen --all-packages python -m tools.balance_alert watch --config configs/balance-alert.toml --run-dir /absolute/monitor --live
 ```
 
-默认 dry-run 不读凭据、不查询、不发邮件。真实运行必须 `--live`。
-首次查询已低于阈值时就会发送邮件。默认每 5 分钟查询：
+Default dry runs do not read credentials, query balances, or send email. Live operation requires `--live`. A first reading below the threshold triggers an email. The default polling interval is five minutes:
 
-- 余额不高于阈值触发低余额告警；不高于零升级为耗尽告警。
-- 同状态成功发送后默认 12 小时再次提醒。
-- 恢复到阈值之上后重置去重，再次跌破重新告警。
-- 查询连续失败 3 次通知“余额监控不可用”，不冒充余额为零。
-- 邮件失败 15 分钟后重试，仅记录错误类型，不保存接口原始错误或凭据。
+- A balance at or below the threshold triggers a low-balance alert; a balance at or below zero escalates to exhaustion.
+- After successful delivery, unchanged states are reminded after 12 hours by default.
+- Recovery above the threshold resets deduplication; a later fall triggers another alert.
+- Three consecutive query failures trigger a balance-monitor-unavailable notice rather than reporting a zero balance.
+- Email failures retry after 15 minutes. Only error types are recorded, without raw API errors or credentials.
 
-SMTP 接受邮件后断线可能导致后续重复发送，不能承诺 exactly-once。
-`state.json` 记录余额、查询时间和邮件状态；`notifications/*.json` 记录发送回执。
-文件锁防止同目录多进程重复告警。
+A disconnect after SMTP acceptance can cause duplicate delivery; exactly-once delivery is not guaranteed. `state.json` records balance, query time, and mail state; `notifications/*.json` stores delivery receipts. A file lock prevents multiple processes in the same directory from sending duplicate alerts.
 
-生成 macOS 服务模板：
+Generate a macOS service template:
 
 ```bash
 uv run --frozen --all-packages python -m tools.balance_alert service-file --config configs/balance-alert.toml --run-dir /absolute/monitor --live
 ```
 
-只生成 plist，不安装、不发送。通过服务管理器提供 SMTP 环境并安装 LaunchAgent。
-服务环境与终端不同，必须确认余额命令认证和 SMTP 环境可用；模板不复制密钥。
+This only generates a plist; it neither installs a service nor sends email. Provide SMTP environment variables through the service manager and install the LaunchAgent separately. Service environments differ from terminals: verify balance-command authentication and SMTP settings. Templates do not copy secrets.
 
-## Codex 使用额度 adapter
+## Codex quota adapter
 
-通过官方 Codex App Server 的 account/rateLimits/read 读取当前 ChatGPT 登录账户的
-codex bucket；不启动 thread/turn，不调用模型，不读取或打印 token。
-来源：https://learn.chatgpt.com/docs/app-server （Rate limits 部分）。
+The adapter reads the current ChatGPT-authenticated account's `codex` bucket through the official Codex App Server `account/rateLimits/read` method. It does not start threads/turns, call models, or read/print tokens. The documented source is the rate-limits section of the [App Server documentation](https://learn.chatgpt.com/docs/app-server).
 
-`python -m tools.codex_quota --live` 返回各 primary/secondary 窗口剩余比例、重置时间，
-amount 为窗口剩余比例最小值。默认不加 --live 不访问账户。
-缺少额度窗口时报告查询失败，不用 credits 或 API 余额冒充。
-额度属于当前 Codex 登录账户；切换登录会切换监控对象。
+`python -m tools.codex_quota --live` returns remaining percentages and reset times for primary/secondary windows; `amount` is the minimum remaining percentage across windows. Without `--live`, it does not access the account. Missing quota windows cause a query failure; credits or API balances are not substitutes. Quota belongs to the current Codex login, so changing the login changes the monitored account.
 
-部署方应复制示例配置到本机私有配置文件，设置阈值、只读查询命令和收件人；
-完成 SMTP 配置前不要启用 live 发送。百分比来自官方 usedPercent，计算为
-max(0, 100-usedPercent)，不估算美元。
-如提供方返回剩余额度与总额度，也可使用 remaining_percent 模式和 total_json_path；
-分母必须明确且大于零，不默认以历史峰值或最近充值额为总额。
+Deployments should copy the example into a private local configuration and set thresholds, the read-only query command, and recipients. Do not enable live delivery until SMTP is configured. Percentages come from the official `usedPercent`, calculated as `max(0, 100-usedPercent)` without estimating dollars. If a provider supplies remaining and total quotas, `remaining_percent` mode and `total_json_path` are also available. The denominator must be explicit and positive, not an assumed historical peak or recent top-up amount.
 
-## 本地部署配置
+## Local deployment configuration
 
-将 live 配置、收件地址、服务器地址和本机文件路径保存在 Git 忽略的私有配置中；
-口令应由环境变量或权限受限的本机文件提供，不纳入仓库。SMTP 支持显式 `env_file`，
-只加载配置指定的 host、username、password 键；进程环境优先。只在 live 的配置检查和
-发送阶段读取，不将凭据传给额度查询子进程或写入 plist。`mail-status.json` 只表示本地
-凭据配置状态，不代表成功认证或成功投递。
+Store live settings, recipient addresses, server addresses, and local paths in Git-ignored private configuration. Passwords belong in environment variables or permission-restricted local files. SMTP supports an explicit `env_file`, loading only the configured host, username, and password keys; process environment values take precedence. It is read only during live configuration checks and sending. Credentials are neither passed to quota-query subprocesses nor written into plist files. `mail-status.json` reports local credential-configuration status, not successful authentication or delivery.

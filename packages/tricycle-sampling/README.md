@@ -1,92 +1,111 @@
 # tricycle-sampling
 
-`tricycle-sampling` 从显式给定的候选池中选择下一批反应，并提供多轮 SAR 采样回放的准备、监督、决策和审计。模型训练与推断使用 `tricycle-sar` 的共用接口，远程任务通过注入的 Bohr adapter 执行。
+`tricycle-sampling` selects the next reaction batch from an explicit candidate pool and provides preparation, supervision, decisions, and auditing for multiround SAR sampling replay. Model training and inference use shared `tricycle-sar` interfaces; remote jobs run through an injected Bohr adapter.
 
-## 回放运行入口
+## Replay entry points
 
-整条采样实验的准备、提交和收集使用 `python -m tricycle_sampling.active_learning`。空间快照由 `space_snapshot.py` 校验和生成，只保存数据与适配证据，不复制控制器源码。提交直接调用注入的 Bohr gateway；同一实验共享任务组和提交锁，已有回执复用，提交结果不明时保留标记并拒绝自动重提。
+Use `python -m tricycle_sampling.active_learning` to prepare, submit, and collect a complete sampling experiment. `space_snapshot.py` validates and generates space snapshots containing only data and adaptation evidence, without controller source copies. Submission calls the injected Bohr gateway directly. An experiment shares a job group and submission lock, reuses existing receipts, and retains an uncertainty marker that blocks automatic resubmission when submission outcome is unknown.
 
-智能采集的独立推理 worker 使用 `python -m tricycle_sampling.acquisition_worker --prepare-bundle <目录>` 交付包及 `run.sh`，随后添加请求、checkpoint 和输入表。Bohr 执行 `bash run.sh <请求.toml>`。模型信号生成、完整性校验和验证集指标均在包内执行。
+Prepare a standalone agent-authored acquisition inference worker with `python -m tricycle_sampling.acquisition_worker --prepare-bundle <directory>`, which delivers the package and `run.sh`; then add the request, checkpoint, and input table. Bohr runs `bash run.sh <request.toml>`. Model-signal generation, integrity checks, and validation-set metrics execute inside the package.
 
-数据库导出与底物适配使用 `python -m tricycle_reaction_db.pools export|adapt`，离线分布统计使用 `analysis.sampling.reaction_collection_distribution`。
+Database export/substrate adaptation use `python -m tricycle_reaction_db.pools export|adapt`; offline distribution statistics use `analysis.sampling.reaction_collection_distribution`.
 
-运行实现位于 [replay/](src/tricycle_sampling/replay/)，不依赖仓库的 `tools/` 或 `tricycle-exploration`。基础采样 API 只依赖 core；回放控制器使用 `tricycle-sampling[replay]` 的可选依赖。工作区可用以下命令：
+Runtime implementation lives in [replay/](src/tricycle_sampling/replay/) and depends on neither repository `tools/` nor `tricycle-exploration`. The basic sampling API depends only on core; replay controllers use optional dependencies in `tricycle-sampling[replay]`. Workspace commands:
 
 ```bash
 uv run --package tricycle-sampling --extra replay python -m tricycle_sampling.replay.campaign --help
 uv run --package tricycle-sampling --extra replay python -m tricycle_sampling.replay.suite --help
 ```
 
-| 职责 | 包内入口 |
+| Responsibility | Package entry point |
 | --- | --- |
-| 单实验、多 seed 逐轮监督 | `tricycle_sampling.replay.campaign` |
-| 多方法统一套件 | `tricycle_sampling.replay.suite` |
-| 远程单轮训练/推理 | `tricycle_sampling.replay.worker` |
-| 远程整条基线轨迹 | `tricycle_sampling.trajectory_worker` |
-| 结构信号与 RDKit 分析 | `tricycle_sampling.structure_analysis` |
-| 状态、审计、故障恢复 | `tricycle_sampling.replay.report`、`audit`、`platform_audit`、`watch`、`recover_review`、`recover_retain` |
+| Round-by-round supervision of one experiment with multiple seeds | `tricycle_sampling.replay.campaign` |
+| Unified suite spanning methods | `tricycle_sampling.replay.suite` |
+| Remote single-round training/inference | `tricycle_sampling.replay.worker` |
+| Remote complete baseline trajectory | `tricycle_sampling.trajectory_worker` |
+| Structural signals and RDKit analysis | `tricycle_sampling.structure_analysis` |
+| Status, auditing, and recovery | `tricycle_sampling.replay.report`, `audit`, `platform_audit`, `watch`, `recover_review`, `recover_retain` |
+| Bilingual, subagent-authored blocked-state email notifications | `tricycle_sampling.replay.alerts`, `alert_author`; SMTP transport in core |
 
-`campaign` 直接调用包内 `replay.selection.select_round`，校验模型证据、执行确定性采样并原子保存本轮记录。远程输入由 SAR staging 交付当前包，启动器使用 `python -m`，不再复制零散 tools 脚本。离线图表入口在 `analysis.sampling`。
+`campaign` directly calls `replay.selection.select_round`, validates model evidence, performs deterministic selection, and atomically saves round records. SAR staging delivers the current package to remote inputs; launchers use `python -m` without copying individual tools scripts. Offline plotting entry points are in `analysis.sampling`.
 
-默认 prepare/status 只操作本地文件。真实监督需要 `--live`，提交还需 `--allow-submit`；已有锁、预算、重试和提交回执保护继续生效。新 run 绑定当前包内实现 hash；恢复时校验原绑定，代码改变后拒绝静默接续，不自动更新旧 run 的 hash，也不加载历史源码。
+Default prepare/status operations touch only local files. Live supervision requires `--live`; submission additionally requires `--allow-submit`. Existing locks, budgets, retries, and submission-receipt safeguards remain active. New runs bind current packaged implementation hashes. Recovery verifies original bindings and rejects silent continuation after source changes; it neither refreshes old run hashes nor loads historical source.
 
-`active_learning submit` 的提交回执使用顶层 `run_id/status/external_id/request_sha256/job_group_id`。
-恢复要求 `status=submitted`、非空字符串任务 ID、相同任务组和匹配的请求哈希；旧字段、嵌套 ID、
-缺失字段或未知字段均报错，保留原回执且不重提对应任务。未知提交结果由 `submission-inflight.json` 阻止自动重提。
+Blocked-state email is opt-in via `TRICYCLE_TRAJECTORY_ALERTS_ENABLED` and separate
+notification configuration. SMTP host/protocol/addresses/credentials come from
+environment variables. A reporting-only subagent authors bilingual email, while
+core performs delivery to configured recipients. Deduplication, bounded retries,
+and compact notification records live outside runs under `.tricycle/alerts`.
+See [trajectory alerts](../../docs/trajectory-alerts.md) for dry runs, independent
+observation of existing runs, and retry recovery. Notification errors do not alter
+the trajectory, sampling inputs, or scientific failure counters.
 
-新比较采用五条文献基线，每条绑定一篇不同的主引用。五条基线与智能策略共享实验流程，变化限定在选样策略。文献证据见[方法与文章清单](../../docs/sampling-baselines.md)，实验操作见[统一采样实验](../../docs/mae-intelligent-sampling.md)。
+Each seed trajectory owns one authoritative `state.json` for resumption and one
+`state-events.json` journal for operational transitions, failures, and recovery.
+Ordinary polling updates the current state without adding a history snapshot or
+journal event. Events contain only control fields, not cumulative selected IDs,
+decision context, or worker assets. Neither file is copied into round submissions.
+Round-specific receipts, scientific inputs, decisions, and results remain bound
+to their rounds. Existing `history/*.json` evidence is preserved but no longer
+extended. The journal is written before the state, so an interrupted save may
+leave an event ahead of the authoritative state revision; that event is not proof
+that the transition committed. Recovery always reads `state.json`.
 
-## 比较集合与来源
+`active_learning submit` receipts use top-level `run_id/status/external_id/request_sha256/job_group_id`. Recovery requires `status=submitted`, a nonempty string job ID, the same job group, and a matching request hash. Legacy fields, nested IDs, missing fields, and unknown fields are errors; original receipts remain intact and affected jobs are not resubmitted. `submission-inflight.json` blocks automatic resubmission after an unknown submission outcome.
 
-`LITERATURE_BASELINE_STRATEGIES` 定义以下顺序。主引用是近五年文章的实际使用出处；实现记录了迁移到 TriCycle 的差异。
+New comparisons use five literature baselines, each tied to a different primary reference. The baselines and intelligent strategy share the experimental workflow, varying only the selection strategy. See [methods and references](../../docs/sampling-baselines.md) for literature evidence and [unified sampling experiments](../../docs/mae-intelligent-sampling.md) for operations.
 
-| 策略 ID | 主引用 | 当前选择规则 |
+## Comparison set and sources
+
+`LITERATURE_BASELINE_STRATEGIES` defines the following order. Primary references document use in papers from the last five years; implementation records describe adaptations to TriCycle.
+
+| Strategy ID | Primary reference | Current selection rule |
 | --- | --- | --- |
-| `predictive-uncertainty` | Zhong et al., *Nature Communications*, 2025，[DOI](https://doi.org/10.1038/s41467-025-59812-0) | 总体预测不确定性降序 |
-| `latin-hypercube` | Slattery et al., *Science*, 2024，[DOI](https://doi.org/10.1126/science.adj1817) | 固定 LHS 设计点依次映射到最近未选候选 |
-| `ucb` | Wang et al., *Nature*, 2024，[DOI](https://doi.org/10.1038/s41586-024-07021-y) | Gaussian 收益后验上分位数降序 |
-| `distance-uncertainty-product` | Shrestha et al., *Nature Communications*, 2024，[DOI](https://doi.org/10.1038/s41467-024-49011-8) | 最近已标记参考距离 × 预测方差 |
-| `uncertainty-kriging-believer` | Souza et al., *JACS*, 2025，[DOI](https://doi.org/10.1021/jacs.5c02218) | 最大标准差逐个选样，批内用预测临时标签更新后验 |
+| `predictive-uncertainty` | Zhong et al., *Nature Communications*, 2025, [DOI](https://doi.org/10.1038/s41467-025-59812-0) | Descending total predictive uncertainty |
+| `latin-hypercube` | Slattery et al., *Science*, 2024, [DOI](https://doi.org/10.1126/science.adj1817) | Sequentially map fixed LHS design points to the nearest unselected candidate |
+| `ucb` | Wang et al., *Nature*, 2024, [DOI](https://doi.org/10.1038/s41586-024-07021-y) | Descending upper quantile of a Gaussian reward posterior |
+| `distance-uncertainty-product` | Shrestha et al., *Nature Communications*, 2024, [DOI](https://doi.org/10.1038/s41467-024-49011-8) | Distance to the nearest labeled reference multiplied by predictive variance |
+| `uncertainty-kriging-believer` | Souza et al., *JACS*, 2025, [DOI](https://doi.org/10.1021/jacs.5c02218) | Sequential maximum-standard-deviation selection with posterior updates using temporary predicted labels within each batch |
 
-`random`、`epistemic-uncertainty`、`aleatoric-uncertainty` 是独立采样策略，未纳入上述文献策略比较集合。共享随机初始集仍用于实验初始化。
+`random`, `epistemic-uncertainty`, and `aleatoric-uncertainty` are standalone strategies outside this literature comparison set. A shared random initial set still initializes experiments.
 
-来源与方法协议的唯一代码定义为 [protocols.py](src/tricycle_sampling/protocols.py)。五项文献协议版本均为 `1.0.0`；算法实现版本单独记录，当前 predictive 为 `1.1.0`，新增四项为 `1.0.0`。文献协议版本、策略实现版本和实验 schema 具有不同用途。
+[protocols.py](src/tricycle_sampling/protocols.py) is the sole code definition of sources and method protocols. All five literature protocol versions are `1.0.0`; implementation versions are recorded separately, currently `1.1.0` for predictive uncertainty and `1.0.0` for the other four. Literature protocol versions, strategy implementation versions, and experiment schemas serve distinct purposes.
 
-## 统一实验接口
+## Unified experiment interface
 
-[experiment.py](src/tricycle_sampling/experiment.py) 提供协议 `tricycle.matched-sampling/v1`：
+[experiment.py](src/tricycle_sampling/experiment.py) provides protocol `tricycle.matched-sampling/v1`:
 
 ```python
 experiment_sampling_request(
     strategy, candidates, *, reference_features, budget, seed, design_size, offset
-)  # 返回 SamplingRequest
+)  # Returns SamplingRequest
 
 select_experiment_candidates(
     strategy, candidates, *, reference_features, budget, seed, design_size, offset
-)  # 返回 SamplingResult
+)  # Returns SamplingResult
 ```
 
-两者仅接受上述五个规范策略 ID。逐轮回放的 [baselines.py](src/tricycle_sampling/replay/baselines.py) 与整条轨迹 [trajectory_worker.py](src/tricycle_sampling/trajectory_worker.py) 均调用此接口。统一套件的 intelligent 智能策略沿用采集表达式接口，共享同一主模型、候选空间、初始化、训练和评价流程。它使用版本化的覆盖/成本初始化提案、已揭示模型反馈和一次批次复核；参照由 [cost_guidance.py](src/tricycle_sampling/replay/cost_guidance.py) 生成，最终排序由智能体公式决定。
+Both accept only the five canonical strategy IDs above. Round-by-round replay in [baselines.py](src/tricycle_sampling/replay/baselines.py) and complete trajectories in [trajectory_worker.py](src/tricycle_sampling/trajectory_worker.py) call this interface. The suite's intelligent strategy uses the acquisition-expression interface while sharing the same main model, candidate space, initialization, training, and evaluation workflow. It uses versioned coverage/cost initialization proposals, revealed model feedback, and one batch review. [cost_guidance.py](src/tricycle_sampling/replay/cost_guidance.py) supplies reference guidance; the agent-authored formula determines final ranking.
 
-### 共同输入
+### Shared inputs
 
-每个 `Candidate.payload` 提供以下字段；adapter 使用白名单构造请求，不复制目标标签、未采成功掩码、未来成本或评价指标。
+Each `Candidate.payload` supplies these fields. The adapter builds requests from an allowlist and does not copy target labels, unobserved success masks, future costs, or evaluation metrics.
 
-| 字段 | 共同定义 |
+| Field | Shared definition |
 | --- | --- |
-| `design_features` | 六维反应物结构计数经 `count/(1+count)` 变换后的向量 |
-| `product_count` | 当前冻结先验结构中该底物对的路线数，正整数 |
-| `prediction_mean` | 同一组先验路线的 RxnResid 预测能量均值 |
-| `predictive_variance` | 同一组路线的总体预测方差之和 |
-| `epistemic_variance` | 同一组路线的认知方差之和 |
+| `design_features` | Six reactant structural counts transformed by `count/(1+count)` |
+| `product_count` | Positive integer route count for the substrate pair in the current frozen structural prior |
+| `prediction_mean` | Mean RxnResid predicted energy over that same set of prior routes |
+| `predictive_variance` | Sum of total predictive variances over those routes |
+| `epistemic_variance` | Sum of epistemic variances over those routes |
 
-六维顺序固定为重原子数、杂原子数、环数、芳香原子数、可旋转键数、氢键受体数。`reactant_structure_features()` 是显式的本地 RDKit adapter；一般数值采样接口不要求解析结构。
+The six dimensions are ordered as heavy-atom count, heteroatom count, ring count, aromatic-atom count, rotatable-bond count, and hydrogen-bond acceptor count. `reactant_structure_features()` is an explicit local RDKit adapter; general numerical sampling interfaces need not parse structures.
 
-`reference_features` 为已经揭示有效训练标签的底物对结构表，必须非空、与当前候选 ID 不相交，并使用相同六维变换。所有五项都验证共同输入，即使 LHS 的选择不使用模型预测。模型覆盖缺失时应补全共同推断，不能静默退回随机选择。
+`reference_features` contains substrate-pair structures whose valid training labels have already been revealed. It must be nonempty, disjoint from current candidate IDs, and use the same six-dimensional transform. All five methods validate shared inputs, even though LHS does not use predictions for selection. Missing model coverage requires completing shared inference, never silently falling back to random selection.
 
-### RxnResid 方差如何用于 Bayes-UCB
+### RxnResid variance in Bayes-UCB
 
-设某底物对有 `n` 条先验路线，路线预测为 `mu_j`，认知方差为 `v_epi_j`：
+For a substrate pair with `n` prior routes, route predictions `mu_j`, and epistemic variances `v_epi_j`:
 
 ```text
 mu_pair  = sum(mu_j) / n
@@ -95,59 +114,59 @@ s_reward = sqrt(sum(v_epi_j)) / n
 score    = -mu_pair + Phi_inverse(0.95) * s_reward
 ```
 
-统一协议将 RxnResid 的认知方差作为期望能量的不确定性，在路线独立假设下构造 Gaussian 近似；`direction="minimize"` 表示偏好较低预测能量。总体预测方差包含 aleatoric 噪声，未自动替代收益后验方差。路线相关性未在此近似中估计；这也不是 Wang et al. 条件通用性任务的原始 bandit 后验。
+The unified protocol treats RxnResid epistemic variance as uncertainty in expected energy and builds a Gaussian approximation assuming independent routes. `direction="minimize"` favors lower predicted energy. Total predictive variance includes aleatoric noise and does not automatically replace reward-posterior variance. This approximation does not estimate route correlations and is not the original bandit posterior of Wang et al.'s condition-generality task.
 
-Predictive 和 A Score 使用路线方差之和，UCB 使用路线均值的认知方差；这些是预先固定的策略定义。UCB 的低能量优化偏好与整体 MAE 目标的差别需在结果中说明。
+Predictive uncertainty and A Score use summed route variances; UCB uses the epistemic variance of the route mean. These strategy definitions are fixed in advance. Results must explain the distinction between UCB's preference for low energies and the overall MAE objective.
 
-### KB 的统一适配
+### Shared KB adaptation
 
-统一入口注入 `StructuralKrigingBelieverFactory`，在同一 RxnResid 边际均值与 `s_reward` 上构造：
+The unified entry point injects `StructuralKrigingBelieverFactory`, constructing the following covariance from the same RxnResid marginal means and `s_reward`:
 
 ```text
 K(i,j) = s_i * s_j * exp(-||features_i - features_j||² / (2 * ell²))
 ell = 1
 ```
 
-结构 RBF 提供显式的相关性假设，RxnResid 自身未提供这个联合协方差。每选一个候选，用其当前预测均值作为临时标签，条件化后再计算下一项标准差。adapter 使用逐步条件化，避免构造完整候选池协方差矩阵；不增加主 SAR 训练任务，临时标签不进入正式训练集或数据库。
+The structural RBF introduces an explicit correlation assumption; RxnResid does not supply this joint covariance. After each selection, the current predicted mean becomes a temporary label, and conditioning precedes the next standard-deviation calculation. Incremental conditioning avoids a complete candidate-pool covariance matrix. It adds no main SAR training jobs, and temporary labels enter neither the official training set nor the database.
 
-Souza et al. 使用 RF 树标准差和批内临时重拟合。本实现保留顺序 KB 的选择机制，采用 pair 级 Gaussian 适配，来源记录中明确这一差别。
+Souza et al. use RF tree standard deviations and temporary within-batch refits. This implementation preserves sequential KB selection using a pair-level Gaussian adaptation; source records explicitly document the difference.
 
-### LHS 的跨轮设计
+### LHS design across rounds
 
-统一协议固定 `[0,1]` 六维边界、采集 seed 和初始批次之后的设计总规模。`offset` 是已消耗设计点数。每轮重新生成同一个设计序列，从 offset 继续映射，并排除已有选择。离散候选映射及任意批次前缀均不保证严格的 Latin 分层性质。
+The unified protocol fixes six-dimensional `[0,1]` bounds, the acquisition seed, and total design size after the initial batch. `offset` counts consumed design points. Each round regenerates the same design sequence, resumes mapping at the offset, and excludes previous selections. Discrete candidate mapping and arbitrary batch prefixes do not guarantee strict Latin stratification.
 
-共同条件、轨迹预算、评价节点和恢复约束由[实验控制器](../../docs/mae-intelligent-sampling.md)管理。`sampling_experiment.shared_inputs_sha256` 绑定当前候选、预测和参考集合；同一快照切换策略时应一致。不同轨迹采样历史分化后，该 hash 可以不同。
+The [experiment controller](../../docs/mae-intelligent-sampling.md) manages shared conditions, trajectory budgets, evaluation points, and recovery constraints. `sampling_experiment.shared_inputs_sha256` binds current candidates, predictions, and references; it should match when changing strategies on the same snapshot. It may differ once trajectory histories diverge.
 
-Replay 的确定性基线仅使用上述五个策略和当前 `sampling_experiment` schema；缺失或不支持的 schema 明确拒绝，不自动切换到旧选样算法。已有运行记录保留，新计算从显式配置准备新 run。下述通用候选 API 的其他策略仍可独立使用。
+Deterministic replay baselines use only these five strategies and the current `sampling_experiment` schema. Missing/unsupported schemas are rejected without falling back to older algorithms. Existing run records remain intact; new computations prepare new runs from explicit configurations. Other strategies in the general candidate API below remain independently available.
 
-## 通用请求接口
+## General request interface
 
-插件 ID 为 `tricycle.sampling`，公开能力为 `candidate.validate`、`candidate.select`、`strategy.register`。Python 计划操作为 `SamplingPlugin.plan("select", request_mapping, context)`，执行为 `SamplingPlugin.select(request)`。
+The plugin ID is `tricycle.sampling`, with public capabilities `candidate.validate`, `candidate.select`, and `strategy.register`. Python planning uses `SamplingPlugin.plan("select", request_mapping, context)`; execution uses `SamplingPlugin.select(request)`.
 
-| `SamplingRequest` 字段 | 约束 |
+| `SamplingRequest` field | Constraint |
 | --- | --- |
-| `candidates` | `Candidate` 序列；每项含唯一 `candidate_id` 和 `payload` |
-| `budget` | 非负整数，不超过候选数 |
-| `strategy` | 已注册名称；通用 API 默认值为 `random` |
-| `seed` | 可选整数；LHS 和统一实验要求显式整数 |
-| `metadata` | 上游上下文；新增基线配置位于 `metadata.baseline` |
+| `candidates` | A sequence of `Candidate` objects, each with unique `candidate_id` and `payload` |
+| `budget` | Nonnegative integer no larger than the candidate count |
+| `strategy` | Registered name; the general API defaults to `random` |
+| `seed` | Optional integer; LHS and unified experiments require an explicit integer |
+| `metadata` | Upstream context; baseline configuration resides in `metadata.baseline` |
 
-`SamplingResult` 返回 `selected`、`remaining`、strategy、seed 和 metadata，提供 `selected_ids` 与 `to_dict()`。候选对象保留输入内容。
+`SamplingResult` returns `selected`, `remaining`, strategy, seed, and metadata, with `selected_ids` and `to_dict()` helpers. Candidate objects preserve their inputs.
 
-### 独立基线请求参数
+### Standalone baseline parameters
 
-下表用于通用 API。统一实验由 adapter 冻结参数，不应逐策略修改这些共同输入。
+This table applies to the general API. The unified experiment adapter freezes parameters; do not vary shared inputs by strategy.
 
-| 策略 | 候选字段 | `metadata.baseline` |
+| Strategy | Candidate fields | `metadata.baseline` |
 | --- | --- | --- |
-| LHS | 稠密有限 `design_features` | 必填 `bounds`；`feature_field` 可改字段名；`design_size` 默认 budget，`offset` 默认 0 |
-| Bayes-UCB | `reward_posterior_mean`、非负 `reward_posterior_std` | `quantile` 默认 0.95，须在 `(0.5,1)`；`direction` 默认 `maximize`，也接受 `minimize` |
-| A Score | `design_features`、非负 `predictive_variance` | 必填 `reference_features`；`feature_field`、`variance_field` 可改字段名 |
-| KB 默认 adapter | 联合后验按 ID 提供，见下文 | 必填 `posterior`；`observation_noise_variance` 默认 0 |
+| LHS | Dense, finite `design_features` | Required `bounds`; `feature_field` can rename the field; `design_size` defaults to budget, `offset` to 0 |
+| Bayes-UCB | `reward_posterior_mean`, nonnegative `reward_posterior_std` | `quantile` defaults to 0.95 and must lie in `(0.5,1)`; `direction` defaults to `maximize`, also accepting `minimize` |
+| A Score | `design_features`, nonnegative `predictive_variance` | Required `reference_features`; `feature_field` and `variance_field` can rename fields |
+| Default KB adapter | Joint posterior keyed by ID; see below | Required `posterior`; `observation_noise_variance` defaults to 0 |
 
-新增四项拒绝未知 baseline 参数。LHS 用固定边界归一化后的 Euclidean 距离匹配最近未选候选；A Score 用给定表征的 Euclidean 距离，不额外归一化，不按批内选择更新参考集合。UCB `maximize` 的分数为 `mu + Phi_inverse(q)*std`，`minimize` 为 `-mu + Phi_inverse(q)*std`。
+These four strategies reject unknown baseline parameters. LHS matches the nearest unselected candidate using Euclidean distance after fixed-bound normalization. A Score uses Euclidean distance in the supplied representation, without additional normalization or within-batch reference updates. UCB scores `maximize` as `mu + Phi_inverse(q)*std` and `minimize` as `-mu + Phi_inverse(q)*std`.
 
-Predictive 通用 API 接受方差 `predictive_variance`、标准差 `predictive_std` 或通用标量 `predictive_uncertainty`，按此顺序取值且不改变数值；epistemic/aleatoric 使用对应前缀。这三种字段表达不同的分数量纲，输入提供方必须明确所用量。显式分数优先于 `posterior_probabilities`。二分类概率输入在本地计算自然对数熵：
+The general predictive API accepts `predictive_variance`, `predictive_std`, or scalar `predictive_uncertainty`, in that priority order without numerical transformation. Epistemic/aleatoric strategies use corresponding prefixes. These fields have different score units; input providers must identify the quantity used. Explicit scores take precedence over `posterior_probabilities`. Binary probabilities produce natural-log entropy locally:
 
 ```text
 predictive = H(mean(p_i))
@@ -155,83 +174,103 @@ aleatoric  = mean(H(p_i))
 epistemic  = predictive - aleatoric
 ```
 
-分类概率与回归方差是独立输入形式；RxnResid 回归实验使用上述方差输入。`UncertaintyScores.to_dict()` 输出三个 `*_uncertainty` 标量字段。旧 `_unc` 拼写、裸分量名、嵌套 `uncertainty` 表及 `posterior_probs` 均拒绝；密度加权策略只读取 `pair_density`。
+Classification probabilities and regression variances are separate input forms. RxnResid regression experiments use the variance inputs above. `UncertaintyScores.to_dict()` emits three `*_uncertainty` scalar fields. Legacy `_unc` spelling, bare component names, nested `uncertainty` tables, and `posterior_probs` are rejected. Density-weighted strategies read only `pair_density`.
 
 ### KB surrogate protocol
 
-通用 `SamplingPlugin()` 默认使用 `GaussianKrigingBelieverFactory`。`baseline.posterior` 包含 `candidate_ids`、`means`、`covariance`，ID 与当前候选池完全一致且唯一，均值和协方差按此顺序排列。协方差必须有限、对称、半正定；允许数值容差和奇异矩阵。完整输入存储为 O(n²)，半正定校验为 O(n³)，适合小池和接口验证。
+General `SamplingPlugin()` uses `GaussianKrigingBelieverFactory` by default. `baseline.posterior` contains `candidate_ids`, `means`, and `covariance`. IDs must be unique and exactly match the current pool; means and covariance follow that order. Covariance must be finite, symmetric, and positive semidefinite; numerical tolerances and singular matrices are allowed. Complete input storage is O(n²), and positive-semidefinite validation is O(n³), suitable for small pools and interface validation.
 
-其他本地 surrogate 可通过 `SamplingPlugin(kriging_believer_factory=...)` 注入：
+Inject other local surrogates with `SamplingPlugin(kriging_believer_factory=...)`:
 
-- `KrigingBelieverFactory` 提供稳定的 `adapter_id`、`version`、仅校验本地输入的 `validate(candidates, metadata)`，以及 `create(candidates, metadata, seed)`。
-- `KrigingBelieverSession.predict(remaining)` 返回完整 ID 到 `SurrogatePrediction(mean, std)` 的映射；`believe(candidate, predicted_label)` 完成下一次打分前的条件化或临时重拟合。
-- 每次选择创建独立会话；不得改写主 checkpoint、真实标签或上游输入。自定义 refit 的 seed、失败和开销必须显式记录。
+- `KrigingBelieverFactory` provides stable `adapter_id` and `version`, local-input-only `validate(candidates, metadata)`, and `create(candidates, metadata, seed)`.
+- `KrigingBelieverSession.predict(remaining)` returns complete ID-to-`SurrogatePrediction(mean, std)` mappings; `believe(candidate, predicted_label)` conditions or temporarily refits before the next score.
+- Every selection creates a separate session. Never rewrite the main checkpoint, true labels, or upstream inputs. Record custom-refit seeds, failures, and cost explicitly.
 
-`plan` 校验 KB 输入但不创建会话或拟合模型。统一实验使用结构 RBF adapter，独立 TOML 示例使用完整 Gaussian 协方差，两者应分别标明。
+`plan` validates KB inputs without creating sessions or fitting models. Unified experiments use the structural RBF adapter; standalone TOML examples use full Gaussian covariance. Label these separately.
 
-## 审计与复现
+## Audit and reproducibility
 
-五项均以 candidate ID 升序打破同分。计划与结果自动生成 `metadata.sampling_protocol`，记录文章、DOI、证据位置、规则、适配、协议 ID/version/hash、实际策略版本、seed、budget 和决策 hash。结果另含 `metadata.sampling_details`，保存有效参数、分数或 KB 批内步骤；这两个字段由插件生成，请求不能覆盖它们。
+All five methods break ties by ascending candidate ID. Plans and results generate `metadata.sampling_protocol` containing paper, DOI, evidence location, rule, adaptation, protocol ID/version/hash, actual strategy version, seed, budget, and decision hash. Results also include `metadata.sampling_details` with effective parameters, scores, or within-batch KB steps. Requests cannot override either plugin-generated field.
 
-`metadata.sampling_experiment` 由统一 adapter 生成，记录表征、路线聚合、Gaussian/RBF 假设与共同输入 hash。协议 hash 绑定协议内容，决策 hash 绑定决策记录；控制器源码、数据和 checkpoint 的文件 hash 由实验运行记录另外绑定。
+The unified adapter generates `metadata.sampling_experiment`, recording representation, route aggregation, Gaussian/RBF assumptions, and the shared-input hash. Protocol hashes bind protocol content; decision hashes bind decision records. Experiment records separately bind controller source, data, and checkpoint file hashes.
 
-内置 `random` 先按 ID 规范排序，再用局部 `random.Random(seed)` 抽取，不改变全局随机状态；`first-n` 保留输入顺序。
+Built-in `random` canonicalizes by ID before drawing through local `random.Random(seed)`, without changing global random state. `first-n` preserves input order.
 
-## 示例与执行
+## Examples and execution
 
-五项[完整 TOML 示例](../../configs/sampling-baselines/)演示独立 API，不构成统一实验配置：
+The five [complete TOML examples](../../configs/sampling-baselines/) demonstrate the standalone API, not unified experiment configuration:
 
 ```bash
 uv run --package tricycle-agent tricycle-agent run \
   candidate.select configs/sampling-baselines/ucb.toml --run-id sampling-ucb-demo
 ```
 
-选择本身不连接数据库、Bohr 或模型服务。组合应用将本地计划、结果和 trace 写入 run；未指定目录时使用本机时区的 `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`。
+Selection itself connects to no database, Bohr, or model service. The application writes local plans, results, and traces to the run. Without an explicit directory, it uses `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>` in the local timezone.
 
-新实验配置分别为[逐轮统一套件](../../configs/dpa-unified-sampling-suite.toml)和[整条 worker 轨迹](../../configs/rxnresid-matched-sampling.toml)。既有结果与 checkpoint 保留；重跑使用当前实现新建 run，不通过刷新旧 hash 迁移。
+New experiment configurations are the [round-by-round unified suite](../../configs/dpa-unified-sampling-suite.toml) and [complete worker trajectory](../../configs/rxnresid-matched-sampling.toml). Existing results and checkpoints remain intact. Reruns use current implementation in new runs, without migrating by refreshing old hashes.
 
-## 智能采集与自定义策略
+## Agent-authored acquisition and custom strategies
 
-`agent-authored-acquisition` 接收 `metadata.agent_acquisition`，用安全数值 DSL 执行已编写的表达式；调用模型和准备结构证据由上游负责。支持 `tricycle.agent-acquisition/v1` 和 MAE 协议的 `v2`，分别遵循各自输入约束。v1 要求公式组合新颖性、模型质量、采样分布与成本；v2 允许按证据自主选择信号，成本表达式保持可核查的正数估计，不强制成为评分惩罚。
+`agent-authored-acquisition` accepts `metadata.agent_acquisition` and executes authored expressions in a safe numerical DSL. Upstream callers invoke models and prepare structural evidence. Supported contracts are `tricycle.agent-acquisition/v1` and the MAE protocol's `v2`, each with its own input constraints. v1 requires formulas combining novelty, model quality, sampling distribution, and cost. v2 allows evidence-based signal selection; its cost expression must remain a verifiable positive estimate but need not penalize the score.
 
-证据必须绑定本地、已终态并已下载的计算报告及 artifact。DSL 只支持数值字段、context、estimated_cost、基础算术/比较/条件表达式，以及 `abs`、`exp`、`log`、`log1p`、`max`、`min`、`sqrt`；不执行任意 Python，不访问网络、随机数或系统状态。完整契约见 [acquisition.py](src/tricycle_sampling/acquisition.py) 和[智能采集 skill](../../.agents/skills/agent-authored-acquisition/SKILL.md)。
+Evidence must bind local, terminal, downloaded computation reports and artifacts. The DSL supports numerical fields, context, estimated_cost, basic arithmetic/comparisons/conditionals, and `abs`, `exp`, `log`, `log1p`, `max`, `min`, and `sqrt`. It executes no arbitrary Python and accesses no network, randomness, or system state. See [acquisition.py](src/tricycle_sampling/acquisition.py) and the [agent-authored acquisition skill](../../.agents/skills/agent-authored-acquisition/SKILL.md) for the full contract.
 
-还注册 `pair-core-set`、`density-weighted-uncertainty` 和 `uncertainty-diversity` 等工程策略；其规则未自动绑定到上述五篇主引用。策略请求只接受注册的规范名称，不解析旧论文名称或其他拼写。
+Additional engineering strategies include `pair-core-set`, `density-weighted-uncertainty`, and `uncertainty-diversity`; their rules are not automatically attributed to the five primary papers above. Requests accept only registered canonical names, not legacy paper names or alternate spellings.
 
-自定义策略实现 `SamplingStrategy` 的 `name` 与 `select(candidates, budget, seed)`，通过构造参数或 `register_strategy()` 注册；覆盖已有名称必须显式 `replace=True`。新增科学规则应有稳定版本、输入契约和来源记录。候选导出与外部写回通过独立 adapter 注入。
+Custom strategies implement `SamplingStrategy.name` and `select(candidates, budget, seed)`. Register through constructor arguments or `register_strategy()`; replacing a name requires explicit `replace=True`. New scientific rules need stable versions, input contracts, and source records. Separate injected adapters handle candidate export and external writes.
 
-## 检查
+## Checks
 
 ```bash
 uv run --frozen --all-packages pytest packages/tricycle-sampling/tests
 ```
 
-候选重复、预算超界、未知策略、非有限分数或不完整后验会使请求失败。基础选择 API 没有远程副作用；包内回放控制器的任务恢复见[统一实验说明](../../docs/mae-intelligent-sampling.md)。
+Duplicate candidates, excessive budgets, unknown strategies, nonfinite scores, and incomplete posteriors fail requests. The basic selection API has no remote side effects. See the [unified experiment guide](../../docs/mae-intelligent-sampling.md) for recovery of package replay-controller jobs.
 
-## 逐轮资产存储与传递
+## Round asset storage and transfer
 
-Replay 配置的 `asset_store` 指定项目级不可变资产库，缺省为工作目录的
-`artifacts/task-assets`。固定 RxnResid runtime、先验结构、词表和私有数据仅保存唯一字节；
-实验的 `asset-references.json` 记录引用，run 中不再保留 `assets/`、`private/` 输入目录或软链接。
+Apply [run record scope](../../docs/run-records.md): sampling runs contain execution decisions, state, result validation, and recovery evidence. New reusable frozen sampling spaces default to `artifacts/datasets/<date>/<timestamp>/<snapshot-id>/`; offline comparison reports belong in `reports/`. Explicit output roots and existing hash-bound recovery paths remain unchanged.
 
-每轮 CSV 与 worker 请求在临时目录生成后按 hash 入库；`input-assets.json` 引用完整交付内容，
-包括该轮输入、固定 runtime、评价数据和本轨迹上一轮 checkpoint，
-`input-assets-hash.json` 绑定该清单。run 中不再保留 `input/`，读取统一使用 `input_file`。
-worker 请求仍绑定最终完整输入的逐文件 hash。Bohr adapter 提交时临时展开完整输入，
-结束或失败后清理临时目录；当前 CLI 每个作业仍上传必要固定文件，不宣称跨作业远端缓存。
+Replay configuration `asset_store` selects the project-level immutable store, defaulting to `artifacts/task-assets` under the working directory. Fixed RxnResid runtime, structural priors, vocabularies, and private data retain unique bytes only. Experiment `asset-references.json` records references; runs retain neither `assets/` and `private/` input directories nor symlinks.
 
-结果核验后，`result/` 和 `download/` 同样使用共享存储，保留原始下载包、日志、checkpoint、
-原文件路径及逐文件校验记录；相同 checkpoint 在多个输出位置只占一份物理空间。
-恢复和审计同时核对共享引用、完整输入及上一轮模型链。默认拒绝源码漂移，不刷新旧实验绑定。
-仅在用户明确授权继续、逐项确认变更限于存储适配并验证输入字节等价后，可在实验目录
-写入独立的 `storage-compatibility.json` 审计回执：schema 为
-`tricycle.replay-storage-compatibility/v1`，记录原 `experiment_sha256`、`authorization`、
-`reason`、`evidence_path`/`evidence_sha256`，以及 `changes` 中每个原控制器路径的
-`before`/`after` 哈希。原配置和历史 manifest 保持不变；未列明的文件仍按原 hash 校验，
-后续漂移再次拒绝。该回执不适用于算法、数据、训练或评价协议变更。
+Round CSVs and worker requests are generated in temporary directories, then stored by hash. `input-assets.json` references the complete delivery, including round inputs, fixed runtime, evaluation data, and the previous checkpoint from the same trajectory. `input-assets-hash.json` binds that manifest. Runs retain no `input/` directory; reads consistently use `input_file`. Worker requests still bind per-file hashes for the final complete input. At submission, the Bohr adapter temporarily materializes all inputs and cleans up after success or failure. The CLI still uploads required fixed files per job and does not claim cross-job remote caching.
 
-Worker 将训练临时文件放在 `work/round/`，下载选择器仅包含 `outputs/round/`。结果目录按明确清单
-发布：主模型权重一份、辅助模型权重、预测、指标、生成的配置和必要训练日志/摘要。
-上一轮上传权重、`refit-input.pt`、原始/预处理训练数据和主模型重复权重不进入结果目录。
-无新标签而复用上一轮模型时，worker 在 `output_references` 中记录输入权重的 hash，不回传权重；
-控制器核对同轨迹输入绑定后，在本地结果视图恢复该引用。失败时仍发布已有诊断日志。
+After verification, `result/` and `download/` also use shared storage, retaining original download archives, logs, checkpoints, original paths, and per-file checks. Identical checkpoints in multiple output locations occupy one physical copy. Recovery and audit verify shared references, complete inputs, and the previous-model chain together. Source drift is rejected by default; old experiment bindings are not refreshed.
+
+Only after explicit user authorization to continue, item-by-item confirmation that changes are limited to storage adaptation, and verification of input-byte equivalence may an independent `storage-compatibility.json` audit receipt be written in the experiment directory. Schema `tricycle.replay-storage-compatibility/v1` records the original `experiment_sha256`, `authorization`, `reason`, `evidence_path`/`evidence_sha256`, and `before`/`after` hashes for every original controller path in `changes`. Original configuration and historical manifests remain unchanged. Unlisted files retain original hash validation, and subsequent drift is rejected again. This receipt does not cover algorithm, data, training, or evaluation protocol changes.
+
+Decision validation errors automatically invoke the configured agent again with a repair task: the concrete error, an explicit `last_accepted_round_formula`, and a separately labeled rejected proposal including its declared action. Repair preserves scientific intent and valid fields; the agent returns a complete corrected response, which undergoes full-pool validation and the configured review before execution. `retain` always refers to the last accepted round, including during review and repair. The controller does not silently rewrite formulas or relabel actions. Failed outputs remain under `rejected-attempts/`, and the frozen `max_decision_attempts` bounds automatic repair.
+
+An explicitly authorized repair of an active decision controller may use `decision-controller-amendment.json` with schema `tricycle.decision-controller-amendment/v1`, the unchanged `experiment_sha256`, `authorization`, `reason`, `evidence_path`/`evidence_sha256`, and per-file `changes` containing `before`/`after` hashes. Only `replay/campaign.py`, `replay/mae.py`, and `replay/decision.py` are eligible; review their actual diff and preserve the original source as audit evidence before authorizing. This receipt records a protocol intervention, not storage equivalence or a pure language comparison. Original experiment/suite hashes remain unchanged; unrelated source changes or subsequent drift fail verification.
+
+For an exhausted decision, explicit recovery authorization can add at most three correction attempts for that task via `decision/recovery-authorization.json` (`tricycle.decision-recovery/v1`). Required fields are `task_sha256`, `original_maximum`, `additional_attempts` (integer 1–3), `authorization`, `reason`, and `original_rejections`, mapping original one-based attempt numbers as strings to their `rejection.json` hashes. Preserve counters and archives; additional attempts continue their numbering. Pause supervision and acquire seed-operation locks before applying a repair or resuming only the affected blocked stages. Record the intervention and recovery outcomes in retrospective comparisons.
+
+Workers place training temporary files in `work/round/`; download selectors include only `outputs/round/`. An explicit output list publishes one main-model weight file, auxiliary-model weights, predictions, metrics, generated configuration, and necessary training logs/summaries. Previous uploaded weights, `refit-input.pt`, raw/preprocessed training data, and duplicate main-model weights are excluded.
+
+Replay timeouts retain bounded restart opportunities. A failed agent invocation is terminated before retry; its files go to `decision/timeout-attempts/proposal/` or `review/`. Each stage permits three timeout restarts, separate from scientific correction attempts. Review restarts preserve the validated proposal. Authentication errors do not enter this path. Status/download operations retain their established adapter retries and controller backoff.
+
+A submission timeout remains in `submit` with its inflight marker and error. The Bohr adapter's read-only `reconcile_submission(name, group_id)` requires an explicitly complete group inventory, an exact stable job name, a unique match, and a public job ID. A match restores the receipt without resubmission. Absence must be confirmed twice at least 60 seconds apart before archiving the marker under `submission-timeouts/` and permitting another submit. At most three resubmissions are allowed per round. Incomplete inventories, ambiguous matches, or unclassified interruptions never authorize resubmission; evidence stays recoverable. Inventory checks are saved under `submission-reconciliation/`. New submissions still use `submit_retry_mode=none`, so there is no blind API retry loop.
+
+For authorized timeout-controller amendments, preserve the preceding amendment receipt and its audit evidence before updating the source-bound receipt. Its optional `bohr_gateway_sha256` also binds the modified reconciliation adapter. Original scientific configuration and worker assets remain unchanged; comparison reports disclose these execution interventions.
+
+When no new labels exist and the previous model is reused, workers record input-weight hashes in `output_references` without returning weight bytes. After verifying input bindings for the same trajectory, the controller restores those references in the local result view. Failures still publish available diagnostic logs.
+
+## Portable replay results
+
+`replay.published` owns scientific export and verification of replay observation
+packages. It checks source bindings, prediction identity, metrics, incremental
+acquisitions, and cost accounting. `analysis/sampling/published_report.py` owns
+offline tables and figures consuming those verified observations. Verification
+requires no original run tree or shared model assets after publication. See
+[reproducible results](../../docs/reproducible-results.md).
+
+## Live replay records
+
+New replay seeds use a native SQLite record namespace throughout execution.
+`replay.runtime_records` owns local placement, exact-byte migration, snapshots,
+and inspection; `replay.agent_records` owns durable invocation intent, streamed
+logs, and external handoff recovery. See [live replay records](../../docs/compact-replay-records.md)
+for environment configuration, source-bound amendments, and recovery commands.
+Use `tricycle_core.record_io` for logical paths; ordinary `Path` I/O cannot read
+keys inside a native seed container. Scientific inputs and checkpoints remain
+verified shared assets. Existing scientific algorithms and retry budgets apply.

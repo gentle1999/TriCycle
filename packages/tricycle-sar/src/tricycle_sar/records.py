@@ -51,9 +51,19 @@ def read_method_bindings(path: Path) -> dict[tuple[str, int], str]:
 
 
 def write_method_bindings(path: Path, bindings: Mapping, manifest: Path, registry: dict) -> None:
+    for (model, _), method_id in bindings.items():
+        training_method(manifest, registry, model, method_id)
+    write_recorded_bindings(path, bindings)
+
+
+def write_recorded_bindings(path: Path, bindings: Mapping) -> None:
+    """Serialize observed method identities without loading executable backends."""
+    import re
+
     groups: dict[tuple[str, str], list[int]] = {}
     for (model, fold), method_id in sorted(bindings.items()):
-        training_method(manifest, registry, model, method_id)
+        if re.fullmatch(re.escape(model) + r"/train/[0-9a-f]{16}", method_id) is None:
+            raise ValueError("Invalid recorded method identity")
         groups.setdefault((model, method_id), []).append(fold)
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(

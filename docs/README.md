@@ -1,30 +1,37 @@
-# 项目文档
+# Project documentation
 
-本目录维护项目架构、插件接口、数据与实验协议、操作和恢复流程。具体运行状态保存在本地 run，正式结果另行归档。
+This directory maintains architecture, plugin interfaces, data and experimental protocols, operations, and recovery procedures. Individual run status belongs in local run records; formal results are archived separately. Maintained documentation and agent-authored records use English by default, including when user instructions are in Chinese, unless the user explicitly requests another language.
 
-## 采样与模型实验
+## Sampling and model experiments
 
-- [采样回放入口](intelligent-replay.md)：选择逐轮套件、整条 worker 或单次本地选样入口。
-- [统一采样实验](mae-intelligent-sampling.md)：共同实验条件、五基线与智能策略、预算评价、执行和恢复。
-- [采样基线方法与文章](sampling-baselines.md)：五篇不同主引用、使用证据及 TriCycle 适配边界。
-- [采样包接口](../packages/tricycle-sampling/README.md)：请求字段、方差转换、KB adapter 与审计记录。
-- [冻结采样空间](frozen-sampling-space.md)与[数据适配](reaction-dataset-adaptation.md)。
-- [构效关系基线](model-baselines.md)、[SAR 包](../packages/tricycle-sar/README.md)与[SAR 加速器执行约定](sar-accelerator-execution.md)。
+- [Sampling replay entry points](intelligent-replay.md): choose the round-based suite, full-trajectory workers, or local single-batch selection.
+- [Unified sampling experiments](mae-intelligent-sampling.md): shared conditions, five baselines and intelligent sampling, budget evaluation, execution, and recovery.
+- [Sampling baseline methods and sources](sampling-baselines.md): five distinct primary references, evidence of use, and TriCycle adaptation boundaries.
+- [Sampling package interface](../packages/tricycle-sampling/README.md): request fields, variance conversions, KB adapters, and audit records.
+- [Frozen sampling spaces](frozen-sampling-space.md) and [dataset adaptation](reaction-dataset-adaptation.md).
+- [SAR model benchmarks](model-baselines.md), the [SAR package](../packages/tricycle-sar/README.md), and [SAR accelerator execution](sar-accelerator-execution.md).
 
-## 架构与集成
+## Architecture and integration
 
-- [当前架构与设计边界](architecture.md)。
-- [插件契约](plugin-contract.md)与[开发说明](development.md)。
-- [Bohr 模型运行环境](bohr-dl.md)。
-- [反应数据库集成](reaction-db.md)。
-- [余额告警工具](balance-alert.md)。
+- [Architecture and design boundaries](architecture.md).
+- [Plugin contract](plugin-contract.md) and [development](development.md).
+- [Run record scope and output destinations](run-records.md).
+- [Mounted run storage with a local cache](mounted-run-storage.md).
+- [Live replay containers, snapshots, and recovery](compact-replay-records.md).
+- [Bohr model environments](bohr-dl.md).
+- [Reaction database integration](reaction-db.md).
+- [Balance alerts](balance-alert.md).
+- [Blocked trajectory email alerts](trajectory-alerts.md).
 
-## 研究与运行归档
+## Research and run archives
 
-默认 run 位于 `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>`，日期和时间使用本机时区；显式目录及恢复路径按请求保留。运行状态、凭据相关材料、机器路径和监督日志不放入通用指南。
+Default runs use `runs/YYYY-MM-DD/HH-MM-SS.ffffff±ZZZZ/<run-id>` with dates and times in the host's local timezone. Explicit directories and recovery paths are preserved. Run state, credential-related material, machine paths, and supervision logs do not belong in general guides.
 
-本地研究报告、正式结果包、图表和复现记录位于 Git 忽略的 `reports/` 或 `artifacts/`，不随源码提交。过时文档按原字节移入 `artifacts/document-archive/` 并记录原路径、哈希与替代入口；清理后指南和测试不依赖本机归档。
+Local research reports, formal result packages, figures, and report reproduction records belong in Git-ignored `reports/`; reusable assets and independent audits belong in `artifacts/`. Apply the [run admission rule](run-records.md) before writing execution records. Move obsolete documentation byte for byte to `artifacts/document-archive/`, recording its original path, hash, and replacement entry point. Maintained guides and tests must not depend on local archives.
 
-SAR 五折训练方法由包内 [backends/catalog.json](../packages/tricycle-sar/src/tricycle_sar/backends/catalog.json)组合共享的环境初始化和训练/推理入口，[锁文件](../configs/sar-training-protocols.lock.json)作哈希绑定引用。只维护当前方法和源码；结果核验独立于执行源码，重跑在新目录中使用当前后端。
+SAR five-fold methods combine shared environment setup and training/inference entry points through [backends/catalog.json](../packages/tricycle-sar/src/tricycle_sar/backends/catalog.json); the [lock file](../configs/sar-training-protocols.lock.json) references their hash bindings. Maintain only current methods and source. Scientific result verification is independent of execution source, and reruns use current backends in new directories.
 
-离线统计分析、SAR 与采样绘图及其依赖锁集中在 [`analysis/`](../analysis/README.md)。模型包提供运行和结果校验接口，分析层读取这些接口；`packages/` 不导入分析层。
+Offline statistics, SAR and sampling figures, and their dependency lock live in [`analysis/`](../analysis/README.md). Model packages provide execution and result-verification interfaces consumed by the analysis layer; `packages/` must not import that layer.
+
+- [Reproducible result packages](reproducible-results.md): portable observations,
+  independent verification, language comparisons, and scoped method identities.

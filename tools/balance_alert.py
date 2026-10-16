@@ -7,20 +7,18 @@ import hashlib
 import json
 import os
 import plistlib
-import smtplib
-import ssl
 import subprocess
 import sys
 import time
 import tomllib
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Protocol
 
-from tricycle_core import load_dotenv, timestamped_run_directory
+from tricycle_core import timestamped_run_directory
 from tricycle_core.io import write_json as save
+from tricycle_core.mail import MailSender, SmtpSender
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,10 +32,6 @@ class Balance:
 
 class BalanceSource(Protocol):
     def read(self, account: dict[str, Any]) -> Balance: ...
-
-
-class MailSender(Protocol):
-    def send(self, subject: str, body: str, message_id: str) -> None: ...
 
 
 def number(value: Any) -> Decimal:
@@ -76,61 +70,6 @@ class JsonCommandSource:
             return Balance(number(value) / denominator * 100, "%")
         return Balance(number(value) * number(account.get("multiplier", "1")), account["unit"],
                        str(document.get(account["details_field"], "")) if account.get("details_field") else "")
-
-
-class SmtpSender:
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-
-    def credentials(self) -> tuple[str, str | None, str | None]:
-        config = self.config
-        values = dict(os.environ)
-        if config.get("env_file"):
-            load_dotenv(Path(config["env_file"]).expanduser(), environ=values, keys={
-                config.get("host_env", "TRICYCLE_SMTP_HOST"),
-                config.get("username_env", "TRICYCLE_SMTP_USERNAME"),
-                config.get("password_env", "TRICYCLE_SMTP_PASSWORD"),
-            })
-        host = values.get(config.get("host_env", "TRICYCLE_SMTP_HOST"), config.get("host", ""))
-        username = values.get(config.get("username_env", "TRICYCLE_SMTP_USERNAME"), config.get("username"))
-        password = values.get(config.get("password_env", "TRICYCLE_SMTP_PASSWORD"))
-        if not password and config.get("password_file"):
-            password = Path(config["password_file"]).expanduser().read_text().rstrip("\r\n")
-        if not host or bool(username) != bool(password):
-            raise ValueError("SMTP host and complete credentials must be configured")
-        return host, username, password
-
-    def configuration_status(self) -> str:
-        try:
-            self.credentials()
-        except FileNotFoundError:
-            return "missing_password_file"
-        except (OSError, ValueError, KeyError):
-            return "configuration_incomplete"
-        return "configured_delivery_unverified"
-
-    def send(self, subject: str, body: str, message_id: str) -> None:
-        config = self.config
-        host, username, password = self.credentials()
-        message = EmailMessage()
-        message["From"] = config["sender"]
-        message["To"] = ", ".join(config["recipients"])
-        message["Subject"] = subject
-        message["Message-ID"] = message_id
-        message.set_content(body)
-        context = ssl.create_default_context()
-        if config.get("tls", "starttls") == "ssl":
-            client: smtplib.SMTP = smtplib.SMTP_SSL(host, int(config.get("port", 465)), timeout=30, context=context)
-        else:
-            client = smtplib.SMTP(host, int(config.get("port", 587)), timeout=30)
-        with client:
-            if config.get("tls", "starttls") == "starttls":
-                client.starttls(context=context)
-            if username and password:
-                client.login(username, password)
-            refused = client.send_message(message)
-            if refused:
-                raise RuntimeError("SMTP rejected one or more recipients")
 
 
 def validate(config: dict[str, Any]) -> None:
@@ -185,20 +124,20 @@ def tick(config: dict[str, Any], root: Path, source: BalanceSource, mail: MailSe
                 record.update(amount=str(balance.amount), unit=balance.unit, query_failures=0)
                 record.pop("query_error", None)
                 kind = "exhausted" if balance.amount <= 0 else "low" if balance.amount <= number(account["threshold"]) else "healthy"
-                label = str(account.get("metric_label", "余额"))
-                subject = f"[TriCycle] {account['name']} {label}{'耗尽' if kind == 'exhausted' else '不足'}"
-                body = (f"账户：{account['name']}\n当前{label}：{balance.amount} {balance.unit}\n"
-                        f"告警阈值：{account['threshold']} {balance.unit}\n{balance.details}\n"
-                        "请人工检查账户额度，按需处理。监控器不会自动充值或变更实验预算。\n"
-                        "额度以提供方查询结果为准，可能存在更新延迟。")
+                label = str(account.get("metric_label", "balance"))
+                subject = f"[TriCycle] {account['name']} {label}{' exhausted' if kind == 'exhausted' else ' low'}"
+                body = (f"Account: {account['name']}\nCurrent {label}: {balance.amount} {balance.unit}\n"
+                        f"Alert threshold: {account['threshold']} {balance.unit}\n{balance.details}\n"
+                        "Review the account quota and take action as needed. The monitor does not top up accounts or change experiment budgets.\n"
+                        "Quota values come from the provider and may be delayed.")
             except Exception as exc:
                 record["query_failures"] = int(record.get("query_failures", 0)) + 1
                 record["query_error"] = type(exc).__name__
                 kind = "query_failed"
-                label = str(account.get("metric_label", "余额"))
-                subject = f"[TriCycle] {account['name']} {label}监控不可用"
-                body = (f"账户：{account['name']}\n余额查询连续失败 {record['query_failures']} 次。\n"
-                        "无法判断剩余余额，请人工检查计费接口或登录状态。")
+                label = str(account.get("metric_label", "balance"))
+                subject = f"[TriCycle] {account['name']} {label} monitoring unavailable"
+                body = (f"Account: {account['name']}\nBalance queries failed {record['query_failures']} consecutive times.\n"
+                        "The remaining balance is unknown; check the billing endpoint or login status.")
             record["status"] = kind
             if kind == "healthy":
                 record.pop("last_alert_kind", None)
@@ -239,7 +178,7 @@ def main() -> None:
             for a in config["accounts"]], "recipients": config["smtp"]["recipients"],
             "poll_seconds": config.get("poll_seconds", 300)}, ensure_ascii=False))
         return
-    root = (args.run_dir or timestamped_run_directory(ROOT / "runs", "balance-alert")).resolve()
+    root = (args.run_dir or timestamped_run_directory(ROOT / ".tricycle" / "monitors", "balance-alert")).resolve()
     root.mkdir(parents=True, exist_ok=True)
     if args.action == "service-file":
         payload: dict[str, Any] = {

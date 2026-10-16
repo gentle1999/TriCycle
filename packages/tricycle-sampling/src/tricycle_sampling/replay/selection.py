@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from tricycle_core import ExecutionContext
-from tricycle_core.io import file_sha256, write_delimited
-from tricycle_core.toml import dump_toml, load_toml
+from tricycle_core import record_io as rio
+from tricycle_core.record_io import dump_toml, file_sha256, load_toml, write_delimited
 from tricycle_core.validation import validate_fields
 
 from tricycle_sampling import SamplingPlugin, SamplingRequest
@@ -47,7 +47,7 @@ def select_round(request: dict[str, Any]) -> dict[str, Any]:
         "selected_ids": list(result.selected_ids),
         "acquisition_function_hash": definition["function_hash"],
     }
-    if round_dir.exists():
+    if rio.exists(round_dir):
         state = load_toml(round_dir / "round.toml")
         if any(state.get(key) != value for key, value in record.items()):
             raise ValueError("Committed replay selection differs from this request")
@@ -55,9 +55,8 @@ def select_round(request: dict[str, Any]) -> dict[str, Any]:
             if file_sha256(round_dir / name) != expected:
                 raise ValueError(f"Committed replay selection artifact changed: {name}")
         return record
-    round_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".selection-", dir=round_dir.parent) as temporary:
-        output = Path(temporary)
+    rio.mkdir(round_dir.parent, parents=True, exist_ok=True)
+    def commit(output: Path) -> None:
         artifact = {
             key: value for key, value in definition.items()
             if key not in {"context", "effective_context", "evidence", "cost_summary"}
@@ -88,7 +87,16 @@ def select_round(request: dict[str, Any]) -> dict[str, Any]:
              for index, identifier in enumerate(result.selected_ids)], delimiter="\t",
         )
         dump_toml(output / "round.toml", {
-            **record, "files": {path.name: file_sha256(path) for path in output.iterdir()},
+            **record, "files": {path.name: file_sha256(path) for path in rio.iterdir(output)},
         })
-        output.rename(round_dir)
+
+    if rio.location(round_dir):
+        with rio.transaction(round_dir):
+            rio.mkdir(round_dir)
+            commit(round_dir)
+    else:
+        with tempfile.TemporaryDirectory(prefix=".selection-", dir=round_dir.parent) as temporary:
+            output = Path(temporary)
+            commit(output)
+            output.rename(round_dir)
     return record

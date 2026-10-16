@@ -1,27 +1,40 @@
-# 离线分析与绘图
+# Offline analysis and plotting
 
-`analysis/` 保存项目的离线结果分析和科研绘图代码，共用本目录的 `pyproject.toml` 与
-`uv.lock`。模型任务、采样决策、环境初始化和科学结果校验由 `packages/` 提供；分析代码
-读取这些接口和实验产物，项目包不反向依赖 `analysis`。
+`analysis/` contains offline result analysis and scientific plotting, sharing this directory's `pyproject.toml` and `uv.lock`. Model tasks, sampling decisions, environment setup, and scientific result validation belong to `packages/`. Analysis consumes those interfaces and experiment artifacts; packages must not depend on `analysis`.
 
-| 位置 | 内容 |
+New analysis outputs belong in `reports/<topic>/<report-id>/`, outside source runs; see [run record scope](../docs/run-records.md). This includes frozen comparison snapshots, tables, figures, and comparison-observer status/logs. Read original run evidence in place and reference its paths/hashes instead of copying entire runs. Reaction-collection distribution defaults to `reports/<date>/<timestamp>/reaction-collection-distribution/`; explicit output directories remain supported.
+
+| Location | Contents |
 | --- | --- |
-| `sar/figures.py` | 五折 MAE、OOF parity、绝对误差 CDF 与 GT 分布绘图 |
-| `sar/distributions.py` | GT 总体、组内残差和组均值残差的描述统计 |
-| `sar/distribution_figures.py` | GT 分布的投稿图布局、图注与来源记录 |
-| `sampling/replay_sampling_panels.py` | 当前文献基线与智能采样的固定快照及绘图 |
-| `sampling/threshold_cost.py` | 首次达到指定 GT MAE 的成本、配对比较与达标覆盖数 |
-| `sampling/publication_curves.py` | 从已校验快照绘制三空间采样曲线、全量经验误差下限及达标成本 |
-| `sampling/route_audit.py` | 核对已执行智能采样决策，重放排序并汇总分阶段结构、成本及路线变化 |
-| `sampling/rxnresid_active_learning_analysis.py` | 已下载采样轨迹的成本校正、合并与绘图 |
-| `sampling/reaction_collection_distribution.py` | 反应集合、路径覆盖与成本的离线分布统计 |
+| `report_figures.py` | Consistent academic layouts for published five-fold, sampling, and language-policy report figures |
+| `sar/figures.py` | Five-fold MAE, OOF parity, absolute-error CDF, and GT distribution plots |
+| `sar/distributions.py` | Descriptive statistics for overall GT, within-group residuals, and group-mean residuals |
+| `sar/distribution_figures.py` | Publication layouts, captions, and provenance for GT distributions |
+| `sampling/replay_sampling_panels.py` | Frozen snapshots and plots for current literature baselines and intelligent sampling |
+| `sampling/language_comparison.py` | Completion observer and paired budget comparisons for English and historical Chinese sampling policies |
+| `sampling/threshold_cost.py` | Cost to first reach specified GT MAE, paired comparisons, and threshold coverage |
+| `sampling/publication_curves.py` | Three-space sampling curves, empirical full-pool error references, and threshold costs from verified snapshots |
+| `sampling/route_audit.py` | Checks executed intelligent decisions, replays rankings, and summarizes stage-specific structure, cost, and route changes |
+| `sampling/rxnresid_active_learning_analysis.py` | Cost correction, merging, and plotting of downloaded sampling trajectories |
+| `sampling/reaction_collection_distribution.py` | Offline distributions of reaction collections, route coverage, and costs |
 
-所有入口使用下文列出的具体分析模块，不保留 `tools/` 转发。在线探索的结构特征、
-验证反馈、成本指标和运行摘要由 `tricycle-sampling` 提供；数据库底物身份适配由 `tricycle-reaction-db` 提供。
+Use the specific analysis modules below; no `tools/` forwarding entry points are maintained. `tricycle-sampling` owns structural features, validation feedback, cost metrics, and runtime summaries for online exploration. `tricycle-reaction-db` owns database substrate identity adaptation.
 
-## 使用
+## Usage
 
-在项目根目录执行；分析入口直接读取本地 workspace 的包接口，隔离环境只包含分析依赖：
+To render a consistent report figure set from a combined published result package:
+
+```bash
+uv run --project analysis --locked python -m analysis.report_figures \
+  --report-dir /path/to/combined-result-package --out-dir /path/to/empty-figures
+```
+
+This presentation-only renderer checks the selected table hashes against the package inventory,
+preserves published statistics and coverage, and exports PNG/PDF/SVG with a source/output manifest,
+captions, and alt text. Outputs must be outside the publication; nonempty directories are rejected.
+Verify the scientific packages with their owning runtime verifiers before rendering.
+
+Run from the repository root. Analysis entry points read local workspace package interfaces directly; the isolated environment contains analysis dependencies only:
 
 ```bash
 uv run --project analysis --locked python -m analysis.sar render \
@@ -32,11 +45,9 @@ uv run --project analysis --locked python -m analysis.sar distributions \
   --result-dir /path/to/result-package --out-dir /path/to/empty-publication --style publication
 ```
 
-SAR 分析先调用 `tricycle_sar.results.verify` 核对科学结果。输出写到结果包之外，拒绝覆盖
-非空目录。五折图导出 PNG/PDF/SVG；分布投稿图导出 SVG/PDF/PNG/TIFF，并记录实际源码和
-依赖锁的哈希。图表数值仍来自相同的冻结表和统计定义。
+SAR analysis first calls `tricycle_sar.results.verify` to validate scientific results. Outputs must be outside the result package; nonempty output directories are rejected. Five-fold figures export PNG/PDF/SVG. Publication distribution figures export SVG/PDF/PNG/TIFF and record hashes of the actual source and dependency lock. Figure values use the same frozen tables and statistical definitions.
 
-直接读取原生反应集合 CSV 的两面板分布图使用：
+For a two-panel distribution figure read directly from a native reaction-collection CSV:
 
 ```bash
 uv run --project analysis --locked python -m analysis.sar collection-distributions \
@@ -44,13 +55,9 @@ uv run --project analysis --locked python -m analysis.sar collection-distributio
   --aspect-ratio 4 --width-inches 8
 ```
 
-输入必须包含 `activation_gibbs_free_energy_kcal_mol`、`ene_id` 和 `diene_id`。
-a 为总体活化自由能，b 为路径值减去 `(ene_id, diene_id)` 组均值的残差。
-所有 CSV 行按路径等权保留，单路径组贡献零残差；不绘制排除单路径组的曲线。
-横纵比指整个画布，输出不使用 tight 裁切，导出 SVG/PDF/PNG/TIFF 和统计、图注与来源记录。
-该入口只验证所提供 CSV 的字段和有限数值，不要求五折模型结果包。
+Inputs must include `activation_gibbs_free_energy_kcal_mol`, `ene_id`, and `diene_id`. Panel a shows overall activation free energy; panel b shows each route value minus its `(ene_id, diene_id)` group mean. All CSV rows receive equal route weight. Single-route groups contribute zero residual; no curve excludes them. Aspect ratio describes the entire canvas, without tight cropping. Outputs include SVG/PDF/PNG/TIFF, statistics, captions, and provenance. This entry point validates CSV fields and finite values without requiring a five-fold model result package.
 
-当前采样套件先导出快照，再在分析环境渲染：
+For the current sampling suite, export a snapshot before rendering in the analysis environment:
 
 ```bash
 uv run --project analysis --locked python -m analysis.sampling.replay_sampling_panels --help
@@ -59,36 +66,28 @@ uv run --project analysis --locked python -m analysis.sampling.threshold_cost \
   --run-dir /path/to/sampling-root --out-dir /path/to/new-threshold-report
 ```
 
-阈值成本报告读取已校验快照，对 MAE ≤ 5、4、3、2、1 取首次达标 checkpoint 的累计核时，
-不插值，不用后续最优误差回填。五个种子均达标才报告均值、样本标准差和成本节省率；
-未齐的单元格只报达标数量，不将未达到当作零或只平均成功种子。首次达标不代表持续达标。
-核时包括初始化采样，排除 SAR 训练和 agent 开销；逐种子记录和图表一并导出。
+Threshold-cost reports read verified snapshots and take cumulative core-hours at the first checkpoint reaching MAE ≤ 5, 4, 3, 2, or 1. They do not interpolate or substitute later best errors. Means, sample standard deviations, and cost-saving rates are reported only when all five seeds reach the threshold. Incomplete cells show the number of seeds reaching it; missing successes are neither zero nor excluded to average only successful seeds. First attainment does not imply sustained attainment. Core-hours include initial sampling and exclude SAR training and agent overhead. Per-seed records are exported alongside figures.
 
-三空间投稿曲线读取 `replay_sampling_panels` 导出的已校验快照：
+Three-space publication curves consume verified snapshots from `replay_sampling_panels`:
 
 ```bash
 uv run --project analysis --locked python -m analysis.sampling.publication_curves \
   --snapshot /path/to/snapshot.json --pool-pairs 1600 --out-dir /path/to/new-curves
 ```
 
-`--pool-pairs` 必须填入该实验完整采样池的底物对数。虚线采用 LHS 五种子全量采满后
-MAE 的均值作为经验参照，不代表纯计算误差或理论下界。曲线使用同成本下最近已观测
-checkpoint 的均值和样本 SD，不外推；实线表示五种子，点线表示种子不足的区段。
-三空间合图和独立图的完整画布均为 4:1.5，导出可编辑 SVG、PDF、600 dpi PNG/TIFF，
-附曲线数据、逐种子首次达标成本、方法文献和适配说明、图注及快照哈希。
+Set `--pool-pairs` to the number of substrate pairs in the experiment's full sampling pool. Dashed references show the mean final MAE of the five LHS seeds after exhausting the pool; they are empirical references, not pure computational error or theoretical lower bounds. Curves use means and sample SDs of the latest observed checkpoint at each shared cost, without extrapolation. Solid segments include five seeds; dotted segments have fewer seeds. Both combined and individual three-space figures use a full-canvas ratio of 4:1.5. Exports include editable SVG, PDF, 600 dpi PNG/TIFF, curve data, per-seed first-attainment costs, method references and adaptation notes, captions, and snapshot hashes.
 
-智能采样路线审计使用 `python -m analysis.sampling.route_audit --snapshot /path/to/snapshot.json
---out-dir /path/to/new-audit`。只纳入快照中下一轮结果已完成的决策，核对接受响应、输入哈希、
-入选 ID 与下一轮实际揭示结果；重放本轮公式及前轮公式在当前候选池上的排序。
-初始化和控制器全选剩余候选不计作智能体决策。分阶段统计先在各 seed 内平均，再按可用
-seed 等权汇总，并保留每阶段轮数与种子数；部分轨迹的后期统计不冒充完整五种子结果。
+Audit intelligent sampling routes with `python -m analysis.sampling.route_audit --snapshot /path/to/snapshot.json --out-dir /path/to/new-audit`. Include only decisions whose next-round outcomes are complete in the snapshot. Verify accepted responses, input hashes, selected IDs, and the next round's actual revealed results; replay both the current and previous formulas on the current pool. Initialization and controller-driven selection of all remaining candidates are not agent decisions. Stage statistics are averaged within each seed first, then equally across available seeds, retaining round and seed counts per stage. Late-stage statistics from partial trajectories must not be presented as complete five-seed results.
 
-反应集合分析必须显式提供 `--ground-truth`、`--expected-pairs` 和至少一个 `--project NAME=EXPORT_DIR`；数量从输入计算，不读取历史运行默认值。
+For a matched language-policy comparison, run `python -m analysis.sampling.language_comparison --plan /path/to/comparison-plan.json --out-dir reports/language-comparison/<report-id> --watch`. The `tricycle.language-comparison/v1` plan lists `experiments` with `project`, English `root` and `suite`, `historical_experiment`, and the `english_experiment_sha256` and `historical_experiment_sha256` bindings. Budgets come from the bound experiment configurations and must match. Keep new comparison plans and output directories under `reports/`, outside the experiments. The observer freezes historical evidence immediately, then waits for every English seed to become complete or blocked; without `--watch`, it checks once. It never submits, retries, or changes experiments. An external service may keep the observer running; `--poll-seconds` defaults to 60. Preserve explicitly configured historical report paths during recovery.
 
-结果核验、训练输入准备和固定资产索引仍使用 `python -m tricycle_sar results verify|prepare|assets`。
-结果包只保存科学结果和图表，复用本目录的分析实现与环境。实验报告与图表写入 Git 忽略的 `reports/` 或 `artifacts/`，不纳入源码提交。
+Outputs include immutable cohort snapshots, `status.json`, `paired-seeds.csv`, `budget-summary.csv`, `comparison.json`, and `REPORT.md`. Pair the same seed at each original budget using its latest affordable checkpoint within observed coverage, without extrapolation. Negative English-minus-Chinese GT MAE favors English. Partial cells show paired counts, and SD is omitted for one pair. A hash mismatch stops reporting rather than accepting changed evidence. Report language, narrative-limit, infrastructure, scheduling, and model-service differences explicitly; this comparison alone does not establish a causal language effect.
 
-已完成 benchmark 的逐折 MAE 箱线图（每点一折）使用：
+Reaction-collection analysis requires explicit `--ground-truth`, `--expected-pairs`, and at least one `--project NAME=EXPORT_DIR`. Counts come from inputs, not historical run defaults.
+
+Result verification, training-input preparation, and fixed-asset indexing still use `python -m tricycle_sar results verify|prepare|assets`. Result packages contain scientific results and figures and reuse this directory's analysis implementation and environment. Experiment reports and figures belong in Git-ignored `reports/` or `artifacts/`, outside source commits.
+
+For completed benchmarks, produce a fold-MAE boxplot with one point per fold:
 
 ```bash
 uv run --project analysis --locked python -m analysis.sar boxplot \
@@ -96,14 +95,15 @@ uv run --project analysis --locked python -m analysis.sar boxplot \
   --out-dir /path/to/empty-boxplot --xscale log --aspect-ratio 2 --width-inches 7.2
 ```
 
-入口调用 SAR 的 `collect`，核对冻结输入、划分、完整 OOF 身份与目标并重算指标，
-不依赖已变更的当前执行后端；保留 run 中的原方法绑定供审计。
-预测目录使用 `predictions.csv` 或既有 compact worker 目录结构，必须覆盖全部模型五折。
-图中箱体为四分位距，中线为中位数，须为 1.5 IQR 范围内的极值，所有折均显示散点；
-默认沿用 GT 分布图的蓝紫色填充、Arial 字体、深色细轴线、无网格和短标题，
-使用对数 MAE 轴和 2:1 完整画布；不使用 tight 裁切。完整统计说明保存为
-`figure-caption.txt`，每个箱线右侧标注五折原始 MAE 的均值 ± 样本标准差（ddof=1），
-精确数值另存数据表；标注位于最右折点之后，避免遮挡数据。
-对数轴只改变显示尺度，箱体及均值/样本 SD 仍由原始 MAE 计算；零值不能平移或删除，
-需显式使用 `--xscale linear`。另保存逐折指标、输入哈希和 PNG/PDF/SVG/TIFF，
-位图为 600 dpi，矢量文字可编辑。该分析不修改已提交的训练协议。
+This entry point calls SAR `collect`, verifies frozen inputs, splits, complete OOF identities and targets, and recomputes metrics independently of changes to current execution backends. It preserves the run's original method bindings for audit. Predictions may use `predictions.csv` or the existing compact worker layout and must cover all five folds for every model.
+
+Boxes show the interquartile range, center lines the median, and whiskers the extreme observations within 1.5 IQR; every fold is plotted as a point. Defaults match GT distribution figures: blue-purple fill, Arial, thin dark axes, no grid, and short titles. The MAE axis is logarithmic and the full canvas is 2:1, without tight cropping. Full statistical definitions are saved to `figure-caption.txt`. Each box is annotated to the right of its rightmost fold point with the mean ± sample SD (ddof=1) of the five raw MAEs; exact values are exported separately.
+
+A logarithmic axis changes display only; boxes, means, and sample SDs are calculated from raw MAE. Zero values must not be shifted or deleted; explicitly choose `--xscale linear` instead. Exports also include per-fold metrics, input hashes, PNG/PDF/SVG/TIFF, 600 dpi rasters, and editable vector text. This analysis does not change submitted training protocols.
+
+Portable replay result packages can be rebuilt with
+`python -m analysis.sampling.published_report --result-dir /path/to/package --out-dir /path/to/new-analysis`.
+This verifies all path-level predictions and acquisition costs before producing
+paired English/Chinese curves and budget tables. See
+[reproducible result packages](../docs/reproducible-results.md) for export,
+verification, target precision, and scientific-versus-delivery identity semantics.

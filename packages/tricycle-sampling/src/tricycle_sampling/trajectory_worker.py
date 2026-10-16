@@ -28,9 +28,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from tricycle_core.io import write_delimited
+from tricycle_core import record_io as rio
 from tricycle_core.io import write_json as _write_json
 from tricycle_core.metrics import regression_metrics
+from tricycle_core.record_io import write_delimited
 from tricycle_sar import get_backend
 from tricycle_sar import rxnresid as sar_rxnresid
 from tricycle_sar.predictions import aggregate_pairs, validate_rows
@@ -85,9 +86,9 @@ DEFAULT_FIXED_SEED = 42
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    if not path.is_file():
+    if not rio.is_file(path):
         raise ValueError(f"CSV file not found: {path}")
-    with path.open(newline="", encoding="utf-8") as handle:
+    with rio.open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"CSV has no header: {path}")

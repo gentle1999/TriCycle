@@ -3,8 +3,6 @@ name: rits-ssh-terminate
 description: "Stop a remote RitS Docker training container after explicit confirmation."
 ---
 
-# 停止内网 RitS 任务
+# Stop Internal RitS Training
 
-使用 rits.ssh.terminate 调用 Docker stop（最长等待 30 秒）。此操作会中断训练，必须显式
-使用 --live --confirm；请求中提供 host、remote_root、job_id。随后可用 rits.ssh.status 核对
-容器已退出。详见 [RitS SSH 微调](../rits-ssh-finetune/SKILL.md)。
+`rits.ssh.terminate` calls Docker stop with a maximum 30-second wait. This interrupts training and requires explicit `--live --confirm`. Supply `host`, `remote_root`, and `job_id`, then verify exit with `rits.ssh.status`. See [RitS SSH fine-tuning](../rits-ssh-finetune/SKILL.md).
